@@ -26,10 +26,6 @@ func ParseFrame(lines []string) (event, data string, ok bool) {
 				data = strings.TrimPrefix(strings.TrimPrefix(line, prefixData), " ")
 				haveData = true
 			}
-		case strings.HasPrefix(line, prefixID):
-
-		default:
-
 		}
 	}
 	if !haveEvent || !haveData {

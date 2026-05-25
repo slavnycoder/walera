@@ -760,7 +760,7 @@ func TestRunLoopProcessWALError(t *testing.T) {
 
 	r := &Reader{
 		log:      logger,
-		txCh:     make(chan Tx, 0),
+		txCh:     make(chan Tx),
 		replConn: fc,
 		metrics:  metrics.New(),
 	}

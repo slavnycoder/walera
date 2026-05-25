@@ -426,17 +426,15 @@ func TestPool_Shutdown_OneSubBlocked_OthersStillReceive(t *testing.T) {
 
 		var got []byte
 		collectDeadline := time.Now().Add(200 * time.Millisecond)
-		for time.Now().Before(collectDeadline) {
+		found := false
+		for !found && time.Now().Before(collectDeadline) {
 			select {
 			case chunk := <-healthyBufs[i]:
 				got = append(got, chunk...)
 				if strings.Contains(string(got), wantPrefix) {
-					break
+					found = true
 				}
 			case <-time.After(50 * time.Millisecond):
-			}
-			if strings.Contains(string(got), wantPrefix) {
-				break
 			}
 		}
 		if !strings.Contains(string(got), wantPrefix) {

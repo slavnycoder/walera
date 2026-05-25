@@ -18,10 +18,10 @@ func TestPoolWorkerLoopStarvation_AttachAndShutdown(t *testing.T) {
 	defer runtime.GOMAXPROCS(prev)
 
 	const (
-		maxWaitMs       = 2
-		writeTimeout    = 200 * time.Millisecond
-		drainShutdownMS = 50 * time.Millisecond
-		warmup          = 20 * time.Millisecond
+		maxWaitMs             = 2
+		writeTimeout          = 200 * time.Millisecond
+		drainShutdownDeadline = 50 * time.Millisecond
+		warmup                = 20 * time.Millisecond
 
 		drainerPace = 50 * time.Microsecond
 	)
@@ -36,7 +36,7 @@ func TestPoolWorkerLoopStarvation_AttachAndShutdown(t *testing.T) {
 			MaxBatchBytesPerSub:   64 * 1024,
 			WriteTimeout:          writeTimeout,
 			HeartbeatInterval:     10 * time.Second,
-			drainShutdownDeadline: drainShutdownMS,
+			drainShutdownDeadline: drainShutdownDeadline,
 		}, PoolDeps{Encoder: fakeEncoder{}, Metrics: m, Logger: zerolog.Nop()})
 		return p, m
 	}
@@ -205,7 +205,7 @@ func TestPoolWorkerLoopStarvation_AttachAndShutdown(t *testing.T) {
 
 		time.Sleep(warmup)
 
-		shutdownBudget := time.Duration(len(p.workers))*drainShutdownMS + 200*time.Millisecond
+		shutdownBudget := time.Duration(len(p.workers))*drainShutdownDeadline + 200*time.Millisecond
 
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
@@ -230,7 +230,7 @@ func TestPoolWorkerLoopStarvation_AttachAndShutdown(t *testing.T) {
 
 		t.Logf("ShutdownUnderInflow: measured shutdown wall-clock=%v budget=%v err=%v returnedInBudget=%v", elapsed, shutdownBudget, err, returnedInBudget)
 		if !returnedInBudget || elapsed > shutdownBudget {
-			t.Errorf("Shutdown under sustained inflow took %v; want <= %v (: worker starves shutdownCh while pollAllQueues keeps returning > 0; budget = workers(%d) * drainShutdownDeadline(%v) + 200ms slop)", elapsed, shutdownBudget, len(p.workers), drainShutdownMS)
+			t.Errorf("Shutdown under sustained inflow took %v; want <= %v (: worker starves shutdownCh while pollAllQueues keeps returning > 0; budget = workers(%d) * drainShutdownDeadline(%v) + 200ms slop)", elapsed, shutdownBudget, len(p.workers), drainShutdownDeadline)
 		}
 
 		stopInflow()
