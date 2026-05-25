@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Refuse commits that include any path under .planning/.
+# History was purged on 2026-05-21; .planning/ is gitignored and must stay out of git.
+# Bypass (intentional re-commit): git commit --no-verify
+
+set -euo pipefail
+
+staged=$(git diff --cached --name-only --diff-filter=ACMR -z | tr '\0' '\n' | grep -E '^\.planning(/|$)' || true)
+
+if [[ -n "$staged" ]]; then
+    printf 'pre-commit: refusing to commit .planning/ paths:\n' >&2
+    printf '  %s\n' $staged >&2
+    printf '\n.planning/ is gitignored and was purged from history; use --no-verify to override.\n' >&2
+    exit 1
+fi

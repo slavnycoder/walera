@@ -1,0 +1,83 @@
+# docker-compose.dev.yaml — Walera local development quick-start (D4-24).
+#
+# `docker compose -f docker-compose.dev.yaml up` boots:
+#   - postgres   — postgres:18-alpine with wal_level=logical and the
+#                  publication migration pre-applied to the `walera` DB.
+#   - walera     — Walera built from the local Dockerfile, configured to
+#                  stream from the postgres service.
+#
+# The mock-auth backend is INTENTIONALLY OMITTED from this file. The auth
+# contract is operator-specific; for dev work the Phase-3 mock-auth.py (or
+# a wired-up auth backend) is sufficient and runs outside compose. Wire
+# Walera to it via WALERA_AUTH_SERVICE_URL + WALERA_AUTH_SERVICE_TOKEN in
+# the `walera.environment` block below.
+#
+# Notes:
+#   - Postgres 18-alpine is used because it is the smallest official image
+#     that satisfies CLAUDE.md PG ≥ 14 (and matches Plan 04-04's testcontainers
+#     image baseline).
+#   - The migration is mounted as 001_publication.sql so postgres's
+#     /docker-entrypoint-initdb.d hook applies it on first boot only. After
+#     first boot, edits to the .example file have no effect — recreate the
+#     volume to re-init.
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    container_name: walera-pg
+    environment:
+      POSTGRES_USER: walera
+      POSTGRES_PASSWORD: walera
+      POSTGRES_DB: walera
+    # Override the default postgres command to enable logical replication.
+    # max_replication_slots is set well above the default (10) so multiple
+    # Walera dev iterations can boot without leaving orphan slots blocking
+    # subsequent startups.
+    command:
+      - "postgres"
+      - "-c"
+      - "wal_level=logical"
+      - "-c"
+      - "max_replication_slots=10"
+      - "-c"
+      - "max_wal_senders=10"
+    ports:
+      - "5432:5432"
+    volumes:
+      # Init script runs on first boot only (when /var/lib/postgresql/data is empty).
+      - ./migrations/001_publication.sql.example:/docker-entrypoint-initdb.d/001_publication.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U walera -d walera"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+
+  walera:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: walera-app
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      # Single Postgres DSN — admin connection plus the derived replication
+      # connection. The role MUST hold the REPLICATION attribute; do NOT
+      # append replication=database (Walera derives it).
+      WALERA_DATABASE_URL: "postgres://walera:walera@postgres:5432/walera?sslmode=disable"
+      # Publication name created by the migration above.
+      WALERA_WAL_PUBLICATION_NAME: "cdc_sse_streamer"
+      # Go runtime tuning per D4-22.
+      GOGC: "200"
+      GOMEMLIMIT: "6500MiB"
+      # Auth — wire to an external mock-auth (e.g., Phase-3 mock-auth.py) and
+      # supply the token via your shell environment, e.g.:
+      #   AUTH_SERVICE_URL=http://host.docker.internal:9000 docker compose up
+      # WALERA_AUTH_SERVICE_URL: "${AUTH_SERVICE_URL:-}"
+      # WALERA_AUTH_SERVICE_TOKEN: "${AUTH_SERVICE_TOKEN:-}"
+    ports:
+      - "8080:8080"
+    volumes:
+      # Mount the in-repo config.yaml read-only into the path the Dockerfile
+      # CMD points at. Override with `--config <other-file>` if needed.
+      - ./config.yaml:/etc/walera/config.yaml:ro

@@ -1,0 +1,6 @@
+# actionlint configuration. Declares the self-hosted runner labels used in
+# `.github/workflows/perf-gate.yml` so actionlint does not flag them as
+# unknown. See `perf-gate.yml` for the runner provenance.
+self-hosted-runner:
+  labels:
+    - deeb007

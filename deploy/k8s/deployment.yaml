@@ -1,0 +1,124 @@
+# deploy/k8s/deployment.yaml — Walera single-replica Deployment (D4-22).
+#
+# OPERATOR ACTIONS REQUIRED BEFORE FIRST APPLY:
+#   1. Replace `image: walera:VERSION` below with the tag your CI/CD pushed
+#      to your registry (e.g., `image: registry.example.com/walera:v1.0.0`).
+#   2. Populate the `walera-secrets` Secret (see secret.yaml + POSTGRES-SETUP.md).
+#   3. Adjust the namespace if your cluster uses a different convention.
+#
+# DESIGN NOTES:
+#   - Pitfall G5: distroless lacks a writable filesystem, and we mount
+#     readOnlyRootFilesystem=true. The emptyDir at /tmp future-proofs the
+#     manifest for any feature that writes scratch state (pprof dumps, etc.).
+#     Today, Walera does not write to /tmp; the volume costs nothing.
+#   - Probes follow spec §10.5 / D4-06: liveness periodSeconds=2,
+#     failureThreshold=3, timeoutSeconds=1 → ~6s eviction window when
+#     /healthz starts returning 503 (PG disconnected for longer than the
+#     reconnect-loop's first attempt + backoff).
+#   - terminationGracePeriodSeconds=30 is intentionally larger than the
+#     shutdown.deadline default of 10s (D4-08) so the in-process graceful
+#     shutdown sequence completes before kubelet SIGKILLs the container.
+#   - GOGC=200 + GOMEMLIMIT=6500MiB tune the Go runtime for the 8 GiB limit
+#     (≈80% of limit, leaves headroom for non-heap allocations).
+#   - The Secret is intentionally REFERENCED via secretKeyRef rather than
+#     mounted as a file — koanf's env-var transform (`WALERA_DATABASE_URL`
+#     → `database.url`) makes env injection the natural override path.
+#   - For production, see deploy/POSTGRES-SETUP.md §7 (Secrets Management)
+#     for sealed-secrets / external-secrets-operator alternatives.
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: walera
+  namespace: walera
+  labels:
+    app: walera
+spec:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: walera
+  template:
+    metadata:
+      labels:
+        app: walera
+    spec:
+      # Allow the 10s in-process shutdown (D4-08) to complete fully.
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: cdc-sse
+          image: walera:VERSION  # CI/CD must replace this placeholder.
+          imagePullPolicy: IfNotPresent
+          args: ["--config", "/etc/walera/config.yaml"]
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          env:
+            - name: GOGC
+              value: "200"
+            - name: GOMEMLIMIT
+              value: "6500MiB"
+            - name: WALERA_AUTH_SERVICE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: walera-secrets
+                  key: auth_service_token
+            - name: WALERA_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: walera-secrets
+                  key: database_url
+          resources:
+            requests:
+              cpu: "2"
+              memory: "4Gi"
+            limits:
+              cpu: "4"
+              memory: "8Gi"
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 2
+            failureThreshold: 3
+            timeoutSeconds: 1
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: 10
+            failureThreshold: 3
+            timeoutSeconds: 2
+          volumeMounts:
+            - name: config
+              mountPath: /etc/walera
+              readOnly: true
+            # Pitfall G5: emptyDir /tmp future-proofs readOnlyRootFilesystem=true.
+            - name: tmp
+              mountPath: /tmp
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+      volumes:
+        - name: config
+          configMap:
+            name: walera-config
+        - name: tmp
+          emptyDir:
+            sizeLimit: 100Mi

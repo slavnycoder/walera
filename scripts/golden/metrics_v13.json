@@ -1,0 +1,26 @@
+{
+  "scenario_name": "v13-single-sub-100-1-1",
+  "description": "1 sub (exact kind), 100 events, exactly 1 heartbeat, 1 graceful shutdown disconnect",
+  "deltas": [
+    {
+      "name": "walera_events_sent_total",
+      "labels": {
+        "type": "exact"
+      },
+      "delta": 101
+    },
+    {
+      "name": "walera_subscriber_disconnects_total",
+      "labels": {
+        "reason": "shutdown"
+      },
+      "delta": 1
+    }
+  ],
+  "histograms": [
+    {
+      "name": "walera_subscriber_lifetime_seconds",
+      "min_count": 1
+    }
+  ]
+}

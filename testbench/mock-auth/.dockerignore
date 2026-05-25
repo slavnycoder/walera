@@ -1,0 +1,16 @@
+# testbench/mock-auth/.dockerignore
+# Keep the build context small — only server.py + seed.json + Dockerfile are needed.
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.DS_Store
+*.swp
+*.swo
+.idea/
+.vscode/
+README.md
+*.md

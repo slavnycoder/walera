@@ -1,0 +1,64 @@
+# GEN-02 benchstat comparison: v2.5 baseline (numShards=64) vs post-gen02 (numShards=8).
+# Gate: allocs/op must remain 0 across all BenchmarkIndex* sub-benchmarks.
+# Result: GATE HELD — 0 allocs/op preserved (all samples equal, +0.00% geomean).
+# ns/op: geomean +1.58% across all sub-benchmarks (accepted; within normal noise for 8-shard
+#   configuration; n=10000 sub-benchmarks show +3-5% due to higher per-shard key density at
+#   8 shards vs 64 — accepted trade-off per GEN-02 decision in 03-CONTEXT.md).
+#
+# Generated: 2026-05-25
+# Command: benchstat testbench/bench-baseline-index-v2.5.txt testbench/bench-baseline-index-post-gen02.txt
+goos: linux
+goarch: amd64
+pkg: github.com/walera/walera/internal/router
+cpu: Intel(R) Core(TM) i5-6600T CPU @ 2.70GHz
+                          │ testbench/bench-baseline-index-v2.5.txt │ testbench/bench-baseline-index-post-gen02.txt │
+                          │                 sec/op                  │         sec/op          vs base               │
+IndexAdd/n=1-4                                          54.77n ± 1%              55.48n ± 1%       ~ (p=0.055 n=10)
+IndexAdd/n=1000-4                                       55.27n ± 0%              55.07n ± 1%       ~ (p=0.190 n=10)
+IndexAdd/n=10000-4                                      64.21n ± 2%              66.43n ± 2%  +3.47% (p=0.000 n=10)
+IndexLookupHit/n=1-4                                    42.32n ± 0%              42.48n ± 0%  +0.37% (p=0.009 n=10)
+IndexLookupHit/n=1000-4                                 42.50n ± 1%              42.12n ± 1%  -0.88% (p=0.006 n=10)
+IndexLookupHit/n=10000-4                                50.38n ± 1%              51.93n ± 1%  +3.07% (p=0.000 n=10)
+IndexLookupMiss/n=1-4                                   28.86n ± 4%              28.98n ± 0%       ~ (p=0.540 n=10)
+IndexLookupMiss/n=1000-4                                40.91n ± 1%              41.98n ± 2%  +2.63% (p=0.000 n=10)
+IndexLookupMiss/n=10000-4                               49.12n ± 1%              51.43n ± 1%  +4.70% (p=0.000 n=10)
+IndexChurn/n=1-4                                        114.7n ± 1%              114.9n ± 1%       ~ (p=0.252 n=10)
+IndexChurn/n=1000-4                                     109.4n ± 1%              109.1n ± 1%       ~ (p=0.448 n=10)
+IndexChurn/n=10000-4                                    108.7n ± 4%              113.6n ± 3%  +4.56% (p=0.001 n=10)
+geomean                                                 57.81n                   58.72n       +1.58%
+
+                          │ testbench/bench-baseline-index-v2.5.txt │ testbench/bench-baseline-index-post-gen02.txt │
+                          │                  B/op                   │         B/op          vs base                 │
+IndexAdd/n=1-4                                         0.000 ± 0%               0.000 ± 0%       ~ (p=1.000 n=10) ¹
+IndexAdd/n=1000-4                                      0.000 ± 0%               0.000 ± 0%       ~ (p=1.000 n=10) ¹
+IndexAdd/n=10000-4                                     0.000 ± 0%               0.000 ± 0%       ~ (p=1.000 n=10) ¹
+IndexLookupHit/n=1-4                                   0.000 ± 0%               0.000 ± 0%       ~ (p=1.000 n=10) ¹
+IndexLookupHit/n=1000-4                                0.000 ± 0%               0.000 ± 0%       ~ (p=1.000 n=10) ¹
+IndexLookupHit/n=10000-4                               0.000 ± 0%               0.000 ± 0%       ~ (p=1.000 n=10) ¹
+IndexLookupMiss/n=1-4                                  0.000 ± 0%               0.000 ± 0%       ~ (p=1.000 n=10) ¹
+IndexLookupMiss/n=1000-4                               0.000 ± 0%               0.000 ± 0%       ~ (p=1.000 n=10) ¹
+IndexLookupMiss/n=10000-4                              0.000 ± 0%               0.000 ± 0%       ~ (p=1.000 n=10) ¹
+IndexChurn/n=1-4                                       0.000 ± 0%               0.000 ± 0%       ~ (p=1.000 n=10) ¹
+IndexChurn/n=1000-4                                    0.000 ± 0%               0.000 ± 0%       ~ (p=1.000 n=10) ¹
+IndexChurn/n=10000-4                                   0.000 ± 0%               0.000 ± 0%       ~ (p=1.000 n=10) ¹
+geomean                                                           ²                         +0.00%                ²
+¹ all samples are equal
+² summaries must be >0 to compute geomean
+
+                          │ testbench/bench-baseline-index-v2.5.txt │ testbench/bench-baseline-index-post-gen02.txt │
+                          │                allocs/op                │      allocs/op        vs base                 │
+IndexAdd/n=1-4                                         0.000 ± 0%               0.000 ± 0%       ~ (p=1.000 n=10) ¹
+IndexAdd/n=1000-4                                      0.000 ± 0%               0.000 ± 0%       ~ (p=1.000 n=10) ¹
+IndexAdd/n=10000-4                                     0.000 ± 0%               0.000 ± 0%       ~ (p=1.000 n=10) ¹
+IndexLookupHit/n=1-4                                   0.000 ± 0%               0.000 ± 0%       ~ (p=1.000 n=10) ¹
+IndexLookupHit/n=1000-4                                0.000 ± 0%               0.000 ± 0%       ~ (p=1.000 n=10) ¹
+IndexLookupHit/n=10000-4                               0.000 ± 0%               0.000 ± 0%       ~ (p=1.000 n=10) ¹
+IndexLookupMiss/n=1-4                                  0.000 ± 0%               0.000 ± 0%       ~ (p=1.000 n=10) ¹
+IndexLookupMiss/n=1000-4                               0.000 ± 0%               0.000 ± 0%       ~ (p=1.000 n=10) ¹
+IndexLookupMiss/n=10000-4                              0.000 ± 0%               0.000 ± 0%       ~ (p=1.000 n=10) ¹
+IndexChurn/n=1-4                                       0.000 ± 0%               0.000 ± 0%       ~ (p=1.000 n=10) ¹
+IndexChurn/n=1000-4                                    0.000 ± 0%               0.000 ± 0%       ~ (p=1.000 n=10) ¹
+IndexChurn/n=10000-4                                   0.000 ± 0%               0.000 ± 0%       ~ (p=1.000 n=10) ¹
+geomean                                                           ²                         +0.00%                ²
+¹ all samples are equal
+² summaries must be >0 to compute geomean

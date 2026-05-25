@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Walera Testbench</title>
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+  <div class="app">
+
+    <header class="app__header" data-area="header">
+      <h1>Walera Testbench</h1>
+      <div data-mount="user-picker"></div>
+      <div data-mount="connection-pill"></div>
+    </header>
+
+    <section class="app__banner" data-area="banner" aria-live="polite">
+      <div data-mount="error-banner"></div>
+    </section>
+
+    <main class="app__feed" data-area="feed">
+      <div data-mount="event-feed"></div>
+    </main>
+
+    <aside class="app__side" data-area="side">
+      <section data-mount="entity-card"></section>
+      <section data-mount="wildcard-list"></section>
+    </aside>
+
+    <section class="app__metrics" data-area="metrics">
+      <div data-mount="metrics-panel"></div>
+    </section>
+
+    <form class="app__writer" data-area="writer">
+      <div data-mount="writer-control"></div>
+    </form>
+
+  </div>
+
+  <script type="module" src="./modules/app.js"></script>
+</body>
+</html>

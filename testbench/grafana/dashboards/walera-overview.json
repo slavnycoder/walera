@@ -1,0 +1,236 @@
+{
+  "uid": "walera-overview",
+  "title": "Walera Overview",
+  "description": "Walera v1.1 overview: 7 OBS-04 panels (subscribers, WAL lag, WAL tx rate, breaker, fan-out heatmap, route-lookup p99, tx-dropped) + 1 OBS-05 side-by-side writer-vs-walera tx-rate parity panel (WRITER-05 +/-2% acceptance gate).",
+  "tags": ["walera", "v1.1", "testbench"],
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": false,
+  "refresh": "5s",
+  "time": { "from": "now-15m", "to": "now" },
+  "timepicker": {},
+  "templating": { "list": [] },
+  "annotations": { "list": [] },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Subscribers active",
+      "datasource": { "type": "prometheus", "uid": "walera-prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum by (type) (walera_subscribers_active)",
+          "legendFormat": "{{type}}",
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "walera-prometheus" }
+        }
+      ],
+      "options": {},
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 10 }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "WAL LSN lag (bytes)",
+      "datasource": { "type": "prometheus", "uid": "walera-prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "targets": [
+        {
+          "expr": "walera_wal_lsn_lag_bytes",
+          "legendFormat": "lag",
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "walera-prometheus" }
+        }
+      ],
+      "options": {},
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 5 }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "WAL tx rate (tx/s)",
+      "description": "rate() over the _count of histogram walera_wal_tx_size_changes — same convention smoke-07.sh uses for SC3.",
+      "datasource": { "type": "prometheus", "uid": "walera-prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "targets": [
+        {
+          "expr": "rate(walera_wal_tx_size_changes_count[10s])",
+          "legendFormat": "walera tx/s",
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "walera-prometheus" }
+        }
+      ],
+      "options": {},
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 10 }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Auth circuit breaker state",
+      "description": "0=Closed (green), 1=Open (red), 2=HalfOpen (yellow).",
+      "datasource": { "type": "prometheus", "uid": "walera-prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "targets": [
+        {
+          "expr": "walera_auth_circuit_breaker_state",
+          "legendFormat": "breaker",
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "walera-prometheus" }
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "value_and_name",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "Closed", "color": "green", "index": 0 } } },
+            { "type": "value", "options": { "1": { "text": "Open", "color": "red", "index": 1 } } },
+            { "type": "value", "options": { "2": { "text": "HalfOpen", "color": "yellow", "index": 2 } } }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 2 },
+              { "color": "red", "value": 1 }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 5,
+      "type": "heatmap",
+      "title": "Fan-out subscribers per tx",
+      "description": "Histogram of walera_routing_fan_out: how many subscribers a single tx is delivered to.",
+      "datasource": { "type": "prometheus", "uid": "walera-prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "targets": [
+        {
+          "expr": "sum by (le) (rate(walera_routing_fan_out_bucket[1m]))",
+          "legendFormat": "{{le}}",
+          "format": "heatmap",
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "walera-prometheus" }
+        }
+      ],
+      "options": {
+        "calculate": false,
+        "yAxis": { "axisPlacement": "left", "reverse": false, "unit": "short" },
+        "cellGap": 1,
+        "color": { "mode": "scheme", "scheme": "Spectral", "exponent": 0.5, "steps": 64, "reverse": false },
+        "filterValues": { "le": 1e-9 },
+        "tooltip": { "show": true, "yHistogram": false }
+      },
+      "fieldConfig": { "defaults": {}, "overrides": [] }
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Route-lookup latency p99",
+      "datasource": { "type": "prometheus", "uid": "walera-prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(walera_route_lookup_duration_seconds_bucket[1m])))",
+          "legendFormat": "p99",
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "walera-prometheus" }
+        }
+      ],
+      "options": {},
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 5 }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Tx dropped by reason",
+      "description": "Stacked rate of dropped transactions by reason label (slow_consumer|tx_too_large|multi_root).",
+      "datasource": { "type": "prometheus", "uid": "walera-prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 24 },
+      "targets": [
+        {
+          "expr": "sum by (reason) (rate(walera_tx_dropped_total[10s]))",
+          "legendFormat": "{{reason}}",
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "walera-prometheus" }
+        }
+      ],
+      "options": {},
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 30,
+            "stacking": { "mode": "normal", "group": "A" }
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Writer commit rate vs walera WAL tx rate (OBS-05 parity)",
+      "description": "WRITER-05 +/-2% parity: the two lines should overlap. Divergence > 2% on a steady scenario is a regression.",
+      "datasource": { "type": "prometheus", "uid": "walera-prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 24 },
+      "targets": [
+        {
+          "expr": "writer_commit_rate",
+          "legendFormat": "writer reported",
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "walera-prometheus" }
+        },
+        {
+          "expr": "rate(walera_wal_tx_size_changes_count[10s])",
+          "legendFormat": "walera observed",
+          "refId": "B",
+          "datasource": { "type": "prometheus", "uid": "walera-prometheus" }
+        }
+      ],
+      "options": {},
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 0 }
+        },
+        "overrides": []
+      }
+    }
+  ]
+}

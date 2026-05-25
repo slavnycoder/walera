@@ -1,0 +1,39 @@
+# Go build artifacts
+/cdc-sse
+cmd/cdc-sse/cdc-sse
+/writer
+cmd/writer/writer
+*.test
+
+# Integration-test prebuilt binary (built by `make test-integration`).
+# Excluded so re-builds across machines / CI runners don't churn the repo.
+testbin/
+
+# Environment / secrets
+.env
+.env.*
+*.env
+# `.env.example` files ARE committed (templates without real secrets);
+# negation must come AFTER the broader patterns above.
+!.env.example
+!**/.env.example
+# testbench/.env is covered by the top-level .env patterns above
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Test coverage output
+coverage.out
+coverage.html
+
+# Python bytecode caches (testbench/mock-auth is Python stdlib)
+__pycache__/
+*.pyc
+*.pyo
+
+# GSD planning artifacts (kept locally only)
+.planning/

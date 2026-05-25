@@ -1,0 +1,84 @@
+# Walera sample configuration.
+# All fields can be overridden by WALERA_-prefixed environment variables
+# (e.g., WALERA_DATABASE_URL overrides database.url).
+
+# Single Postgres DSN input. The base URL IS the admin connection; the
+# replication connection is derived from it automatically (replication=database
+# is added at load time). The role MUST have the REPLICATION attribute and the
+# connection MUST NOT route through PgBouncer. Do NOT append
+# replication=database here — config load rejects a base URL that already
+# carries it.
+# Example: "postgres://walera:secret@pg.example.com:5432/mydb?sslmode=require"
+database:
+  url: ""
+
+log:
+  # Log level: debug | info | warn | error
+  level: info
+  # dev_mode enables a human-readable console log writer (stderr).
+  # Disable in production — JSON output is required by OBS-02.
+  dev_mode: false
+
+wal:
+  # Name of the publication used for WAL streaming. Default: "walera_pub".
+  # In bootstrap.mode=auto, Walera creates this publication on startup if it
+  # does not exist (FOR ALL TABLES, publish = insert,update,delete).
+  # In bootstrap.mode=verify, the publication must already exist (DBA-managed).
+  publication_name: walera_pub
+
+  # Prefix for the temporary replication slot name.
+  # Slot name is constructed as: <slot_name_prefix>_<hostname>_<pid>
+  # Default: walera
+  slot_name_prefix: walera
+
+  # Minimum free replication slots before a startup warning is emitted.
+  # Uses formula: max_replication_slots - count(active slots) < slot_headroom_min.
+  # Default: 2  (see spec §10.4 and OP-06)
+  slot_headroom_min: 2
+
+  # When true, naive timestamps (TIMESTAMP WITHOUT TIME ZONE) are interpreted as UTC.
+  # Set to false only if your application stores naive timestamps in a non-UTC timezone.
+  # Default: true
+  naive_timestamp_assume_utc: true
+
+  # Publication bootstrap policy (OP-02).
+  #   auto   — create the publication if missing as FOR ALL TABLES (default).
+  #   verify — fail fast if the publication is missing or has no tables (DBA-managed).
+  #   off    — skip the check entirely.
+  bootstrap:
+    mode: auto
+
+  # OP-04 reconnect loop (D4-02, D4-26).
+  # The backoff curve [1s, 2s, 4s, 8s, 16s, 30s] with hard-coded ±25%
+  # full-jitter is computed in wal.Reader.computeBackoff; reset_after_success_duration
+  # controls reset behaviour. After that duration of healthy streaming, the
+  # attempt counter resets to 0 so the next transient blip starts at 1s.
+  reconnect:
+    reset_after_success_duration: 60s
+
+  # walera_wal_lsn_lag_bytes sampling cadence (D4-05, D4-26).
+  # Sampler runs against the admin connection — never the replication conn.
+  lag_sample_interval: 5s
+
+# Opt-in pprof listener (quick task 260518-lh1).
+# pprof_addr (default empty = disabled). When set, Walera exposes
+# net/http/pprof (Index/Cmdline/Profile/Symbol/Trace) on a SEPARATE internal
+# listener using a dedicated http.ServeMux (NEVER DefaultServeMux) so a
+# future debug build cannot leak pprof onto the public /sse/v1/* listener.
+# Non-loopback binds require the WALERA_PPROF_ALLOW_PUBLIC=1 environment
+# escape hatch — otherwise validate() rejects them at startup.
+# http:
+#   pprof_addr: "127.0.0.1:6060"
+
+# Phase-4 metrics sampler (D4-12, D4-26).
+# Cadence at which size gauges (routing_index_size, subscriber_queue_depth)
+# are re-sampled. Counters / durations are event-driven and not affected.
+metrics:
+  sample_interval: 30s
+
+# Phase-4 graceful shutdown deadlines (D4-08, D4-26).
+# deadline is the hard cap on the entire shutdown sequence; drain_deadline is
+# the inner deadline for broadcaster.Shutdown. drain_deadline must be < deadline.
+shutdown:
+  deadline: 10s
+  drain_deadline: 8s

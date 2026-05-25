@@ -1,0 +1,28 @@
+# test/perf/thresholds.yml — perf-gate floors for Phase 20.
+# Regenerate with `make perf-gate-baseline` on deeb007.
+schema_version: 1
+captured: 2026-05-21
+captured_commit: e23dc33  # HEAD at Phase 19 close
+baseline_strace:
+  source_1k: bench-out/strace-baseline-133455/strace-1k.txt
+  source_5k: bench-out/strace-baseline-133654/strace-5k.txt
+val_02:
+  subscribers: 1000
+  scenario: steady
+  commit_rate: 500
+  rows_per_tx: 5
+  channels: orders/all,devices/all,articles/all
+  duration_seconds: 90
+  warmup_discard_seconds: 30
+  events_sent_min_per_s: 50000        # baseline-relative floor; Phase 19 measured 158,286
+  events_per_writev_min: 2.0          # >= 2x baseline 1.03:1; Phase 19 measured 3.29
+val_03:
+  subscribers: 5000
+  scenario: stress
+  commit_rate: 2000
+  rows_per_tx: 5
+  channels: orders/all,devices/all,articles/all
+  duration_seconds: 90
+  warmup_discard_seconds: 30
+  events_sent_min_per_s: 75000        # absolute floor per VAL-03; Phase 19 measured 209,175
+  events_per_writev_min: 3.0          # >= 1.5x baseline 2.04:1; Phase 19 measured 4.56

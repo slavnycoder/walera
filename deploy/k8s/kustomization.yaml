@@ -1,0 +1,25 @@
+# deploy/k8s/kustomization.yaml — minimal aggregator (D4-22).
+#
+# Intentionally a BARE aggregator — no patches, no overlays, no commonLabels.
+# This keeps the manifests readable as plain YAML; operators who want
+# overlays should fork this file in their own GitOps repo rather than rely
+# on us shipping environment-specific knobs.
+#
+# Apply with:
+#   kubectl apply -k deploy/k8s/
+#
+# To target a different namespace, edit the `namespace:` field below and the
+# `metadata.namespace` of each sibling YAML in lockstep.
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: walera
+# SEC-06 / F-P2-09 — secret.yaml is INTENTIONALLY NOT in this list.
+# The `walera-secrets` Secret must exist in the cluster BEFORE
+# `kubectl apply -k deploy/k8s/` is run; see secret.yaml's header block
+# and deploy/POSTGRES-SETUP.md §7 for the three approved workflows.
+resources:
+  - deployment.yaml
+  - service.yaml
+  - configmap.yaml
+  - servicemonitor.yaml

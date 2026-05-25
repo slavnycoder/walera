@@ -1,0 +1,79 @@
+# docker-compose.yml — root quick-start using the published Walera image.
+#
+# `docker compose up` boots:
+#   - postgres — postgres:18-alpine with wal_level=logical and the publication
+#                migration pre-applied to the `walera` database.
+#   - walera   — pulled from ghcr.io/slavnycoder/walera:latest, wired to the
+#                postgres service via the same config file the binary uses
+#                outside compose.
+#
+# This file is intended for first-time evaluation: clone the repo, run `docker
+# compose up`, hit http://localhost:8080/healthz. It does NOT include the mock
+# auth backend, Prometheus, Grafana, or the load writer — for the full demo
+# stack, use `testbench/docker-compose.yml` (see README §Quick Start).
+#
+# To run against your own Postgres instead of the bundled one, set
+# WALERA_DATABASE_URL in your shell and remove the `postgres` service block
+# from this file.
+#
+# To build the image from local source instead of pulling, replace the
+# `image:` line under `walera` with:
+#   build:
+#     context: .
+#     dockerfile: Dockerfile
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    container_name: walera-pg
+    environment:
+      POSTGRES_USER: walera
+      POSTGRES_PASSWORD: walera
+      POSTGRES_DB: walera
+    command:
+      - "postgres"
+      - "-c"
+      - "wal_level=logical"
+      - "-c"
+      - "max_replication_slots=10"
+      - "-c"
+      - "max_wal_senders=10"
+    ports:
+      - "5432:5432"
+    volumes:
+      # Init script runs on first boot only (when /var/lib/postgresql/data
+      # is empty). Recreate the volume to re-init.
+      - ./migrations/001_publication.sql.example:/docker-entrypoint-initdb.d/001_publication.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U walera -d walera"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+
+  walera:
+    image: ghcr.io/slavnycoder/walera:latest
+    container_name: walera-app
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      # Single Postgres DSN — admin connection plus the derived replication
+      # connection. The role MUST hold the REPLICATION attribute; do NOT
+      # append replication=database (Walera derives it).
+      WALERA_DATABASE_URL: "postgres://walera:walera@postgres:5432/walera?sslmode=disable"
+      WALERA_WAL_PUBLICATION_NAME: "cdc_sse_streamer"
+      # Wire your own auth backend here. The defaults below point at a
+      # placeholder host so the binary starts; readiness will stay 503 until
+      # auth.backend_url answers.
+      WALERA_AUTH_BACKEND_URL: "${AUTH_BACKEND_URL:-http://host.docker.internal:9000}"
+      WALERA_AUTH_SERVICE_TOKEN: "${AUTH_SERVICE_TOKEN:-service-token}"
+      WALERA_HTTP_CORS_ORIGINS: "${CORS_ORIGINS:-http://localhost:3000,http://localhost:5173}"
+      GOGC: "200"
+      GOMEMLIMIT: "6500MiB"
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./config.yaml:/etc/walera/config.yaml:ro
+    extra_hosts:
+      # Lets the container reach an auth backend running on the docker host.
+      - "host.docker.internal:host-gateway"

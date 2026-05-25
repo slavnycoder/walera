@@ -1,0 +1,134 @@
+# deploy/prometheus/alerts.yaml — Walera PrometheusRule (D4-14, OBS-03).
+#
+# OPERATOR ACTION REQUIRED before alerts will fire (Pitfall G7):
+#   Replace `release: REPLACE_ME` with the label your Prometheus Operator
+#   uses in its `spec.ruleSelector`. Common values:
+#     - kube-prometheus-stack  (helm chart default)
+#     - prometheus             (older operator deployments)
+#     - kube-prometheus        (manifests-only kube-prometheus)
+#
+#   sed -i 's/release: REPLACE_ME/release: kube-prometheus-stack/' deploy/prometheus/alerts.yaml
+#
+#   To discover your operator's ruleSelector value:
+#     kubectl get prometheus -n monitoring -o yaml | grep -A 5 ruleSelector
+#
+# See deploy/prometheus/README.md for per-alert intent / mitigation.
+
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: walera-alerts
+  namespace: monitoring
+  labels:
+    app: walera
+    # Common kube-prometheus-stack default; matches `prometheus:` selector.
+    prometheus: kube-prometheus
+    # Pitfall G7 — operator must replace before alerts fire.
+    release: REPLACE_ME
+spec:
+  groups:
+    - name: walera.wal
+      interval: 30s
+      rules:
+        - alert: WaleraWALLagHigh
+          expr: walera_wal_lsn_lag_bytes > 100 * 1024 * 1024
+          for: 5m
+          labels:
+            severity: P1
+            app: walera
+            component: wal
+          annotations:
+            summary: "Walera WAL lag > 100 MiB for 5m"
+            description: "Service is falling behind PG WAL during live session. Investigate router/writer throughput; check walera_subscriber_queue_depth and walera_routing_fan_out."
+        - alert: WaleraPGDisconnected
+          expr: walera_pg_connection_status == 0
+          for: 1m
+          labels:
+            severity: P1
+            app: walera
+            component: wal
+          annotations:
+            summary: "Walera lost PG connection"
+            description: "pg_connection_status=0 for >1m. Reconnect loop should auto-recover; k8s liveness will evict the pod after ~6s if /healthz keeps returning 503."
+        - alert: WaleraStandbyAckFailures
+          expr: increase(walera_wal_standby_ack_failures_total[5m]) > 3
+          for: 1m
+          labels:
+            severity: P1
+            app: walera
+            component: wal
+          annotations:
+            summary: "Walera standby ACK failures > 3 in 5m"
+            description: "wal-standby-ticker failed to send StandbyStatusUpdate to PostgreSQL > 3 times in the last 5 minutes. The ticker continues running on transient errors (behaviour preserved), so this signals a persistent issue: network partition between Walera and PG, the replication-slot has gone inactive, or the replication connection has dropped without the reconnect loop noticing. Cross-check walera_pg_connection_status (should be 1) and walera_wal_lsn_lag_bytes (should be stable); investigate PG-side logs for replication-slot warnings."
+
+    - name: walera.auth
+      interval: 30s
+      rules:
+        - alert: WaleraAuthBreakerOpen
+          expr: walera_auth_circuit_breaker_state == 1
+          for: 1m
+          labels:
+            severity: P1
+            app: walera
+            component: auth
+          annotations:
+            summary: "Walera auth circuit breaker open"
+            description: "Bounded fail-open active; up to ~2min stale-permissions window for existing subscribers. Investigate auth backend logs."
+        - alert: WaleraAuthBreakerStaleSubscribersOutsideBreaker
+          expr: walera_auth_circuit_breaker_state == 0 and walera_auth_breaker_stale_subscribers > 0
+          for: 1m
+          labels:
+            severity: P1
+            app: walera
+            component: auth
+          annotations:
+            summary: "Walera has stale subscribers with no open breaker"
+            description: "Refresh logic bug. Subscribers operating with stale auth maps but no breaker reason. Inspect walera_auth_refresh_total{result}."
+
+    - name: walera.subscribers
+      interval: 30s
+      rules:
+        - alert: WaleraSlowConsumerRate
+          expr: rate(walera_subscriber_disconnects_total{reason="slow_consumer"}[5m]) > 0.1
+          for: 10m
+          labels:
+            severity: P2
+            app: walera
+            component: routing
+          annotations:
+            summary: "Walera slow-consumer disconnect rate > 6/min for 10m"
+            description: "Investigate downstream backpressure or undersized buffers; check walera_subscriber_queue_depth."
+        - alert: WaleraMultiRootDrops
+          expr: rate(walera_tx_dropped_total{reason="multi_root"}[5m]) > 0
+          for: 5m
+          labels:
+            severity: P2
+            app: walera
+            component: routing
+          annotations:
+            summary: "Walera per-subscriber multi-root drops"
+            description: "Auth backend's root discipline is broken — same tx touches multiple roots visible to one subscriber."
+
+    - name: walera.process
+      interval: 30s
+      rules:
+        - alert: WaleraFDPressure
+          expr: process_open_fds / process_max_fds > 0.8
+          for: 10m
+          labels:
+            severity: P2
+            app: walera
+            component: runtime
+          annotations:
+            summary: "Walera FD usage > 80% of soft limit"
+            description: "Inspect for socket leaks or undersized ulimit; cross-check with walera_subscribers_active."
+        - alert: WaleraHeapGrowth
+          expr: delta(go_memstats_heap_alloc_bytes[30m]) > 100 * 1024 * 1024
+          for: 30m
+          labels:
+            severity: P3
+            app: walera
+            component: runtime
+          annotations:
+            summary: "Walera heap_alloc grew > 100 MiB over 30m"
+            description: "Suspected leak. Inspect pprof heap profile."

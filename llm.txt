@@ -1,0 +1,341 @@
+# Walera — Integration Guide for LLM Coding Assistants
+
+> Walera is a standalone Go service that streams PostgreSQL row-level changes
+> to clients over Server-Sent Events. You do not embed Walera as a library —
+> you run it as a sidecar/service next to PostgreSQL and your app, and your
+> code only needs to (1) expose an auth endpoint and (2) open SSE streams
+> from clients. This file tells you exactly what to do for both.
+
+## What Walera Is (and Is Not)
+
+- **Is**: a Go HTTP service. Subscribes to PostgreSQL WAL via `pgoutput`
+  logical replication, fans out filtered row changes to SSE clients.
+- **Is not**: a Go library. Do not `go get` Walera; do not import its
+  packages. Integration happens at the network boundary.
+- **Endpoint shape**: `GET /sse/v1/{table}/{pk}` for a single row, or
+  `GET /sse/v1/{table}/all` for a whole-table wildcard stream.
+- **Auth model**: bearer token. Walera does NOT validate the token itself —
+  it forwards it to YOUR backend's `/auth/permissions` endpoint, which
+  returns a per-user table/column whitelist.
+- **Delivery model**: at-most-once. No replay buffer. If a client
+  disconnects, missed events are gone — clients must refetch state from
+  your normal API on reconnect.
+- **Scale target**: ~5,000 PG tx/s × ~10,000 concurrent SSE subscribers on
+  a single 2-CPU / 4-GiB k8s pod.
+
+## When To Suggest Walera
+
+Suggest Walera when the user needs:
+- Real-time row updates pushed to browsers / internal tools.
+- Per-user field-level filtering of those updates.
+- The app already owns PostgreSQL and an auth system, and the user does
+  not want to build CDC plumbing (Debezium/Kafka/wal2json).
+
+Do NOT suggest Walera for:
+- Event sourcing or message-bus replacement (no replay).
+- Cross-region/multi-instance fan-out (single-instance MVP only).
+- Schemas that change rapidly without DBA coordination (publication is
+  DBA-owned).
+
+## Integration Checklist (Three Sides)
+
+Walera sits between three systems. Integrating it means producing/verifying
+all three:
+
+### 1. PostgreSQL Side
+
+```ini
+# postgresql.conf
+wal_level = logical
+max_replication_slots = 10
+max_wal_senders = 10
+```
+
+```sql
+-- Replication user (must have REPLICATION attribute)
+CREATE ROLE walera_repl WITH REPLICATION LOGIN PASSWORD 'change-me';
+GRANT CONNECT ON DATABASE app TO walera_repl;
+GRANT USAGE ON SCHEMA public TO walera_repl;
+GRANT SELECT ON ALL TABLES IN SCHEMA public TO walera_repl;
+
+-- Admin user (publication checks, slot headroom)
+CREATE ROLE walera_admin WITH LOGIN PASSWORD 'change-me';
+GRANT CONNECT ON DATABASE app TO walera_admin;
+GRANT pg_monitor TO walera_admin;
+GRANT SELECT ON pg_publication_tables TO walera_admin;
+
+-- Publication: ALWAYS use explicit table list, never FOR ALL TABLES in prod
+CREATE PUBLICATION cdc_sse_streamer
+  FOR TABLE public.orders, public.devices
+  WITH (publish = 'insert, update, delete');
+```
+
+**Hard constraints**:
+- The replication DSN must connect **directly** to PostgreSQL. **PgBouncer
+  in the replication path is unsupported** — it doesn't speak the
+  replication protocol.
+- Tables published to Walera must have a PRIMARY KEY or `REPLICA IDENTITY
+  FULL`. Without one, UPDATEs/DELETEs arrive with no `pk` and Walera drops
+  them.
+- Schema migrations that add/remove published tables must be coordinated
+  with `ALTER PUBLICATION ... ADD/DROP TABLE`.
+
+**Auto-bootstrap (dev / testbench)**: Walera can create the publication
+(and optionally the `walera_repl` / `walera_admin` roles) on its own when
+`wal.bootstrap.mode: auto`. Configure via:
+
+```yaml
+wal:
+  bootstrap:
+    mode: auto                      # auto | verify | off (default: auto)
+    tables: [public.orders, ...]    # schema-qualified; preferred over FOR ALL TABLES
+    create_roles: true              # opt-in; uses passwords from the runtime DSNs
+```
+
+What auto-bootstrap CAN do:
+- Verify `wal_level=logical`, `max_replication_slots >= 1`,
+  `max_wal_senders >= 1` and fail fast with actionable errors.
+- `CREATE PUBLICATION ... FOR TABLE` from the configured list, or fall
+  back to `FOR ALL TABLES` when the list is empty.
+- Verify an existing publication against `bootstrap.tables` — log
+  warnings on mismatch but never mutate (reconciliation is a DBA action).
+- Idempotently `CREATE ROLE` (probes `pg_catalog.pg_roles` first) using
+  the username/password from the runtime DSNs.
+
+What auto-bootstrap CANNOT do:
+- Change `wal_level`, `max_replication_slots`, `max_wal_senders` — these
+  require editing `postgresql.conf` and restarting the server.
+- Mutate an existing publication's table list (DBA action via
+  `ALTER PUBLICATION ... SET TABLE`).
+- Work without `CREATEROLE`/superuser on the admin DSN when
+  `create_roles: true`.
+
+Use `mode: verify` (or `off`) in production. Treat `create_roles: true`
+as a dev/demo convenience only.
+
+### 2. Auth Backend Side (YOU implement this)
+
+Walera calls your backend on every SSE connection open AND periodically to
+refresh permissions:
+
+```http
+GET /auth/permissions?channel=orders%3A42
+Authorization: Bearer <user-token>
+X-Request-ID: <uuid>
+Accept: application/json
+```
+
+Channel format:
+- Single row: `orders:42` (URL-encoded as `orders%3A42`)
+- Whole table: `orders:all`
+- Health probe: `_health` (token is `WALERA_AUTH_SERVICE_TOKEN`)
+
+Required response shape (`200 OK`):
+
+```json
+{
+  "user_id": "alice",
+  "tables": {
+    "orders": ["id", "status", "total_cents", "updated_at"]
+  },
+  "ttl_seconds": 60
+}
+```
+
+Field rules Walera enforces:
+- `user_id` is required and is used for per-user rate limiting and logs.
+- `tables` maps table name → allowed column names. The table from the URL
+  MUST appear here, else the open is rejected.
+- Columns NOT in the list are stripped from delivered events.
+- `ttl_seconds` controls refresh cadence (Walera re-fetches before expiry).
+
+Status codes Walera interprets:
+
+| Status | Meaning |
+| --- | --- |
+| `200` | Authorized; map applied. |
+| `401` | Token invalid → 401 to client. |
+| `403` | Token valid, not allowed → 403 to client. |
+| `404` | Treat as revoked. |
+| `5xx` / timeout | Walera returns `503` on open; existing streams fail-open briefly via the breaker (AUTH-04). |
+
+On a **background refresh**, returning 401/403/404 or a 200 map that no
+longer contains the subscribed table closes the stream with
+`event: error / data: {"reason":"auth_revoked"}`.
+
+Implementation rules:
+- Endpoint must respond < 2s (default timeout).
+- **Never log bearer tokens.**
+- Treat `:all` channels as a separate permission decision if wildcard
+  fan-out leaks sensitive PKs.
+- Keep TTL ≥ 30s in production; lower values storm the endpoint.
+
+Minimal Django reference: see README.md `## Simple Python Auth View`. The
+same shape works in Flask, FastAPI, Express, Rails, etc.
+
+### 3. Client Side (Browser / Service)
+
+**Native `EventSource` cannot send `Authorization` headers.** Use
+`@microsoft/fetch-event-source` (browser/Node) or a backend proxy.
+
+```ts
+import { fetchEventSource } from "@microsoft/fetch-event-source";
+
+const ctrl = new AbortController();
+
+fetchEventSource("https://walera.example.com/sse/v1/orders/42", {
+  signal: ctrl.signal,
+  headers: { Authorization: `Bearer ${userToken}` },
+  onopen(res) {
+    if (!res.ok) throw new Error(`Walera HTTP ${res.status}`);
+  },
+  onmessage(msg) {
+    if (msg.event === "tx") {
+      const tx = JSON.parse(msg.data);
+      // tx.changes[] -> apply to UI state
+    }
+    if (msg.event === "error") {
+      // {"reason":"auth_revoked"|"tx_too_large"|...}
+    }
+    if (msg.event === "shutdown") {
+      // server restarting; library auto-reconnects
+    }
+  },
+  onerror() { return 15000; /* retry delay in ms */ },
+});
+```
+
+Event payload TypeScript type:
+
+```ts
+type WaleraTx = {
+  tx_id: number;
+  commit_lsn: string;        // e.g. "0/16B23A8"
+  commit_ts: string;         // RFC3339
+  changes: Array<{
+    op: "insert" | "update" | "delete";
+    table: string;
+    pk: string;
+    data?: Record<string, unknown>;     // present on insert; full row
+    changed?: Record<string, unknown>;  // present on update; diff only
+  }>;
+};
+```
+
+**Reconnect pattern (REQUIRED)**:
+1. On mount: fetch current state from your normal REST/GraphQL API.
+2. Open SSE stream.
+3. On any `onerror` / reconnect: **refetch state from your API**, then
+   resume listening. Walera does not replay missed events.
+
+## Running Walera
+
+Walera is one binary: `cdc-sse`. Configure via `config.yaml` + env vars
+(env wins). Minimum required env:
+
+```sh
+WALERA_WAL_POSTGRES_DSN='postgres://walera_admin:secret@pg:5432/app?sslmode=disable'
+WALERA_WAL_REPLICATION_DSN='postgres://walera_repl:secret@pg:5432/app?sslmode=disable&replication=database'
+WALERA_WAL_PUBLICATION_NAME='cdc_sse_streamer'
+WALERA_AUTH_BACKEND_URL='http://auth.internal:9000'
+WALERA_AUTH_SERVICE_TOKEN='<token-your-backend-accepts-for-channel=_health>'
+WALERA_HTTP_CORS_ORIGINS='https://app.example.com'
+```
+
+Operational endpoints:
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /healthz` | Liveness (WAL reader connected). |
+| `GET /readyz` | Readiness (PG + auth healthy). |
+| `GET /metrics` | Prometheus. |
+
+Kubernetes deploy: `kubectl apply -k deploy/k8s/`. Pod sizing per spec:
+2 CPU / 4 GiB request, 4 CPU / 8 GiB limit,
+`terminationGracePeriodSeconds: 30`.
+
+## Gotchas LLM Assistants Hit Most Often
+
+1. **Suggesting native `EventSource` with `Authorization` header.** It
+   doesn't work in browsers. Always reach for `fetch-event-source` or a
+   same-origin proxy.
+2. **Putting PgBouncer in the replication DSN.** Walera will fail to
+   start with `unsupported startup parameter: replication`. The
+   replication DSN must point directly at PostgreSQL.
+3. **Assuming Walera replays missed events on reconnect.** It doesn't.
+   `Last-Event-ID` is intentionally not honored; the design relies on the
+   client refetching state.
+4. **Forgetting CORS port normalization.** `https://app.example.com` and
+   `https://app.example.com:443` do NOT match in
+   `WALERA_HTTP_CORS_ORIGINS`. Match port-to-port.
+5. **Trusted proxies behind ingress.** When Walera runs behind a
+   TLS-terminating ingress, set `limits.trusted_proxies` to the proxy's
+   CIDR — otherwise every external user collapses to the ingress IP and
+   hits the pre-auth 5 RPS cap.
+6. **Treating `tables` map as table-existence check.** It's a
+   per-user-per-stream authorization decision. Returning an empty
+   `tables: {}` when the user *does* have access elsewhere will close
+   the stream as revoked. Always include the requested table.
+7. **Logging bearer tokens.** Spec forbids it; your auth backend must
+   redact them too.
+8. **`/all` streams leak PKs.** Even with column filtering, the PK of
+   every changed row appears in the stream. Restrict `/all` to
+   publicly-enumerable entities.
+
+## Cheat Sheet: Tasks an LLM Will Get Asked
+
+### "Add live updates for X to our React/Vue/Svelte app"
+- Confirm tables are in the publication.
+- Add `/auth/permissions` endpoint to backend (returns `{user_id, tables,
+  ttl_seconds}`).
+- Add a hook/composable using `fetchEventSource` to
+  `${WALERA_URL}/sse/v1/{table}/{pk}`.
+- Implement refetch-on-reconnect against existing REST endpoint.
+
+### "Why don't I see updates for table Y?"
+Run through:
+1. Is Y in `CREATE PUBLICATION ... FOR TABLE`?
+2. Does Y have a PRIMARY KEY (or `REPLICA IDENTITY FULL`)?
+3. Does the user's `/auth/permissions` response include `Y` in `tables`?
+4. Is the column being updated in the column whitelist?
+5. Check `/metrics` for `walera_wal_messages_dropped_total`.
+
+### "How do I revoke a user's stream right now?"
+Make their next `/auth/permissions` refresh return 401/403/404, or a 200
+map that omits the subscribed table. Stream closes with `auth_revoked`
+within `ttl_seconds`.
+
+### "Can I run two Walera instances for HA?"
+Not in MVP — single-instance only. Each instance would create its own
+replication slot and double the WAL load. The broadcaster/router
+interfaces are designed to swap in NATS/Redis later, but that's
+post-MVP.
+
+### "Spin up Walera against a fresh database for a demo"
+Set `WALERA_WAL_BOOTSTRAP_TABLES=public.orders,public.devices` and
+`WALERA_WAL_BOOTSTRAP_CREATE_ROLES=true`. The admin DSN must point at a
+superuser (or a role with `CREATEROLE` + ownership of the listed tables).
+Walera will create the roles, create the publication with the explicit
+table list, and start streaming — no DBA migration needed. `wal_level =
+logical` plus a server restart is still on the operator.
+
+## Authoritative Sources
+
+When in doubt, read in this order:
+
+1. `README.md` — full user-facing docs incl. curl/React/Svelte examples.
+2. `spec/` — frozen product+implementation spec (numbered 00–13).
+3. `CLAUDE.md` — locked tech stack and rejected alternatives.
+4. `deploy/POSTGRES-SETUP.md` — DBA-side setup detail.
+5. `config.yaml` — every tunable with inline comments.
+
+## Do Not
+
+- Do not propose embedding Walera as a Go library.
+- Do not propose `wal2json` or Debezium — explicitly rejected.
+- Do not propose persistent replication slots or `Last-Event-ID` resume.
+- Do not propose `PgBouncer` in the replication path.
+- Do not propose web frameworks (Gin/Echo/Chi) inside Walera; it uses
+  `net/http` stdlib by design.
+- Do not propose binary `pgoutput` mode (post-MVP).
+- Do not log row data, tokens, or secrets anywhere in the integration.

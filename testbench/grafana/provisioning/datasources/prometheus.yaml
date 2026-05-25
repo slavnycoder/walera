@@ -1,0 +1,30 @@
+# testbench/grafana/provisioning/datasources/prometheus.yaml
+#
+# Plan 09-02 / Phase 09: Grafana datasource provisioning (OBS-03).
+#
+# This file is provisioning-managed — Grafana reads it on boot and creates the
+# Prometheus datasource at the fixed UID `walera-prometheus`. Every dashboard
+# panel in testbench/grafana/dashboards/*.json references this UID via
+# `datasource.uid: walera-prometheus`, which is the OBS-03 contract that makes
+# the dashboards portable to any Prometheus instance pointed at the same UID.
+#
+# UI edits to the provisioned datasource are rejected (`editable: false`) so
+# the YAML on disk is the single source of truth — no drift between the file
+# and what Grafana exposes through `/api/datasources/uid/walera-prometheus`.
+#
+# `timeInterval: 1s` matches Plan 09-01's prometheus.yml scrape_interval so
+# Grafana's `$__rate_interval` template variable picks a sensible default
+# step and the 1s-scrape series do not alias inside range vectors.
+
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    uid: walera-prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false
+    jsonData:
+      timeInterval: "1s"

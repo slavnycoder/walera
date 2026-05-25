@@ -1,0 +1,205 @@
+# =============================================================================
+# .github/workflows/bench-regression.yml — BENCH-02 micro-bench regression gate.
+#
+# Runs the locked Go micro-benchmark set (BENCH-01 surface) on every PR that
+# touches the gated source-tree surface, compares the PR's bench output
+# against the committed baseline at testbench/bench-baseline-v2.4.txt via
+# benchstat, and fails the workflow when any sub-benchmark's sec/op OR
+# allocs/op regresses by > 3% with p < 0.05. The threshold check itself
+# lives in scripts/bench-regression-parse.sh; this workflow just provides
+# the runtime environment + benchstat install + artifact upload.
+#
+# Statistical-test note (RESEARCH.md §Q5):
+#   REQUIREMENTS.md text reads "Welch t-test, p < 0.05". benchstat
+#   actually uses the Mann-Whitney U-test (non-parametric), which is
+#   statistically MORE appropriate for benchmark data — it makes no
+#   normality assumption, which Go-bench distributions routinely
+#   violate (multi-modal due to GC pauses, scheduler quanta). Both tests
+#   answer the same question ("are the two distributions distinguishable
+#   at alpha=0.05?") so the contract is honoured in spirit; the Mann-Whitney
+#   choice is the de-facto Go-ecosystem standard. Reviewers grepping for
+#   "Welch" will find this rationale block.
+#
+# Path-filter extension — CONTEXT.md divergence (audit-visible):
+#   CONTEXT.md locks the path filter to:
+#     internal/sse/**, internal/router/**,
+#     testbench/bench-baseline-v2.4.txt,
+#     .github/workflows/bench-regression.yml,
+#     go.mod, go.sum.
+#   This workflow EXTENDS that list with three additional patterns:
+#     internal/metrics/**             — owns BenchmarkMetricsNew (DECOMP-02)
+#     internal/app/**                 — owns BenchmarkInitializeApp (DECOMP-04)
+#     scripts/bench-regression-parse.sh — owns the gate's pass/fail logic
+#   Justification: a PR that changes any of these surfaces can shift the
+#   measured bench numbers (or the gate's interpretation of them) without
+#   touching the CONTEXT.md-locked paths. The gate MUST re-fire in those
+#   cases, otherwise the regression escapes review. The CONTEXT.md list is
+#   treated as a floor, not a ceiling; this extension is narrow, audit-visible
+#   at the top of this file, and rationalised in 01-06-PLAN.md.
+#
+# Documented residual gap (RESEARCH.md §Q7 Option 1):
+#   Indirect effects via internal/wal field renames are NOT covered by this
+#   filter. internal/router/event.go imports internal/wal, so a wal.Tx /
+#   wal.Change struct-shape change can shift router-bench allocs without
+#   touching internal/router/**. No internal/wal changes are scheduled in
+#   v2.4; re-evaluate at v2.5 if the milestone scope includes internal/wal
+#   edits and add internal/wal/** to the filter then.
+#
+# Runner selection: ubuntu-latest (NOT self-hosted, deeb007).
+#   The micro-bench at -count=10 absorbs GitHub-runner variance via the
+#   Mann-Whitney U-test; the 3% threshold + alpha=0.05 keeps the
+#   false-positive rate at the published 2-3% CV ceiling for ubuntu-latest.
+#   The self-hosted runner [self-hosted, deeb007] is reserved for the
+#   throughput perf-gate (perf-gate.yml), which is calibrated against
+#   compose-lifecycle + GOMAXPROCS=4 + the deeb007 VAL-01 strace baseline.
+#
+# Initial sample size:
+#   -count=10 — matches the baseline-capture command in
+#   testbench/bench-baseline-v2.4.txt header. If the first DECOMP-XX PR
+#   in a downstream milestone surfaces a false-positive, escalate to
+#   -count=20 via a workflow-only edit (no baseline recapture required;
+#   benchstat tolerates count asymmetry between baseline and new input).
+#
+# Critical anti-patterns deliberately avoided:
+#   -race deliberately omitted from the go test invocation: race-instrumented
+#     benchmarks run 2-5x slower and shift allocation patterns, so the gate
+#     would measure race tooling rather than code (RESEARCH.md anti-patterns,
+#     baseline header Notes). Race coverage lives in the test-race job of
+#     checks.yml, not here.
+#   -cpu= deliberately omitted: passing -cpu=1,2,4 would emit one bench row
+#     per GOMAXPROCS value, diverging the PR row format from the baseline
+#     row format (which was captured with the runner's default GOMAXPROCS)
+#     and breaking benchstat's pairing logic.
+#   -bench=BenchmarkX (prefix-typo): always -bench=. so every Benchmark*
+#     function in the gated packages runs. A prefix typo would silently
+#     trim the bench surface (RESEARCH.md Common-Pitfalls section, entry
+#     on -bench filter typos).
+#   baseline/new input order to benchstat: ALWAYS baseline first, new second.
+#     Swapping silently inverts the "vs base" sign and reports regressions
+#     as improvements (RESEARCH.md Common-Pitfalls section, entry on input
+#     order).
+#
+# Marketplace actions used (project convention; do not add to this list
+# without an audit-trail discussion in CONTEXT.md):
+#   - actions/checkout@v4
+#   - actions/setup-go@v5
+#   - actions/upload-artifact@v4
+#
+# Out of scope (deferred per CONTEXT.md):
+#   - Dashboard publishing (no perfdata / gobenchdata push).
+#   - pprof diffing on regression.
+#   - Per-file coverage extension for benchmark-touched files.
+#
+# Comment hygiene: BENCH-01, BENCH-02, DECOMP-XX are safe per
+# RESEARCH.md Q8 (do not match the banned-token regex in
+# scripts/lint-comment-tokens.sh).
+# =============================================================================
+
+name: Bench Regression
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'internal/sse/**'
+      - 'internal/router/**'
+      - 'internal/metrics/**'
+      - 'internal/app/**'
+      - 'testbench/bench-baseline-v2.4.txt'
+      - '.github/workflows/bench-regression.yml'
+      - 'scripts/bench-regression-parse.sh'
+      - 'go.mod'
+      - 'go.sum'
+  pull_request:
+    branches: [master]
+    paths:
+      - 'internal/sse/**'
+      - 'internal/router/**'
+      - 'internal/metrics/**'
+      - 'internal/app/**'
+      - 'testbench/bench-baseline-v2.4.txt'
+      - '.github/workflows/bench-regression.yml'
+      - 'scripts/bench-regression-parse.sh'
+      - 'go.mod'
+      - 'go.sum'
+  # Manual trigger so the baseline-capture script (scripts not in this
+  # workflow) can be re-run on ubuntu-latest if local capture diverges
+  # too far from the CI runner's hardware. See testbench/bench-baseline-v2.4.txt
+  # provenance header for the original capture command.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  bench-regression:
+    name: bench-regression
+    runs-on: ubuntu-latest
+    # Defensive ceiling. Expected runtime ~3-5 min (bench + benchstat +
+    # parse). Aligned with the -timeout=15m baseline-capture ceiling so
+    # workflow_dispatch re-capture invocations cannot bump into the
+    # runner ceiling.
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install benchstat
+        # Pseudo-version pin (no tagged release on golang.org/x/perf as
+        # of 2026-05-24). See RESEARCH.md §Standard Stack for the verify
+        # trail on pkg.go.dev.
+        run: go install golang.org/x/perf/cmd/benchstat@v0.0.0-20260512194132-3cf34090a3db
+
+      - name: Run benchmarks
+        # -bench=.        run every Benchmark* in the gated packages.
+        # -benchmem       emit allocs/op + B/op columns.
+        # -count=10       matches the baseline capture; gives benchstat 10
+        #                 samples per metric for the Mann-Whitney test.
+        # -run=^$         skip every Test* function; only Benchmark* runs.
+        # -timeout=20m    defensive; the job-level timeout-minutes:15 is
+        #                 the outer cap.
+        run: |
+          go test -bench=. -benchmem -count=10 -run='^$' -timeout=20m \
+            ./internal/sse/... ./internal/router/... \
+            ./internal/metrics/... ./internal/app/... \
+            | tee new.txt
+
+      - name: Compare against baseline
+        # CRITICAL: baseline first, new second. Swapping silently inverts
+        # the "vs base" column sign (RESEARCH.md Common-Pitfalls section,
+        # entry on benchstat input order).
+        run: |
+          "$(go env GOPATH)/bin/benchstat" \
+            testbench/bench-baseline-v2.4.txt new.txt \
+            | tee delta.txt
+
+      - name: Parse delta for regressions
+        # The script's exit code gates the workflow. Annotations + summary
+        # are written to stdout so they surface in the PR Checks tab
+        # without requiring artifact download.
+        run: bash scripts/bench-regression-parse.sh delta.txt
+
+      - name: Upload bench artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-regression-${{ github.run_id }}
+          path: |
+            new.txt
+            delta.txt
+          if-no-files-found: warn
+          retention-days: 14

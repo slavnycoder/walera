@@ -1,0 +1,64 @@
+{
+  "uid": "walera-routing",
+  "title": "Walera Routing Internals",
+  "description": "Walera v1.1 routing-internals dashboard: index size by kind and per-subscriber queue depth distribution. A third panel (index-balance / per-shard-size coefficient of variation) is intentionally DEFERRED to v1.2 because the per-shard-size gauge is not currently exposed by internal/metrics/registry.go; the locked decision is to NOT emit a 'No data' stub panel.",
+  "tags": ["walera", "v1.1", "testbench", "routing"],
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": false,
+  "refresh": "5s",
+  "time": { "from": "now-15m", "to": "now" },
+  "timepicker": {},
+  "templating": { "list": [] },
+  "annotations": { "list": [] },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Routing index size by kind",
+      "description": "Subscribers registered per index_kind label (exact|wildcard). Label name is `index_kind` per internal/metrics/registry.go line 173 — NOT `kind`.",
+      "datasource": { "type": "prometheus", "uid": "walera-prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "expr": "walera_routing_index_size",
+          "legendFormat": "{{index_kind}}",
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "walera-prometheus" }
+        }
+      ],
+      "options": {},
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 10 }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Subscriber queue depth p99 by class",
+      "description": "p99 of per-subscriber buffered-channel len() by class label `type` (exact|wildcard). Saturation here is the leading indicator of slow_consumer drops on panel 7 of the overview dashboard.",
+      "datasource": { "type": "prometheus", "uid": "walera-prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.99, sum by (le, type) (rate(walera_subscriber_queue_depth_bucket[1m])))",
+          "legendFormat": "p99 {{type}}",
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "walera-prometheus" }
+        }
+      ],
+      "options": {},
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 5 }
+        },
+        "overrides": []
+      }
+    }
+  ]
+}

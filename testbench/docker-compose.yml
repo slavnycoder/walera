@@ -1,0 +1,403 @@
+# testbench/docker-compose.yml — Walera v1.1 testbench substrate (Phase 05).
+#
+# Single coherent compose file that downstream phases (06-09) append services
+# to. This plan (05-01) lands the PostgreSQL service only; mock-auth lands in
+# plan 05-04. Compose v2.27+ syntax — no top-level `version:` key.
+#
+# Operator entrypoint: `make -C testbench demo-up`.
+
+name: walera-testbench
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_USER: walera
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD required in .env}
+      POSTGRES_DB: walera
+    # wal_level / slot tuning baked into the postmaster command line — these
+    # GUCs are postmaster-context and CANNOT be set via init scripts
+    # (Pitfall P1). max_replication_slots bumped to 20 and wal_sender_timeout
+    # added per CONTEXT.md.
+    command:
+      - "postgres"
+      - "-c"
+      - "wal_level=logical"
+      - "-c"
+      - "max_replication_slots=20"
+      - "-c"
+      - "max_wal_senders=10"
+      - "-c"
+      - "wal_sender_timeout=30s"
+    ports:
+      # Bind to loopback only — exposing 0.0.0.0:5432 with the committed dev
+      # password (`walera` in .env.example) would publish RW PG creds to the
+      # whole LAN. Devs reach PG via `psql -h 127.0.0.1`; document an
+      # explicit `127.0.0.1` -> `0.0.0.0` override in .env if multi-host
+      # access is ever needed.
+      - "127.0.0.1:${PG_HOST_PORT:-5432}:5432"
+    volumes:
+      # Ephemeral named volume — `down -v` cold-starts cleanly (Pitfall P7).
+      # PG 18 VOLUME path is /var/lib/postgresql (PGDATA moved to
+      # /var/lib/postgresql/18/docker; alpine carries a backward-compat
+      # symlink). See RESEARCH.md §Pattern 1.
+      - testbench_pgdata:/var/lib/postgresql
+      # Initdb scripts run lexically when PGDATA is empty (alphabetical order:
+      # 001 creates the empty publication; 002 creates the demo schema and
+      # ALTER PUBLICATION ADD TABLEs it onto the publication).
+      - ./migrations/001_publication.sql:/docker-entrypoint-initdb.d/001_publication.sql:ro
+      - ./migrations/002_demo_schema.sql:/docker-entrypoint-initdb.d/002_demo_schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U walera -d walera"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+    networks: [testbench-net]
+
+  mock-auth:
+    # Plan 05-04: Python stdlib HTTP auth backend (promoted from /tmp/mock-auth.py
+    # in plan 05-03). Build context ./mock-auth; image tagged explicitly so
+    # iterative rebuilds reuse the cached layer rather than accumulating <none>
+    # images. NOT host-published per BENCH-01 — admin endpoints reachable only
+    # via the compose-internal `testbench-net` (sibling container DNS:
+    # `http://mock-auth:9000`). NO depends_on with postgres in this phase —
+    # the two services have no inter-dependency at this layer; phase 06 will
+    # add `walera` with `depends_on: { postgres: service_healthy, mock-auth:
+    # service_healthy }`. The compose-level healthcheck mirrors the one in the
+    # image's HEALTHCHECK directive (defense in depth — `docker compose ps`
+    # reports health regardless of build-time variation).
+    build:
+      context: ./mock-auth
+      dockerfile: Dockerfile
+    image: walera-testbench-mock-auth:local
+    container_name: walera-mock-auth
+    expose: ["9000"]
+    healthcheck:
+      test:
+        - "CMD"
+        - "python"
+        - "-c"
+        - "import urllib.request, sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9000/auth/permissions?channel=_health', timeout=1).status == 200 else 1)"
+      interval: 2s
+      timeout: 2s
+      retries: 15
+    networks: [testbench-net]
+
+  walera:
+    # BENCH-04: build from production Dockerfile at repo root, unchanged. Context
+    # goes UP one level from testbench/ to repo root because Dockerfile:31-32
+    # `COPY cmd ./cmd` / `COPY internal ./internal` need the source tree. The
+    # repo-root .dockerignore is honored (planning/, spec/, test/, deploy/,
+    # docker-compose*.yaml, *.md, etc. are stripped from the build context).
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: walera-testbench-walera:local
+    container_name: walera-app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mock-auth:
+        condition: service_healthy
+    ports:
+      # WR-01 carryover (Phase 05): bind to loopback only. Container port 8080
+      # is the production EXPOSE 8080. Host port overridable via
+      # WALERA_HOST_PORT in .env (default 8080).
+      - "127.0.0.1:${WALERA_HOST_PORT:-8080}:8080"
+    environment:
+      # PG — service-DNS (NO host.docker.internal); replication DSN MUST
+      # include &replication=database (Pitfall 6 / pglogrepl requirement;
+      # spec §1). POSTGRES_PASSWORD is the same credential Phase 05 enforces
+      # at line 16 above.
+      WALERA_WAL_POSTGRES_DSN: "postgres://walera:${POSTGRES_PASSWORD}@postgres:5432/walera?sslmode=disable"
+      WALERA_WAL_REPLICATION_DSN: "postgres://walera:${POSTGRES_PASSWORD}@postgres:5432/walera?sslmode=disable&replication=database"
+      WALERA_WAL_PUBLICATION_NAME: "cdc_sse_streamer"
+      # Auth — Phase 05 mock-auth on the testbench-net bridge. The env var
+      # below maps to koanf path auth.backend_url (config.go:351 validation).
+      WALERA_AUTH_BACKEND_URL: "http://mock-auth:9000"
+      # Service token: validate() at config.go:354-356 requires non-empty
+      # even though mock-auth ignores it (the v1.0 auth client forwards the
+      # client's Bearer token). Use a placeholder that is obviously not a
+      # real secret; overridable via WALERA_AUTH_SERVICE_TOKEN in .env.
+      WALERA_AUTH_SERVICE_TOKEN: "${WALERA_AUTH_SERVICE_TOKEN:-demo-unused}"
+      # HTTP — CORS for the Phase 08 demo UI at localhost:8081; h2c on by
+      # default. Single-string env value is coerced to
+      # []string{"http://localhost:8081"} per the contract locked by Plan
+      # 06-02 (config_test.go TestLoad_CORSOriginsFromSingleStringEnv).
+      WALERA_HTTP_CORS_ORIGINS: "${WALERA_HTTP_CORS_ORIGINS:-http://localhost:8081}"
+      # WALERA-03 knob added in Plan 06-02 (default true; pin true here for
+      # explicitness so an operator inspecting the compose file sees the wire).
+      WALERA_HTTP_H2C_ENABLED: "true"
+      # Runtime tuning — matches production k8s manifest (DEP-01 /
+      # RESEARCH §Pattern 5). GOMEMLIMIT is intentionally below the 8G cap
+      # so the runtime's soft limit triggers GC before cgroups OOM-kills.
+      GOGC: "200"
+      GOMEMLIMIT: "6500MiB"
+    healthcheck:
+      # RESEARCH §Pitfall 5: the distroless runtime image has no shell, no
+      # wget, no curl. The -healthcheck flag (added in Plan 06-02 Task 2.2)
+      # makes the binary perform a local GET to http://127.0.0.1:8080/healthz
+      # and exit 0/1 accordingly. CMD exec form (no shell available).
+      test: ["CMD", "/cdc-sse", "-healthcheck"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+      start_period: 10s
+    deploy:
+      # BENCH-05: production-parity. Compose v2.20+ honors deploy.resources
+      # outside of Swarm mode without --compatibility. Verifiable post-up via
+      # docker inspect walera-app --format
+      # '{{.HostConfig.NanoCpus}} {{.HostConfig.Memory}}'
+      # → 4000000000 8589934592.
+      resources:
+        limits:
+          cpus: "4.0"
+          memory: 8G
+    networks: [testbench-net]
+
+  writer:
+    # Plan 07-03 / Phase 07: testbench load generator. Drives quantitative,
+    # scenario-named load (smoke / ramp-up / steady / spike / soak / stress)
+    # against the demo schema so walera's WAL pipeline observes realistic
+    # commit traffic. Exposes /healthz, /metrics, /control on :9100.
+    #
+    # Build context is the repo root (`..`) — the Dockerfile lives at
+    # cmd/writer/Dockerfile and COPYs cmd/ + internal/ + go.mod + go.sum
+    # which only resolve from the repo root. The repo-root .dockerignore
+    # strips planning/, spec/, *.md, etc. from the build tarball.
+    build:
+      context: ..
+      dockerfile: cmd/writer/Dockerfile
+    image: walera-testbench-writer:local
+    # WR-05 fix: no container_name. Hard-coding it (e.g. `walera-writer`)
+    # conflicts with a parallel `docker compose -p alt up` on the same
+    # compose file ("Conflict. The container name '/walera-writer' is
+    # already in use"). Compose synthesises the name from project + service
+    # (`${COMPOSE_PROJECT_NAME}-writer-1`) which is sufficient for
+    # `docker compose ps` / `docker compose exec writer …` workflows.
+    # Resolve the container id via `docker compose -p $PROJECT ps -q writer`
+    # if a stable handle is needed in scripts.
+    depends_on:
+      # Extends BENCH-02 health graph. Writer waits for walera so the smoke
+      # can immediately observe SSE traffic (Plan 07-04). Postgres healthy
+      # is required so the writer's pgxpool can connect on first attempt.
+      postgres:
+        condition: service_healthy
+      walera:
+        condition: service_healthy
+    ports:
+      # T-07-09 mitigation: localhost-bind ONLY. The /control endpoint is
+      # unauthenticated by design (testbench-internal); host-publishing on
+      # 0.0.0.0 would put an unauth POST surface on the LAN. Override
+      # WRITER_HOST_PORT in .env if 9100 collides locally; NEVER bind to
+      # 0.0.0.0 here.
+      - "127.0.0.1:${WRITER_HOST_PORT:-9100}:9100"
+    environment:
+      # PG — service-DNS (NO host.docker.internal). Same credential the
+      # postgres service enforces at line 16 above; ${POSTGRES_PASSWORD}
+      # substitution keeps the secret out of the committed compose file
+      # (T-07-11 mitigation — .env is gitignored).
+      WRITER_PG_DSN: "postgres://walera:${POSTGRES_PASSWORD}@postgres:5432/walera?sslmode=disable"
+      WRITER_HTTP_ADDR: ":9100"
+      # Safe boot default — 5 tx/s for 60s. Operator promotes to steady /
+      # spike / stress via POST /control without restarting the container.
+      #
+      # Env-key shape NOTE: internal/writer/config.go's transform replaces
+      # ONLY the first underscore with a dot, so WRITER_SCENARIO →
+      # `scenario` (which would collide with the scenario sub-map and fail
+      # unmarshal). The valid env keys are WRITER_SCENARIO_NAME /
+      # _COMMIT_RATE / _ROWS_PER_TX / WRITER_POOL_MAX_CONNS, mirroring
+      # the config-package doc-comment at internal/writer/config.go:14.
+      WRITER_SCENARIO_NAME: "smoke"
+      WRITER_SCENARIO_COMMIT_RATE: "5.0"
+      WRITER_SCENARIO_ROWS_PER_TX: "1"
+      WRITER_POOL_MAX_CONNS: "8"
+      WRITER_LOG_LEVEL: "${WRITER_LOG_LEVEL:-info}"
+      WRITER_ARRIVALS_DISTRIBUTION: "${WRITER_ARRIVALS_DISTRIBUTION:-poisson}"
+      # Plan 08-04 / UI-08: CORS allowlist for POST /control + OPTIONS
+      # preflight so the Phase 08 demo UI (Caddy frontend on :8081) can
+      # POST scenario changes and READ the JSON response. Single-string
+      # env value is coerced to []string{"http://localhost:8081"} by the
+      # writer's env transform (internal/writer/config.go cors_origins
+      # case). Empty value disables CORS (preserves pre-08-04 behaviour).
+      WRITER_HTTP_CORS_ORIGINS: "${WRITER_HTTP_CORS_ORIGINS:-http://localhost:8081}"
+    healthcheck:
+      # Same pattern as the walera service — distroless has no shell, so
+      # the binary's own -healthcheck flag GETs /healthz and exits 0/1.
+      test: ["CMD", "/writer", "-healthcheck"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+      start_period: 5s
+    networks: [testbench-net]
+    # No deploy.resources block by design. The writer is a LOAD GENERATOR,
+    # not the system under test. CPU/memory caps on the generator would
+    # distort the SLO claims that are made FROM walera under load (walera
+    # is the bounded one — that's where the 4 CPU / 8 GiB cap lives).
+
+  frontend:
+    # Plan 08-01 / Phase 08: static-asset origin for the demo UI. Serves
+    # testbench/web/ via Caddy on :8081 (loopback-bound). The UI uses native
+    # ES modules + one vendored polyfill — no bundler, no node_modules, no
+    # package.json (UI-01 invariant). See:
+    #   .planning/phases/08-demo-ui/08-CONTEXT.md §Caddy Frontend Service
+    #
+    # Pinned tag `caddy:2-alpine` (NOT :latest). caddy:alpine ships wget so
+    # the healthcheck does not need to shell out to a missing binary. No
+    # container_name override (Phase 07 WR-05 lesson — collides with parallel
+    # `docker compose -p alt up`). No depends_on: caddy serves static files,
+    # walera/writer are not strict deps for serving HTML; the UI gracefully
+    # degrades when the upstream services are down (UI-09 banner copy).
+    image: caddy:2-alpine
+    ports:
+      # Loopback-bind only — consistent with postgres, walera, writer above.
+      # Override FRONTEND_HOST_PORT in .env if 8081 collides locally; NEVER
+      # bind to 0.0.0.0 (the demo UI is a localhost dev tool).
+      - "127.0.0.1:${FRONTEND_HOST_PORT:-8081}:8081"
+    volumes:
+      # Read-only mounts — the container has zero need to write either.
+      # ./web/ is the static-asset tree (HTML, CSS, modules/, vendor/); the
+      # Caddyfile is the server config. Both edited on the host, served live.
+      - ./web:/srv:ro
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+    healthcheck:
+      # caddy:alpine ships busybox wget; --spider does a HEAD-equivalent probe
+      # without downloading the body. Loopback inside the container.
+      #
+      # Probe /vendor/fes/index.js (NOT /) because the demo HTML lands in plan
+      # 08-02; without index.html, GET / would 404 and wget --spider exits
+      # nonzero on 4xx (Plan 08-01 deviation: original spec was GET /, which
+      # would prevent the container from ever going healthy in the 08-01-only
+      # state). Probing the vendored polyfill also exercises the ./web mount
+      # end-to-end: a healthy container proves Caddy is up AND the bind-mount
+      # is wired correctly (defense in depth for Plan 08-02 onward).
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8081/vendor/fes/index.js"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+    networks: [testbench-net]
+
+  # Plan 09-01 / Phase 09: Prometheus scrape + alert evaluation for the
+  # testbench. Pinned to prom/prometheus:v2.55.1 (LTS) — explicit tag, never
+  # :latest, because v3.x ships breaking `experimental_features` changes that
+  # would force a flag-set churn for zero demo value (CONTEXT decision).
+  # Storage retention bounded to 1h via the command-line flag below so long
+  # soak runs don't accumulate unbounded TSDB on the host; this is intentional
+  # ephemeral storage and `compose down -v` cold-starts cleanly. The
+  # `--web.enable-lifecycle` flag enables POST /-/reload, which the operator
+  # uses after running the sed recipe in testbench/prometheus/alerts.yaml to
+  # shorten `for:` clauses for live demos. No container_name override (Phase 07
+  # WR-05 lesson — collides with parallel `docker compose -p alt up`); no
+  # deploy.resources block (Prometheus is observability infra, not the system
+  # under test — capping it would mask scrape-miss artefacts).
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    depends_on:
+      walera:
+        condition: service_healthy
+      writer:
+        condition: service_healthy
+    ports:
+      # Loopback-bind only — consistent with every other testbench host port.
+      # Override PROM_HOST_PORT in .env if 9090 collides locally; NEVER bind to
+      # 0.0.0.0 (the Prometheus HTTP surface has no auth in default config).
+      - "127.0.0.1:${PROM_HOST_PORT:-9090}:9090"
+    volumes:
+      # Mount the whole prometheus/ directory so future rule-file splits don't
+      # require compose edits. prometheus.yml + alerts.yaml both live here.
+      - ./prometheus/:/etc/prometheus/:ro
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=1h"
+      - "--web.enable-lifecycle"
+      - "--web.listen-address=0.0.0.0:9090"
+    healthcheck:
+      # prom/prometheus:v2.55.1 ships busybox wget at /bin/wget (verified via
+      # `docker run --rm --entrypoint sh prom/prometheus:v2.55.1 -c 'command -v wget'`).
+      # --spider does a HEAD-equivalent probe without downloading the body
+      # (same pattern as the walera + frontend healthchecks).
+      test: ["CMD-SHELL", "wget --quiet --tries=1 --spider http://127.0.0.1:9090/-/healthy || exit 1"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+      start_period: 10s
+    networks: [testbench-net]
+
+  # Plan 09-02 / Phase 09: Grafana dashboards + datasource provisioning for the
+  # testbench. Pinned to grafana/grafana:13.0.1 — NOT grafana-oss (deprecated as
+  # of 12.4.0). Image tag is explicit (never :latest) so cold-starts are
+  # deterministic across machines and CI runs.
+  #
+  # Anonymous Viewer (OBS-06) is the default access path: the demo operator —
+  # and the deferred UI-07 Grafana-iframe panel — reach dashboards without any
+  # auth header. GF_AUTH_DISABLE_LOGIN_FORM hides the login UI so the demo
+  # surface is clean. An admin escape hatch is preserved via
+  # GF_SECURITY_ADMIN_PASSWORD (default "admin") for dashboard write-edits
+  # during development; the operator can log in via
+  # http://127.0.0.1:3000/login?disableLoginForm=false. Plan 09-03 documents
+  # the full runbook including this escape hatch.
+  #
+  # No container_name override (Phase 07 WR-05 lesson — collides with parallel
+  # `docker compose -p alt up`). No deploy.resources block (observability
+  # infra, not the system under test). No persistent storage: provisioning is
+  # filesystem-driven on every boot, so UI-created dashboards are intentionally
+  # ephemeral — `compose down -v` cold-starts cleanly.
+  grafana:
+    image: grafana/grafana:13.0.1
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    ports:
+      # Loopback-bind only — consistent with every other testbench host port.
+      # Override GRAFANA_HOST_PORT in .env if 3000 collides locally; NEVER
+      # bind to 0.0.0.0 (anonymous Viewer on an open network is a leak).
+      - "127.0.0.1:${GRAFANA_HOST_PORT:-3000}:3000"
+    volumes:
+      # Read-only bind-mounts — Grafana has no need to write either tree.
+      # The provisioning tree contains datasource + dashboards-provider YAMLs
+      # (Task 1); the dashboards tree is auto-scanned by the file provider
+      # whose options.path=/var/lib/grafana/dashboards (Task 1).
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    environment:
+      # Anonymous Viewer (OBS-06) — no login required to view dashboards or
+      # query the datasource through Grafana's proxy.
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: "Viewer"
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+      # UX defaults
+      GF_USERS_DEFAULT_THEME: "dark"
+      # No phone-home from the demo bench
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      # Admin escape hatch — operator can still log in for dashboard write-edits
+      # during development via /login?disableLoginForm=false.
+      #
+      # SECURITY NOTE (WR-03): the demo serves dashboards read-only via
+      # anonymous Viewer; the admin login is reachable only at
+      # /login?disableLoginForm=false. The fallback default "admin" is the
+      # well-known upstream Grafana credential — acceptable ONLY because the
+      # listener is bound to 127.0.0.1. If you ever rebind to 0.0.0.0 (or run
+      # this stack on a shared dev box), set GF_SECURITY_ADMIN_PASSWORD in
+      # testbench/.env to a non-default value (the commented-out line in
+      # testbench/.env.example documents the override).
+      GF_SECURITY_ADMIN_PASSWORD: "${GF_SECURITY_ADMIN_PASSWORD:-admin}"
+    healthcheck:
+      # grafana/grafana:13.0.1 ships busybox wget. --spider does a HEAD-
+      # equivalent probe; /api/health returns 200 once provisioning has
+      # loaded the datasource + dashboards. start_period 15s covers
+      # provisioning scan + plugin discovery on cold boot.
+      test: ["CMD-SHELL", "wget --quiet --tries=1 --spider http://127.0.0.1:3000/api/health || exit 1"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+      start_period: 15s
+    networks: [testbench-net]
+
+networks:
+  testbench-net:
+    driver: bridge
+
+volumes:
+  testbench_pgdata:

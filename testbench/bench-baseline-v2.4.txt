@@ -1,0 +1,178 @@
+# Walera v2.4 baseline — captured BEFORE first DECOMP-XX PR (BENCH-01).
+# Provenance:
+#   git-sha:    f1638da8c55c413cdbb7ec684ab9bd0a2c6c4185
+#   captured:   2026-05-24
+#   runner:     local-capture (intended target: ubuntu-latest)
+#   kernel:     6.8.0-111-generic
+#   host-cpu:   Intel(R) Core(TM) i5-6600T CPU @ 2.70GHz (GOMAXPROCS=4)
+#   go-version: go1.25.0
+#   benchstat:  v0.0.0-20260512194132-3cf34090a3db
+#   command:    go test -bench=. -benchmem -count=10 -run='^$' -timeout=15m ./internal/sse/... ./internal/router/... ./internal/metrics/... ./internal/app/...
+# Notes:
+#   - fakeMetrics mutex floor: ~20ns/op uncontested.
+#   - HeartbeatInterval set to 1 hour in BenchmarkPoolWorkerRun fixture to suppress sweep noise.
+#   - -race deliberately omitted; race instrumentation invalidates allocation measurement.
+goos: linux
+goarch: amd64
+pkg: github.com/walera/walera/internal/sse
+cpu: Intel(R) Core(TM) i5-6600T CPU @ 2.70GHz
+BenchmarkPoolWorkerRun/subs_1-4      	 1958919	       604.2 ns/op	     249 B/op	       4 allocs/op
+BenchmarkPoolWorkerRun/subs_1-4      	 2253193	       560.7 ns/op	     231 B/op	       4 allocs/op
+BenchmarkPoolWorkerRun/subs_1-4      	 2355828	       625.8 ns/op	     339 B/op	       4 allocs/op
+BenchmarkPoolWorkerRun/subs_1-4      	 2349302	       530.7 ns/op	     226 B/op	       4 allocs/op
+BenchmarkPoolWorkerRun/subs_1-4      	 2359452	       624.6 ns/op	     339 B/op	       4 allocs/op
+BenchmarkPoolWorkerRun/subs_1-4      	 2373366	       607.1 ns/op	     338 B/op	       4 allocs/op
+BenchmarkPoolWorkerRun/subs_1-4      	 2353350	       532.3 ns/op	     226 B/op	       4 allocs/op
+BenchmarkPoolWorkerRun/subs_1-4      	 2371666	       621.9 ns/op	     338 B/op	       4 allocs/op
+BenchmarkPoolWorkerRun/subs_1-4      	 2342348	       529.7 ns/op	     226 B/op	       4 allocs/op
+BenchmarkPoolWorkerRun/subs_1-4      	 2360137	       622.8 ns/op	     339 B/op	       4 allocs/op
+BenchmarkPoolWorkerRun/subs_8-4      	  278925	      3832 ns/op	    1858 B/op	      32 allocs/op
+BenchmarkPoolWorkerRun/subs_8-4      	  271562	      4193 ns/op	    1884 B/op	      32 allocs/op
+BenchmarkPoolWorkerRun/subs_8-4      	  271704	      4200 ns/op	    1884 B/op	      32 allocs/op
+BenchmarkPoolWorkerRun/subs_8-4      	  278146	      4148 ns/op	    1861 B/op	      32 allocs/op
+BenchmarkPoolWorkerRun/subs_8-4      	  281924	      4138 ns/op	    1848 B/op	      32 allocs/op
+BenchmarkPoolWorkerRun/subs_8-4      	  268678	      4155 ns/op	    1895 B/op	      32 allocs/op
+BenchmarkPoolWorkerRun/subs_8-4      	  279326	      4150 ns/op	    1857 B/op	      32 allocs/op
+BenchmarkPoolWorkerRun/subs_8-4      	  275538	      4299 ns/op	    1870 B/op	      32 allocs/op
+BenchmarkPoolWorkerRun/subs_8-4      	  280420	      4179 ns/op	    1853 B/op	      32 allocs/op
+BenchmarkPoolWorkerRun/subs_8-4      	  270925	      4168 ns/op	    1886 B/op	      32 allocs/op
+BenchmarkPoolWorkerRun/subs_64-4     	   34024	     33920 ns/op	   15057 B/op	     256 allocs/op
+BenchmarkPoolWorkerRun/subs_64-4     	   33976	     33626 ns/op	   15069 B/op	     256 allocs/op
+BenchmarkPoolWorkerRun/subs_64-4     	   34376	     33298 ns/op	   14977 B/op	     256 allocs/op
+BenchmarkPoolWorkerRun/subs_64-4     	   34194	     33427 ns/op	   15018 B/op	     256 allocs/op
+BenchmarkPoolWorkerRun/subs_64-4     	   35678	     32791 ns/op	   14692 B/op	     256 allocs/op
+BenchmarkPoolWorkerRun/subs_64-4     	   34242	     33361 ns/op	   15007 B/op	     256 allocs/op
+BenchmarkPoolWorkerRun/subs_64-4     	   34494	     33935 ns/op	   14950 B/op	     256 allocs/op
+BenchmarkPoolWorkerRun/subs_64-4     	   33879	     33626 ns/op	   15091 B/op	     256 allocs/op
+BenchmarkPoolWorkerRun/subs_64-4     	   33844	     33470 ns/op	   15099 B/op	     256 allocs/op
+BenchmarkPoolWorkerRun/subs_64-4     	   34220	     33454 ns/op	   15012 B/op	     256 allocs/op
+BenchmarkPoolWorkerDrainShutdown/subs_1-4         	  386828	      2688 ns/op	    5321 B/op	      31 allocs/op
+BenchmarkPoolWorkerDrainShutdown/subs_1-4         	  451460	      2638 ns/op	    5321 B/op	      31 allocs/op
+BenchmarkPoolWorkerDrainShutdown/subs_1-4         	  463072	      2670 ns/op	    5321 B/op	      31 allocs/op
+BenchmarkPoolWorkerDrainShutdown/subs_1-4         	  450544	      2659 ns/op	    5321 B/op	      31 allocs/op
+BenchmarkPoolWorkerDrainShutdown/subs_1-4         	  447711	      2675 ns/op	    5321 B/op	      31 allocs/op
+BenchmarkPoolWorkerDrainShutdown/subs_1-4         	  456855	      2908 ns/op	    5321 B/op	      31 allocs/op
+BenchmarkPoolWorkerDrainShutdown/subs_1-4         	  363350	      2757 ns/op	    5321 B/op	      31 allocs/op
+BenchmarkPoolWorkerDrainShutdown/subs_1-4         	  481076	      2581 ns/op	    5321 B/op	      31 allocs/op
+BenchmarkPoolWorkerDrainShutdown/subs_1-4         	  425739	      3063 ns/op	    5321 B/op	      31 allocs/op
+BenchmarkPoolWorkerDrainShutdown/subs_1-4         	  420556	      2693 ns/op	    5321 B/op	      31 allocs/op
+BenchmarkPoolWorkerDrainShutdown/subs_8-4         	  103336	     11557 ns/op	   22629 B/op	     111 allocs/op
+BenchmarkPoolWorkerDrainShutdown/subs_8-4         	  104344	     11518 ns/op	   22629 B/op	     111 allocs/op
+BenchmarkPoolWorkerDrainShutdown/subs_8-4         	  103288	     11660 ns/op	   22629 B/op	     111 allocs/op
+BenchmarkPoolWorkerDrainShutdown/subs_8-4         	  104125	     11549 ns/op	   22629 B/op	     111 allocs/op
+BenchmarkPoolWorkerDrainShutdown/subs_8-4         	   99368	     11631 ns/op	   22629 B/op	     111 allocs/op
+BenchmarkPoolWorkerDrainShutdown/subs_8-4         	  106762	     11555 ns/op	   22629 B/op	     111 allocs/op
+BenchmarkPoolWorkerDrainShutdown/subs_8-4         	  105274	     11602 ns/op	   22629 B/op	     111 allocs/op
+BenchmarkPoolWorkerDrainShutdown/subs_8-4         	  103911	     11595 ns/op	   22629 B/op	     111 allocs/op
+BenchmarkPoolWorkerDrainShutdown/subs_8-4         	  103942	     11717 ns/op	   22629 B/op	     111 allocs/op
+BenchmarkPoolWorkerDrainShutdown/subs_8-4         	  100436	     11578 ns/op	   22629 B/op	     111 allocs/op
+BenchmarkPoolWorkerDrainShutdown/subs_64-4        	   14690	     82461 ns/op	  161528 B/op	     730 allocs/op
+BenchmarkPoolWorkerDrainShutdown/subs_64-4        	   14530	     82284 ns/op	  161527 B/op	     730 allocs/op
+BenchmarkPoolWorkerDrainShutdown/subs_64-4        	   14409	     83505 ns/op	  161528 B/op	     730 allocs/op
+BenchmarkPoolWorkerDrainShutdown/subs_64-4        	   14643	     81742 ns/op	  161527 B/op	     730 allocs/op
+BenchmarkPoolWorkerDrainShutdown/subs_64-4        	   14581	     82355 ns/op	  161528 B/op	     730 allocs/op
+BenchmarkPoolWorkerDrainShutdown/subs_64-4        	   15068	     79769 ns/op	  161526 B/op	     730 allocs/op
+BenchmarkPoolWorkerDrainShutdown/subs_64-4        	   15236	    101331 ns/op	  161525 B/op	     730 allocs/op
+BenchmarkPoolWorkerDrainShutdown/subs_64-4        	    8982	    130072 ns/op	  161526 B/op	     730 allocs/op
+BenchmarkPoolWorkerDrainShutdown/subs_64-4        	   10000	    110521 ns/op	  161527 B/op	     730 allocs/op
+BenchmarkPoolWorkerDrainShutdown/subs_64-4        	   12361	     96741 ns/op	  161528 B/op	     730 allocs/op
+BenchmarkRunWriter/exact-4                        	   74598	     14164 ns/op	    9359 B/op	      60 allocs/op
+BenchmarkRunWriter/exact-4                        	   91023	     13434 ns/op	    9359 B/op	      59 allocs/op
+BenchmarkRunWriter/exact-4                        	   93742	     13366 ns/op	    9357 B/op	      60 allocs/op
+BenchmarkRunWriter/exact-4                        	   93772	     13421 ns/op	    9357 B/op	      60 allocs/op
+BenchmarkRunWriter/exact-4                        	   92553	     13536 ns/op	    9358 B/op	      60 allocs/op
+BenchmarkRunWriter/exact-4                        	   91806	     13467 ns/op	    9358 B/op	      60 allocs/op
+BenchmarkRunWriter/exact-4                        	   92556	     13555 ns/op	    9358 B/op	      60 allocs/op
+BenchmarkRunWriter/exact-4                        	   91354	     13404 ns/op	    9359 B/op	      60 allocs/op
+BenchmarkRunWriter/exact-4                        	   93058	     13541 ns/op	    9357 B/op	      60 allocs/op
+BenchmarkRunWriter/exact-4                        	   92925	     13605 ns/op	    9357 B/op	      60 allocs/op
+BenchmarkRunWriter/wildcard-4                     	   93522	     13455 ns/op	    9341 B/op	      60 allocs/op
+BenchmarkRunWriter/wildcard-4                     	   93050	     13425 ns/op	    9341 B/op	      60 allocs/op
+BenchmarkRunWriter/wildcard-4                     	   91142	     13464 ns/op	    9343 B/op	      60 allocs/op
+BenchmarkRunWriter/wildcard-4                     	   92931	     13167 ns/op	    9341 B/op	      60 allocs/op
+BenchmarkRunWriter/wildcard-4                     	   93511	     13302 ns/op	    9341 B/op	      60 allocs/op
+BenchmarkRunWriter/wildcard-4                     	   91802	     13715 ns/op	    9342 B/op	      60 allocs/op
+BenchmarkRunWriter/wildcard-4                     	   90906	     13547 ns/op	    9343 B/op	      60 allocs/op
+BenchmarkRunWriter/wildcard-4                     	   88347	     13255 ns/op	    9346 B/op	      60 allocs/op
+BenchmarkRunWriter/wildcard-4                     	   91951	     13694 ns/op	    9342 B/op	      60 allocs/op
+BenchmarkRunWriter/wildcard-4                     	   94053	     13703 ns/op	    9340 B/op	      60 allocs/op
+PASS
+ok  	github.com/walera/walera/internal/sse	97.746s
+goos: linux
+goarch: amd64
+pkg: github.com/walera/walera/internal/router
+cpu: Intel(R) Core(TM) i5-6600T CPU @ 2.70GHz
+BenchmarkRouteTx/exact_1-4         	  552796	      2093 ns/op	     688 B/op	      16 allocs/op
+BenchmarkRouteTx/exact_1-4         	  591706	      1987 ns/op	     688 B/op	      16 allocs/op
+BenchmarkRouteTx/exact_1-4         	  570986	      2098 ns/op	     688 B/op	      16 allocs/op
+BenchmarkRouteTx/exact_1-4         	  594693	      2091 ns/op	     688 B/op	      16 allocs/op
+BenchmarkRouteTx/exact_1-4         	  500475	      2184 ns/op	     688 B/op	      16 allocs/op
+BenchmarkRouteTx/exact_1-4         	  569677	      2094 ns/op	     688 B/op	      16 allocs/op
+BenchmarkRouteTx/exact_1-4         	  592346	      2063 ns/op	     688 B/op	      16 allocs/op
+BenchmarkRouteTx/exact_1-4         	  612051	      1990 ns/op	     688 B/op	      16 allocs/op
+BenchmarkRouteTx/exact_1-4         	  572246	      2014 ns/op	     688 B/op	      16 allocs/op
+BenchmarkRouteTx/exact_1-4         	  606684	      1991 ns/op	     688 B/op	      16 allocs/op
+BenchmarkRouteTx/exact_10-4        	   67946	     17668 ns/op	    7499 B/op	     163 allocs/op
+BenchmarkRouteTx/exact_10-4        	   67578	     18140 ns/op	    7499 B/op	     163 allocs/op
+BenchmarkRouteTx/exact_10-4        	   68629	     17507 ns/op	    7499 B/op	     163 allocs/op
+BenchmarkRouteTx/exact_10-4        	   68539	     18146 ns/op	    7499 B/op	     163 allocs/op
+BenchmarkRouteTx/exact_10-4        	   67741	     17641 ns/op	    7499 B/op	     163 allocs/op
+BenchmarkRouteTx/exact_10-4        	   68050	     18548 ns/op	    7499 B/op	     163 allocs/op
+BenchmarkRouteTx/exact_10-4        	   67417	     19740 ns/op	    7499 B/op	     163 allocs/op
+BenchmarkRouteTx/exact_10-4        	   48316	     20964 ns/op	    7499 B/op	     163 allocs/op
+BenchmarkRouteTx/exact_10-4        	   66903	     18858 ns/op	    7499 B/op	     163 allocs/op
+BenchmarkRouteTx/exact_10-4        	   68119	     17899 ns/op	    7499 B/op	     163 allocs/op
+BenchmarkRouteTx/wildcard_100-4    	    5140	    229773 ns/op	  130060 B/op	    2019 allocs/op
+BenchmarkRouteTx/wildcard_100-4    	    5156	    230430 ns/op	  130060 B/op	    2019 allocs/op
+BenchmarkRouteTx/wildcard_100-4    	    5245	    230548 ns/op	  130060 B/op	    2019 allocs/op
+BenchmarkRouteTx/wildcard_100-4    	    5044	    247697 ns/op	  130063 B/op	    2019 allocs/op
+BenchmarkRouteTx/wildcard_100-4    	    5226	    232160 ns/op	  130064 B/op	    2019 allocs/op
+BenchmarkRouteTx/wildcard_100-4    	    5168	    232935 ns/op	  130064 B/op	    2019 allocs/op
+BenchmarkRouteTx/wildcard_100-4    	    5187	    233615 ns/op	  130065 B/op	    2019 allocs/op
+BenchmarkRouteTx/wildcard_100-4    	    5157	    235550 ns/op	  130071 B/op	    2019 allocs/op
+BenchmarkRouteTx/wildcard_100-4    	    4755	    236143 ns/op	  130069 B/op	    2019 allocs/op
+BenchmarkRouteTx/wildcard_100-4    	    4999	    236510 ns/op	  130072 B/op	    2019 allocs/op
+BenchmarkRouteTx/mixed_50_50-4     	   15163	     78773 ns/op	   41113 B/op	     677 allocs/op
+BenchmarkRouteTx/mixed_50_50-4     	   15342	     78517 ns/op	   41113 B/op	     677 allocs/op
+BenchmarkRouteTx/mixed_50_50-4     	   10000	    105614 ns/op	   41115 B/op	     677 allocs/op
+BenchmarkRouteTx/mixed_50_50-4     	   14558	     81614 ns/op	   41115 B/op	     677 allocs/op
+BenchmarkRouteTx/mixed_50_50-4     	   15004	     80106 ns/op	   41115 B/op	     677 allocs/op
+BenchmarkRouteTx/mixed_50_50-4     	   14887	     80530 ns/op	   41115 B/op	     677 allocs/op
+BenchmarkRouteTx/mixed_50_50-4     	   14930	     80486 ns/op	   41115 B/op	     677 allocs/op
+BenchmarkRouteTx/mixed_50_50-4     	   14790	     80921 ns/op	   41116 B/op	     677 allocs/op
+BenchmarkRouteTx/mixed_50_50-4     	   14858	     80960 ns/op	   41116 B/op	     677 allocs/op
+BenchmarkRouteTx/mixed_50_50-4     	   14866	     80997 ns/op	   41116 B/op	     677 allocs/op
+PASS
+ok  	github.com/walera/walera/internal/router	47.896s
+goos: linux
+goarch: amd64
+pkg: github.com/walera/walera/internal/metrics
+cpu: Intel(R) Core(TM) i5-6600T CPU @ 2.70GHz
+BenchmarkMetricsNew-4   	    2625	    429739 ns/op	  198157 B/op	    2063 allocs/op
+BenchmarkMetricsNew-4   	    2528	    429861 ns/op	  198404 B/op	    2063 allocs/op
+BenchmarkMetricsNew-4   	    2858	    423564 ns/op	  198149 B/op	    2063 allocs/op
+BenchmarkMetricsNew-4   	    2865	    422251 ns/op	  198173 B/op	    2063 allocs/op
+BenchmarkMetricsNew-4   	    2797	    422396 ns/op	  198146 B/op	    2063 allocs/op
+BenchmarkMetricsNew-4   	    2793	    423327 ns/op	  198176 B/op	    2063 allocs/op
+BenchmarkMetricsNew-4   	    2739	    424039 ns/op	  198381 B/op	    2063 allocs/op
+BenchmarkMetricsNew-4   	    2792	    424130 ns/op	  198137 B/op	    2063 allocs/op
+BenchmarkMetricsNew-4   	    2857	    421687 ns/op	  198026 B/op	    2063 allocs/op
+BenchmarkMetricsNew-4   	    2829	    425036 ns/op	  198020 B/op	    2063 allocs/op
+PASS
+ok  	github.com/walera/walera/internal/metrics	11.770s
+goos: linux
+goarch: amd64
+pkg: github.com/walera/walera/internal/app
+cpu: Intel(R) Core(TM) i5-6600T CPU @ 2.70GHz
+BenchmarkInitializeApp-4   	    2004	    561269 ns/op	  365615 B/op	    2731 allocs/op
+BenchmarkInitializeApp-4   	    1988	   1004737 ns/op	  370450 B/op	    2731 allocs/op
+BenchmarkInitializeApp-4   	    1389	    880101 ns/op	  371127 B/op	    2730 allocs/op
+BenchmarkInitializeApp-4   	    1388	    740048 ns/op	  371462 B/op	    2731 allocs/op
+BenchmarkInitializeApp-4   	    2012	    588917 ns/op	  370773 B/op	    2731 allocs/op
+BenchmarkInitializeApp-4   	    2035	    590724 ns/op	  370764 B/op	    2731 allocs/op
+BenchmarkInitializeApp-4   	    2046	    588200 ns/op	  370556 B/op	    2731 allocs/op
+BenchmarkInitializeApp-4   	    2024	    591499 ns/op	  371442 B/op	    2731 allocs/op
+BenchmarkInitializeApp-4   	    2050	    593972 ns/op	  371513 B/op	    2731 allocs/op
+BenchmarkInitializeApp-4   	    2037	    590720 ns/op	  371014 B/op	    2731 allocs/op
+PASS
+ok  	github.com/walera/walera/internal/app	12.592s

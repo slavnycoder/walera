@@ -1,0 +1,36 @@
+# deploy/k8s/servicemonitor.yaml — Prometheus Operator ServiceMonitor.
+#
+# REQUIRES Prometheus Operator (kube-prometheus-stack or equivalent) installed
+# in the cluster. The Operator watches ServiceMonitor resources whose labels
+# match its `spec.serviceMonitorSelector`. If your Operator's selector uses a
+# `release:` label, set it below (Pitfall G7 — same gotcha as PrometheusRule
+# in deploy/prometheus/alerts.yaml).
+#
+# To discover the expected release label:
+#   kubectl get prometheus -n monitoring -o yaml | grep -A 5 serviceMonitorSelector
+#
+# Scrapes /metrics on the `http` port of the walera Service every 30s.
+#
+# Run deploy/scripts/preflight.sh after substitution to confirm no placeholder markers survived.
+
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: walera
+  namespace: walera
+  labels:
+    app: walera
+    # Pitfall G7 — operator-configurable; sed to your kube-prometheus-stack release name.
+    release: REPLACE_ME
+spec:
+  selector:
+    matchLabels:
+      app: walera
+  namespaceSelector:
+    matchNames:
+      - walera
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s
+      scrapeTimeout: 10s

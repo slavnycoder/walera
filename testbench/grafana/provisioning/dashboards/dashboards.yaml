@@ -1,0 +1,26 @@
+# testbench/grafana/provisioning/dashboards/dashboards.yaml
+#
+# Plan 09-02 / Phase 09: Grafana filesystem dashboards provider (OBS-04).
+#
+# Provisions a single file-based provider named `walera` that scans
+# `/var/lib/grafana/dashboards` (the bind-mount target wired into the grafana
+# compose service) every 30s. Any *.json file dropped under that path is
+# auto-picked-up; deletions in the UI are rejected (`disableDeletion: true`)
+# and UI edits are read-only (`editable: false`) so the on-disk JSON is the
+# single source of truth.
+#
+# The path on disk (`/var/lib/grafana/dashboards`) is the locked contract from
+# CONTEXT/RESEARCH; the compose volume mount in testbench/docker-compose.yml
+# binds testbench/grafana/dashboards/ to that container path read-only.
+
+apiVersion: 1
+
+providers:
+  - name: walera
+    folder: ""
+    type: file
+    disableDeletion: true
+    editable: false
+    updateIntervalSeconds: 30
+    options:
+      path: /var/lib/grafana/dashboards

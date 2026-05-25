@@ -1,0 +1,4 @@
+PASS
+ok  	github.com/walera/walera/internal/auth	0.123s	coverage: 90.0% of statements
+?   	github.com/walera/walera/internal/empty	[no test files]
+?   	github.com/walera/walera/cmd/cdc-sse	[no test files]

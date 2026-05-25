@@ -1,0 +1,43 @@
+name: coverage
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  coverage-gate:
+    name: per-package coverage >= 85%
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run unit tests with coverage
+        # Unit tests only — the integration suite (`-tags=integration`) is gated
+        # by the testbench-smoke workflow and needs Docker for testcontainers.
+        # The coverage gate operates on per-package `coverage: N.N%` summary
+        # lines that `go test -cover` emits, not on an aggregate profile.
+        run: |
+          go test -race -cover -coverprofile=coverage.out -covermode=atomic \
+            ./internal/... 2>&1 | tee coverage.log
+
+      - name: Enforce per-package coverage gate (>= 85%)
+        run: bash scripts/coverage-gate.sh coverage.log
+
+      - name: Upload coverage profile artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-profile
+          path: coverage.out
+          retention-days: 14

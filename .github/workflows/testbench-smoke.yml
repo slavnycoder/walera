@@ -1,0 +1,98 @@
+# =============================================================================
+# .github/workflows/testbench-smoke.yml — Phase 09 CI-01 cold-start smoke.
+#
+# Brings the testbench compose stack up ONCE per workflow run, runs the
+# umbrella smoke (`testbench/scripts/smoke-ci.sh` — which itself runs
+# smoke-05 through smoke-09 in order), dumps logs on failure, tears the
+# stack down unconditionally. Linux runner only.
+#
+# Authoring constraints (Plan 09-04 CONTEXT):
+#   - ubuntu-latest only (compose performance on macOS runners is misleading).
+#   - 10-minute timeout cap.
+#   - Single compose up → smoke-ci → down lifecycle. The umbrella does NOT
+#     manage the lifecycle; this workflow does.
+#   - On failure: dump per-container logs and upload as a GH Actions artifact.
+#   - `compose down -v --remove-orphans` runs unconditionally via `if: always()`
+#     so the runner is always clean for the next job.
+# =============================================================================
+
+name: Testbench Smoke
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        shell: bash
+    env:
+      COMPOSE_PROJECT_NAME: walera-testbench-ci
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
+
+      - name: Unit tests (-race -short)
+        run: go test -race -short ./...
+
+      - name: Prepare .env
+        run: cp testbench/.env.example testbench/.env
+
+      - name: Compose up (build)
+        run: docker compose -f testbench/docker-compose.yml up -d --build
+
+      - name: Wait for all services healthy (max 90s)
+        run: |
+          set -e
+          deadline=$(( $(date +%s) + 90 ))
+          while :; do
+            unhealthy=$(docker compose -f testbench/docker-compose.yml ps --format json \
+              | jq -rs 'add // . | .[] | select(.Health and .Health != "healthy") | .Name' 2>/dev/null || true)
+            [ -z "$unhealthy" ] && break
+            if (( $(date +%s) >= deadline )); then
+              echo "::error::Containers still unhealthy after 90s: $unhealthy"
+              docker compose -f testbench/docker-compose.yml ps
+              exit 1
+            fi
+            sleep 2
+          done
+          docker compose -f testbench/docker-compose.yml ps
+
+      - name: Run smoke-ci umbrella
+        run: bash testbench/scripts/smoke-ci.sh
+
+      - name: Dump container logs on failure
+        if: failure()
+        run: |
+          mkdir -p /tmp/compose-logs
+          for s in postgres mock-auth walera writer frontend prometheus grafana; do
+            docker compose -f testbench/docker-compose.yml logs --no-color --tail=200 "$s" \
+              > "/tmp/compose-logs/$s.log" 2>&1 || true
+          done
+
+      - name: Upload logs artifact on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: compose-logs
+          path: /tmp/compose-logs
+          if-no-files-found: warn
+
+      - name: Compose down (always)
+        if: always()
+        run: docker compose -f testbench/docker-compose.yml down -v --remove-orphans

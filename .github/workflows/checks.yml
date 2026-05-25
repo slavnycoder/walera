@@ -1,0 +1,222 @@
+# =============================================================================
+# .github/workflows/checks.yml — PR gate workflow (Phase 11 / CI-01..03, CI-05).
+#
+# Every job is a top-level entry so the PR Checks tab shows one row per
+# concern. Failures are easy to read; jobs run in parallel.
+#
+# Coverage:
+#   - format            gofmt -l, goimports -l, actionlint (workflow YAML)
+#   - vet               go vet, staticcheck (via make lint)
+#   - vulncheck         govulncheck ./... (gate on confirmed-affected only)
+#   - test-race         go test -race -timeout 5m ./... (unit tests; no integration)
+#   - deps-check        make deps-check (Phase 6 target)
+#   - config-check      make config-check (Phase 8 target)
+#   - comment-hygiene   scripts/lint-comment-tokens.sh + scripts/comment-density.sh (HYGIENE-04/05, SWEEP-05)
+#   - changelog-date-test  scripts/check-changelog-date_test.sh (RELEASE-02)
+#
+# Integration tests:
+#   The full integration suite (`make test-integration`) is gated separately
+#   by `testbench-smoke.yml` because it requires Docker + testcontainers and
+#   exceeds the 10-minute PR-feedback budget on CI hardware. Two flaky
+#   integration tests (Test_SEC01_SlowReceiverDropped, Test06SlowConsumer)
+#   are quarantined via t.Skip; the same surface is covered by
+#   TestPoolSlowClientIsolation / TestPoolSlowClientIsolationStress in
+#   internal/sse, which DO run under test-race here.
+#
+# Relationship to existing workflows:
+#   - coverage.yml      per-package coverage gate (>= 85%); orthogonal.
+#   - perf-gate.yml     runtime perf regression check; orthogonal.
+#   - publish-image.yml multi-arch image push on `v*` tags; orthogonal.
+#   - testbench-smoke.yml compose-up integration smoke; orthogonal.
+#
+# Govulncheck cutoff: the workflow fails on ANY confirmed-affected
+# finding (rows where govulncheck prints "Your code is affected"). Pure
+# informational rows (the vulnerability ships in a module on the
+# transitive graph but no affected symbol is reached) do NOT fail the
+# job. Adjust by editing the `vulncheck` job below.
+# =============================================================================
+
+name: Checks
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  format:
+    name: format
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install goimports
+        run: go install golang.org/x/tools/cmd/goimports@latest
+
+      - name: Install actionlint
+        run: go install github.com/rhysd/actionlint/cmd/actionlint@latest
+
+      - name: gofmt -l
+        run: |
+          out=$(gofmt -l .)
+          if [ -n "$out" ]; then
+            echo "::error::gofmt found files needing formatting:"
+            echo "$out"
+            exit 1
+          fi
+
+      - name: goimports -l
+        run: |
+          out=$(goimports -l .)
+          if [ -n "$out" ]; then
+            echo "::error::goimports found files needing formatting:"
+            echo "$out"
+            exit 1
+          fi
+
+      - name: actionlint
+        run: actionlint -color .github/workflows/*.yml
+
+  vet:
+    name: vet
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: Install staticcheck
+        run: go install honnef.co/go/tools/cmd/staticcheck@latest
+
+      - name: staticcheck
+        run: staticcheck ./...
+
+  vulncheck:
+    name: vulncheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+
+      - name: govulncheck
+        # Default exit-code policy: govulncheck exits non-zero ONLY when at
+        # least one finding is confirmed-affected (a reachable call into a
+        # vulnerable symbol). Transitive-only modules surface as
+        # informational and do not fail the job.
+        run: govulncheck ./...
+
+  test-race:
+    name: test-race
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: go test -race
+        run: go test -race -timeout 5m ./...
+
+  deps-check:
+    name: deps-check
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: make deps-check
+        run: make deps-check
+
+  config-check:
+    name: config-check
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: make config-check
+        run: make config-check
+
+  comment-hygiene:
+    name: comment-hygiene
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: scripts/lint-comment-tokens.sh
+        # Pure bash + GNU grep -P; no setup-go required. The script emits
+        # ::error file=PATH,line=N,title=... annotations so failures
+        # surface inline in the PR diff. See REQUIREMENTS.md HYGIENE-04
+        # (no banned tokens in .go comments) and HYGIENE-05 (CI gate).
+        # Scoped to the packages swept for planning-ID hygiene to date
+        # (v2.1 hot-path set + v2.4 SWEEP-01..05 + testbench cleanup).
+        # The token pattern was widened in v2.4; legacy packages not yet
+        # swept (config, health, limits, metrics, safego, wal, walconn)
+        # carry pre-existing planning IDs and are folded in by a future
+        # density/hygiene sweep rather than gated retroactively here.
+        run: |
+          bash scripts/lint-comment-tokens.sh internal/sse/
+          bash scripts/lint-comment-tokens.sh internal/router/
+          bash scripts/lint-comment-tokens.sh internal/app/
+          bash scripts/lint-comment-tokens.sh internal/auth/
+          bash scripts/lint-comment-tokens.sh internal/writer/
+          bash scripts/lint-comment-tokens.sh cmd/writer/
+          bash scripts/lint-comment-tokens.sh cmd/loadgen/
+
+      - name: scripts/comment-density.sh --all
+        # Per-package comment-to-code ratio gate, ceiling 30% (SWEEP-05).
+        # Sibling of lint-comment-tokens; both ride in the comment-hygiene
+        # job so a single required-check name covers both gates.
+        run: bash scripts/comment-density.sh --all
+
+  changelog-date-test:
+    name: changelog-date-test
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: scripts/check-changelog-date_test.sh
+        # Pure bash + grep; no setup-go required. The unit test exercises
+        # the guard's exit codes against synthetic fixtures so a future
+        # contributor cannot disable the release-tag placeholder check
+        # without this job failing. See REQUIREMENTS.md RELEASE-02 and
+        # .github/workflows/release.yml (`Extract CHANGELOG section`).
+        run: bash scripts/check-changelog-date_test.sh

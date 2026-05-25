@@ -1,0 +1,27 @@
+version: "2"
+
+linters:
+  enable:
+    - errcheck
+    - staticcheck
+    - govet
+    - gosec
+    - ineffassign
+    - unused
+    - misspell
+    - exhaustive
+    - nilerr
+    - bodyclose
+
+linters-settings:
+  exhaustive:
+    # Require exhaustive type-switches on pgoutput message types.
+    default-signifies-exhaustive: true
+
+issues:
+  exclude-rules:
+    # Relax errcheck and gosec in test files — test helpers routinely ignore errors.
+    - path: "_test\\.go"
+      linters:
+        - errcheck
+        - gosec

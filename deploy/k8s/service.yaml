@@ -1,0 +1,23 @@
+# deploy/k8s/service.yaml — ClusterIP Service for the Walera Pod.
+#
+# Exposes a single port (8080) carrying both the SSE endpoints
+# (/sse/v1/{table}/{pk}) AND the /metrics + /healthz + /readyz routes.
+# The ServiceMonitor (servicemonitor.yaml) targets this Service's `http`
+# port at the /metrics path.
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: walera
+  namespace: walera
+  labels:
+    app: walera
+spec:
+  type: ClusterIP
+  selector:
+    app: walera
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      protocol: TCP

@@ -1,0 +1,15 @@
+=== RUN   TestSomething
+--- PASS: TestSomething (0.01s)
+PASS
+ok  	github.com/walera/walera/internal/auth	0.123s	coverage: 87.7% of statements
+ok  	github.com/walera/walera/internal/limits	0.045s	coverage: 100.0% of statements
+ok  	github.com/walera/walera/internal/health	0.020s	coverage: 93.2% of statements
+ok  	github.com/walera/walera/internal/sse	0.301s	coverage: 89.2% of statements
+ok  	github.com/walera/walera/internal/router	0.110s	coverage: 91.4% of statements
+ok  	github.com/walera/walera/internal/wal	0.220s	coverage: 86.1% of statements
+ok  	github.com/walera/walera/internal/config	0.010s	coverage: 95.0% of statements
+ok  	github.com/walera/walera/internal/metrics	0.005s	coverage: 88.8% of statements
+ok  	github.com/walera/walera/internal/safego	0.005s	coverage: 100.0% of statements
+ok  	github.com/walera/walera/internal/writer	0.030s	coverage: 90.0% of statements
+ok  	github.com/walera/walera/cmd/cdc-sse	0.001s	coverage: 30.0% of statements [no tests for binary main]
+?   	github.com/walera/walera/internal/wal/relationcache	[no test files]

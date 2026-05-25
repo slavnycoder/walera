@@ -1,0 +1,20 @@
+# testbench/Caddyfile — Plan 08-01 — see .planning/phases/08-demo-ui/08-CONTEXT.md §Caddy Frontend Service
+#
+# Static file server only. The demo UI deliberately makes cross-origin requests
+# to walera:8080 and writer:9100 to exercise the CORS code path (UI-02 / Phase
+# 06 CORS knob); this Caddy config intentionally serves static assets ONLY and
+# does NOT proxy any of walera's or writer's endpoints. CORS for those origins
+# is walera's / writer's responsibility (already wired in Phase 06).
+:8081 {
+	root * /srv
+	file_server
+	encode gzip
+	# WR-CR-08: 'immutable' was a 24 h hard contract on an UN-versioned path
+	# (/vendor/fes/index.js is not content-hashed in URL), so a re-vendor
+	# would be fought by hot caches for up to 24 h. Drop 'immutable' and
+	# trim the max-age to 5 minutes so the README-documented re-vendor
+	# procedure works promptly. The vendored files are tiny (≤ 4 KB) — a
+	# short cache buys very little on the dev testbench but blocks
+	# debugging if it's too long.
+	header /vendor/* Cache-Control "public, max-age=300, must-revalidate"
+}

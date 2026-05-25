@@ -1,0 +1,100 @@
+# deploy/k8s/configmap.yaml — Walera runtime configuration (D4-22, D4-26).
+#
+# Mounted by deployment.yaml at /etc/walera/config.yaml (read-only).
+#
+# CRITICAL — SECRETS DISCIPLINE (Pitfall G7 / D4-22):
+#   The two secrets-bearing keys (database.url, auth.service_token) are
+#   DELIBERATELY left empty in this ConfigMap. They come from the
+#   `walera-secrets` Secret at runtime via koanf's env-var transform:
+#     WALERA_DATABASE_URL       -> database.url
+#     WALERA_AUTH_SERVICE_TOKEN -> auth.service_token
+#   See deployment.yaml's `env:` block — each is sourced from secretKeyRef.
+#
+# When editing the config body, mirror the in-repo `config.yaml` to keep
+# default values aligned with what unit tests assert (config_test.go).
+#
+# Tunables an operator commonly changes per environment:
+#   - log.level                          (debug | info | warn | error)
+#   - wal.publication_name               (must match migrations/001_publication.sql)
+#   - wal.slot_headroom_min              (raise to 5+ for shared PG)
+#   - wal.reconnect.*                    (D4-02)
+#   - metrics.sample_interval            (D4-12; 30s is fine for most fleets)
+#   - shutdown.deadline / drain_deadline (D4-08; must stay <= terminationGracePeriodSeconds)
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: walera-config
+  namespace: walera
+  labels:
+    app: walera
+data:
+  config.yaml: |
+    # Walera production configuration.
+    # SECRET values (database.url, auth.service_token) are intentionally empty
+    # here — they are injected at runtime from the `walera-secrets` Secret via
+    # WALERA_-prefixed env vars (see deployment.yaml).
+
+    # SECRET — provided by walera-secrets / WALERA_DATABASE_URL env var.
+    # Single Postgres DSN; the role MUST have the REPLICATION attribute.
+    # Walera derives the replication connection from it; do NOT append
+    # replication=database.
+    database:
+      url: ""
+
+    log:
+      level: info
+      dev_mode: false
+
+    wal:
+      # MUST match the publication created by migrations/001_publication.sql
+      # in the operator-managed PG cluster. No default.
+      publication_name: "cdc_sse_streamer"
+
+      # Prefix for the temporary replication slot name.
+      # Slot name is constructed as: <slot_name_prefix>_<hostname>_<pid>
+      slot_name_prefix: walera
+
+      # Minimum free replication slots before a startup warning is emitted.
+      # See spec §10.4 and OP-06: max_replication_slots >= ceil(N*1.25) + reserved + 2.
+      slot_headroom_min: 2
+
+      # When true, naive timestamps (TIMESTAMP WITHOUT TIME ZONE) are
+      # interpreted as UTC. Set to false only if your application stores
+      # naive timestamps in a non-UTC timezone.
+      naive_timestamp_assume_utc: true
+
+      # OP-04 reconnect loop (D4-02, D4-26).
+      reconnect:
+        reset_after_success_duration: 60s
+
+      # walera_wal_lsn_lag_bytes sampling cadence (D4-05).
+      # Runs against the admin connection — never the replication conn.
+      lag_sample_interval: 5s
+
+    # Phase-4 metrics sampler (D4-12, D4-26).
+    metrics:
+      sample_interval: 30s
+
+    # Phase-4 graceful shutdown deadlines (D4-08, D4-26).
+    # `deadline` is the hard cap on the entire shutdown sequence;
+    # `drain_deadline` is the inner deadline for broadcaster.Shutdown.
+    # drain_deadline must be < deadline (validated at startup).
+    # Both must be < deployment.yaml's terminationGracePeriodSeconds (30s).
+    shutdown:
+      deadline: 10s
+      drain_deadline: 8s
+
+    # Phase-14 / SEC-05 / F-P2-05 — XFF-aware client IP behind a
+    # trusted-proxy CIDR allowlist. Empty (default) preserves the
+    # Phase-3 behaviour: r.RemoteAddr is the only client identifier
+    # and X-Forwarded-For is ignored. When Walera runs behind a
+    # k8s Ingress (which is the spec'd deployment), populate this
+    # list with the cluster's pod/node CIDRs so the pre-auth rate
+    # limit (5 RPS per clientIP) targets real clients rather than
+    # collapsing every external user to the ingress controller's IP.
+    limits:
+      trusted_proxies:
+        - "10.0.0.0/8"
+        - "172.16.0.0/12"
+        - "192.168.0.0/16"

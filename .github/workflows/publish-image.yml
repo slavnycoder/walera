@@ -1,0 +1,105 @@
+# =============================================================================
+# .github/workflows/publish-image.yml — multi-arch image publish to GHCR.
+#
+# Triggered by:
+#   - Tag push matching `v*` (e.g. `v1.2.3`)               → versioned + latest
+#   - Manual `workflow_dispatch` with a `version` input    → versioned only
+#
+# Builds linux/amd64 + linux/arm64 from the root Dockerfile, signs in to GHCR
+# with the workflow's GITHUB_TOKEN, and pushes the following tags
+# (driven by docker/metadata-action):
+#
+#   ghcr.io/<owner>/walera:v1.2.3
+#   ghcr.io/<owner>/walera:1.2.3
+#   ghcr.io/<owner>/walera:1.2
+#   ghcr.io/<owner>/walera:1
+#   ghcr.io/<owner>/walera:latest        (only when the tag is the highest semver)
+#
+# The `VERSION` build-arg is forwarded into the Dockerfile so the binary
+# carries the release tag in `main.version` (see `-X main.version=...`).
+# =============================================================================
+
+name: Publish Image
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version tag to build (e.g. v1.2.3). Required for manual runs."
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+  actions: write
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "value=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute tags and labels
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=semver,pattern={{version}},value=${{ steps.version.outputs.value }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ steps.version.outputs.value }}
+            type=semver,pattern={{major}},value=${{ steps.version.outputs.value }}
+            type=raw,value=latest,enable={{is_default_branch}}
+          labels: |
+            org.opencontainers.image.title=Walera
+            org.opencontainers.image.description=PostgreSQL CDC over SSE
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.version=${{ steps.version.outputs.value }}
+            org.opencontainers.image.licenses=MIT
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VERSION=${{ steps.version.outputs.value }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: false

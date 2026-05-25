@@ -1,0 +1,88 @@
+# =============================================================================
+# .github/workflows/release.yml — Phase 11 / RELEASE-02.
+#
+# Triggered by `v*` tag pushes. Extracts the matching `## [<version>]`
+# section from CHANGELOG.md and calls `gh release create` with the
+# extracted notes. Runs in parallel with `publish-image.yml`; the image
+# push and release publish share the same trigger but are independent
+# workflows.
+#
+# Why a separate workflow:
+#   - publish-image.yml is image-focused (Buildx, QEMU, GHCR login).
+#   - release.yml is text-extract focused (awk on CHANGELOG.md + gh).
+#   Keeping them apart keeps each workflow file's responsibility clear.
+#
+# RELEASE-03 verification (D-15): publish-image.yml already produces
+# immutable semver tags (`v<semver>`, `<major>.<minor>.<patch>`,
+# `<major>.<minor>`, `<major>`) plus a `latest` gated on
+# `is_default_branch`. No change required to that workflow.
+#
+# Placeholder-date guard: the extract step rejects a CHANGELOG section
+# that still contains `YYYY-MM-DD`. Operators must update the date in
+# CHANGELOG.md (and push the commit) before pushing the v* tag.
+# =============================================================================
+
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  # gh release create writes to the Releases API.
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: ver
+        run: echo "value=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
+
+      - name: Extract CHANGELOG section
+        id: notes
+        env:
+          VERSION: ${{ steps.ver.outputs.value }}
+        run: |
+          set -euo pipefail
+          # awk one-shot: extract from `## [<version>]` to the next `## [`.
+          section=$(awk -v ver="$VERSION" '
+            $0 ~ "^## \\[" ver "\\]" { p=1; next }
+            p && /^## \[/ { p=0 }
+            p { print }
+          ' CHANGELOG.md)
+          if [ -z "$section" ]; then
+            echo "::error::No CHANGELOG section for [$VERSION]"
+            exit 1
+          fi
+          # Write the extracted section to a tempfile so the line numbers
+          # in the guard's ::error annotations refer to lines within the
+          # extracted [$VERSION] section (which is what an operator wants
+          # to fix in CHANGELOG.md). See REQUIREMENTS.md RELEASE-02 /
+          # scripts/check-changelog-date.sh.
+          section_file="$RUNNER_TEMP/changelog-section.md"
+          printf '%s\n' "$section" > "$section_file"
+          if ! bash scripts/check-changelog-date.sh "$section_file"; then
+            echo "::error::CHANGELOG section for [$VERSION] still contains the YYYY-MM-DD placeholder. Update CHANGELOG.md with the release date before pushing the v* tag."
+            exit 1
+          fi
+          # Persist multiline output via $GITHUB_OUTPUT heredoc.
+          {
+            echo "body<<CHANGELOG_EOF"
+            echo "$section"
+            echo "CHANGELOG_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NOTES: ${{ steps.notes.outputs.body }}
+        run: |
+          gh release create "${GITHUB_REF#refs/tags/}" \
+            --title "${GITHUB_REF#refs/tags/}" \
+            --notes "$NOTES"

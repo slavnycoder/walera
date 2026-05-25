@@ -1,0 +1,77 @@
+// Package router — router_panic_test.go covers the New construction gate:
+// every required Deps field panics with the exact message
+// "router.New: Deps.<Field> is required" when nil.
+package router
+
+import (
+	"testing"
+
+	"github.com/rs/zerolog"
+
+	"github.com/walera/walera/internal/metrics"
+)
+
+// validBroadcasterDeps returns a fully-populated Deps so each per-field
+// test only nils one field.
+func validBroadcasterDeps() Deps {
+	return Deps{
+		Logger:  zerolog.Nop(),
+		Metrics: metrics.New(),
+		Encoder: &stubEncoder{},
+	}
+}
+
+func validBroadcasterConfig() Config {
+	return Config{
+		ExactBuffer:     16,
+		WildcardBuffer:  16,
+		MaxChangesPerTx: 10000,
+	}
+}
+
+func TestNewBroadcaster_PanicsOnNilDeps(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name    string
+		mutate  func(d *Deps)
+		wantMsg string
+	}{
+		{
+			name:    "Metrics",
+			mutate:  func(d *Deps) { d.Metrics = nil },
+			wantMsg: "router.New: Deps.Metrics is required",
+		},
+		{
+			name:    "Encoder",
+			mutate:  func(d *Deps) { d.Encoder = nil },
+			wantMsg: "router.New: Deps.Encoder is required",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			deps := validBroadcasterDeps()
+			tc.mutate(&deps)
+			assertPanicsWithValue(t, tc.wantMsg, func() {
+				_ = New(validBroadcasterConfig(), deps)
+			})
+		})
+	}
+}
+
+// assertPanicsWithValue runs fn and asserts that it panicked with a value
+// equal to want. Mirrors testify's require.PanicsWithValue without taking
+// on the testify dep — the project keeps testify as an indirect-only.
+func assertPanicsWithValue(t *testing.T, want any, fn func()) {
+	t.Helper()
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatalf("expected panic with value %v; got no panic", want)
+		}
+		if r != want {
+			t.Fatalf("panic value: got %v (%T); want %v (%T)", r, r, want, want)
+		}
+	}()
+	fn()
+}

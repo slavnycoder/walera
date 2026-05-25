@@ -1,0 +1,144 @@
+# Walera post-GEN-02 exact-index benchmark capture — numShards=8 (GEN-02 gate verification).
+# Provenance:
+#   git-sha:    4743465cfa705df0b9239b14eea72b833a07ad2e
+#   captured:   2026-05-25
+#   runner:     optiplexb60 (xvvvx)
+#   kernel:     6.8.0-111-generic
+#   host-cpu:   Intel(R) Core(TM) i5-6600T CPU @ 2.70GHz (GOMAXPROCS=4)
+#   go-version: go version go1.25.0 linux/amd64
+#   benchstat:  v0.0.0-20260512194132-3cf34090a3db (golang.org/x/perf/cmd/benchstat)
+#   command:    go test -bench='^BenchmarkIndex' -benchmem -count=10 -run='^$' -timeout=15m ./internal/router/...
+# Notes:
+#   - -race deliberately omitted; race instrumentation adds shadow-memory overhead
+#     that approximately doubles heap allocs/op, invalidating allocation measurement.
+#     Use 'go test -race ./internal/router/...' separately to check data-race safety.
+#   - numShards=8 at capture time (internal/router/index.go:10, reduced from 64 by GEN-02).
+#   - GEN-02 gate: allocs/op must remain 0 across all BenchmarkIndex* sub-benchmarks
+#     vs bench-baseline-index-v2.5.txt (0 allocs/op baseline, ≤3% band).
+#     Run: benchstat testbench/bench-baseline-index-v2.5.txt testbench/bench-baseline-index-post-gen02.txt
+goos: linux
+goarch: amd64
+pkg: github.com/walera/walera/internal/router
+cpu: Intel(R) Core(TM) i5-6600T CPU @ 2.70GHz
+BenchmarkIndexAdd/n=1-4      	18067612	        55.53 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexAdd/n=1-4      	21940240	        54.84 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexAdd/n=1-4      	21576940	        54.71 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexAdd/n=1-4      	21414822	        55.92 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexAdd/n=1-4      	21707631	        55.43 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexAdd/n=1-4      	21374264	        56.18 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexAdd/n=1-4      	20952176	        56.89 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexAdd/n=1-4      	21939340	        54.69 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexAdd/n=1-4      	21889254	        54.86 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexAdd/n=1-4      	21422750	        55.99 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexAdd/n=1000-4   	21968553	        55.40 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexAdd/n=1000-4   	21543794	        55.04 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexAdd/n=1000-4   	21978196	        55.02 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexAdd/n=1000-4   	21209014	        55.25 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexAdd/n=1000-4   	22357039	        54.95 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexAdd/n=1000-4   	21639742	        55.10 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexAdd/n=1000-4   	21582853	        54.93 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexAdd/n=1000-4   	21956773	        55.19 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexAdd/n=1000-4   	21298177	        55.98 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexAdd/n=1000-4   	21693813	        54.96 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexAdd/n=10000-4  	17618445	        66.50 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexAdd/n=10000-4  	17999115	        66.28 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexAdd/n=10000-4  	18098541	        66.20 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexAdd/n=10000-4  	18000274	        66.87 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexAdd/n=10000-4  	17951872	        67.45 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexAdd/n=10000-4  	17398470	        67.51 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexAdd/n=10000-4  	18012679	        66.34 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexAdd/n=10000-4  	18217914	        66.18 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexAdd/n=10000-4  	17958432	        66.37 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexAdd/n=10000-4  	17828182	        66.60 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexLookupHit/n=1-4         	28103494	        42.37 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexLookupHit/n=1-4         	27656673	        42.43 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexLookupHit/n=1-4         	28573921	        42.35 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexLookupHit/n=1-4         	27982836	        42.37 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexLookupHit/n=1-4         	28319121	        42.55 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexLookupHit/n=1-4         	28248256	        42.53 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexLookupHit/n=1-4         	27857978	        42.58 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexLookupHit/n=1-4         	28657504	        42.30 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexLookupHit/n=1-4         	27661698	        42.66 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexLookupHit/n=1-4         	27794388	        42.52 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexLookupHit/n=1000-4      	27938528	        42.25 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexLookupHit/n=1000-4      	28648272	        41.96 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexLookupHit/n=1000-4      	29019121	        41.69 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexLookupHit/n=1000-4      	28919936	        42.94 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexLookupHit/n=1000-4      	27828781	        42.46 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexLookupHit/n=1000-4      	27717368	        42.02 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexLookupHit/n=1000-4      	28845057	        42.13 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexLookupHit/n=1000-4      	28805017	        41.85 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexLookupHit/n=1000-4      	27651169	        42.29 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexLookupHit/n=1000-4      	27619633	        42.11 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexLookupHit/n=10000-4     	22972363	        51.99 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexLookupHit/n=10000-4     	23422228	        51.51 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexLookupHit/n=10000-4     	23234181	        52.09 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexLookupHit/n=10000-4     	23508318	        51.82 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexLookupHit/n=10000-4     	22066948	        51.89 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexLookupHit/n=10000-4     	23345893	        51.97 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexLookupHit/n=10000-4     	23127158	        51.84 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexLookupHit/n=10000-4     	23646931	        51.50 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexLookupHit/n=10000-4     	23082812	        52.17 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexLookupHit/n=10000-4     	22323757	        52.03 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexLookupMiss/n=1-4        	41228042	        28.80 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexLookupMiss/n=1-4        	41385620	        28.97 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexLookupMiss/n=1-4        	41194402	        29.69 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexLookupMiss/n=1-4        	40350715	        29.04 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexLookupMiss/n=1-4        	39983484	        29.07 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexLookupMiss/n=1-4        	40448817	        28.99 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexLookupMiss/n=1-4        	40917244	        29.00 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexLookupMiss/n=1-4        	42159180	        28.89 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexLookupMiss/n=1-4        	42217210	        28.85 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexLookupMiss/n=1-4        	40990398	        28.88 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexLookupMiss/n=1000-4     	27783902	        41.90 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexLookupMiss/n=1000-4     	28496520	        41.52 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexLookupMiss/n=1000-4     	28451736	        42.60 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexLookupMiss/n=1000-4     	28386375	        41.43 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexLookupMiss/n=1000-4     	28285056	        42.56 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexLookupMiss/n=1000-4     	26947004	        42.78 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexLookupMiss/n=1000-4     	28201700	        42.92 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexLookupMiss/n=1000-4     	28607277	        42.07 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexLookupMiss/n=1000-4     	28974612	        41.87 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexLookupMiss/n=1000-4     	29539017	        41.28 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexLookupMiss/n=10000-4    	22859942	        51.10 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexLookupMiss/n=10000-4    	22789628	        52.65 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexLookupMiss/n=10000-4    	22406730	        51.57 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexLookupMiss/n=10000-4    	23540428	        50.74 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexLookupMiss/n=10000-4    	23555654	        51.48 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexLookupMiss/n=10000-4    	22986568	        51.47 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexLookupMiss/n=10000-4    	23684161	        50.83 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexLookupMiss/n=10000-4    	23162145	        51.39 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexLookupMiss/n=10000-4    	23820277	        51.49 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexLookupMiss/n=10000-4    	23297133	        51.30 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexChurn/n=1-4             	10247314	       114.9 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexChurn/n=1-4             	10458052	       115.6 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexChurn/n=1-4             	10422495	       115.1 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexChurn/n=1-4             	10328366	       114.9 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexChurn/n=1-4             	10490503	       114.5 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexChurn/n=1-4             	10296990	       114.8 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexChurn/n=1-4             	10555201	       114.7 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexChurn/n=1-4             	10492076	       114.7 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexChurn/n=1-4             	10423626	       114.6 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexChurn/n=1-4             	10373643	       115.7 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexChurn/n=1000-4          	10610616	       112.0 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexChurn/n=1000-4          	11059153	       108.8 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexChurn/n=1000-4          	10979791	       109.1 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexChurn/n=1000-4          	10948444	       109.0 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexChurn/n=1000-4          	11062851	       108.6 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexChurn/n=1000-4          	10884048	       110.1 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexChurn/n=1000-4          	11143905	       109.1 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexChurn/n=1000-4          	11192799	       108.3 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexChurn/n=1000-4          	11129490	       109.4 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexChurn/n=1000-4          	10907593	       109.3 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexChurn/n=10000-4         	10356992	       113.7 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexChurn/n=10000-4         	10893000	       110.3 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexChurn/n=10000-4         	10591938	       113.5 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexChurn/n=10000-4         	10887393	       110.5 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexChurn/n=10000-4         	10626222	       114.7 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexChurn/n=10000-4         	10382920	       114.2 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexChurn/n=10000-4         	10300958	       117.1 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexChurn/n=10000-4         	10834815	       110.9 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexChurn/n=10000-4         	10046444	       122.2 ns/op	       0 B/op	       0 allocs/op
+BenchmarkIndexChurn/n=10000-4         	10523131	       112.9 ns/op	       0 B/op	       0 allocs/op
+PASS
+ok  	github.com/walera/walera/internal/router	143.537s

@@ -1,0 +1,232 @@
+# Auth
+
+Walera delegates all authorization decisions to an external HTTP
+backend that the operator supplies. This document describes the
+contract Walera expects from that backend, the request and response
+formats, status-code handling, the wildcard-stream policy, and a
+minimal example implementation.
+
+## Overview
+
+Walera is not an identity provider and does not authenticate users on
+its own. Each SSE subscription request carries a bearer token in the
+`Authorization` header; Walera forwards that token (and the requested
+channel) to the configured auth backend and waits for a permission
+decision before opening the stream.
+
+The permission decision returns a per-user whitelist of accessible
+tables and fields. Walera enforces the whitelist at fan-out time inside
+the SSE writer — only whitelisted fields are forwarded to the
+subscriber. Clients cannot opt out of the whitelist or request fields
+they were not granted.
+
+## Backend contract
+
+The auth backend is a plain HTTP service operated by the same team
+that owns the underlying data. Walera calls it once per subscription
+open and again periodically while the subscription is live (to refresh
+the permission map). The contract is intentionally minimal: one
+endpoint, one request shape, one response shape.
+
+Walera sends:
+
+- The bearer token the client supplied (`Authorization: Bearer …`).
+- The requested channel, encoded as `entity:id` or `entity:all` for
+  wildcard streams.
+- A request identifier and `Accept: application/json`.
+
+The backend returns:
+
+- `200` with a permission map (allow), or
+- `401` / `403` / `404` (deny — with semantics described under
+  [Status codes](#status-codes)), or
+- `5xx` or a timeout (treated as a transport failure; see
+  [Circuit breaker behavior](#circuit-breaker-behavior)).
+
+## Request format
+
+On every subscription open, Walera issues a single GET request:
+
+```http
+GET /auth/permissions?channel=orders%3A42
+Authorization: Bearer <user-token>
+X-Request-ID: <request-id>
+Accept: application/json
+```
+
+- For `/sse/v1/orders/all`, the channel is `orders:all`.
+- For Walera's own readiness probes the channel is `_health` and the
+  token is the operator-configured service token.
+
+The full URL is `<WALERA_AUTH_BACKEND_URL>/auth/permissions?channel=…`.
+
+## Response format
+
+A successful authorization returns `200` with a JSON body of the
+following shape:
+
+```json
+{
+  "user_id": "alice",
+  "tables": {
+    "orders": ["id", "status", "total_cents", "updated_at"]
+  },
+  "ttl_seconds": 60
+}
+```
+
+| Field         | Meaning                                                       |
+| ------------- | ------------------------------------------------------------- |
+| `user_id`     | Stable identifier used for rate limits and structured logs.   |
+| `tables`      | Per-table list of columns the user may receive.               |
+| `ttl_seconds` | Refresh interval Walera uses for this permission map.         |
+
+Field-whitelist semantics: only the columns named in `tables[<table>]`
+are forwarded to the subscriber. Other columns are filtered out before
+the SSE event is written.
+
+The table from the SSE URL must appear in `tables`; otherwise Walera
+rejects the request.
+
+## Status codes
+
+| Status            | Meaning                                                                                         |
+| ----------------- | ----------------------------------------------------------------------------------------------- |
+| `200`             | Authorized. Body is the permission map.                                                         |
+| `401`             | Token invalid or expired. Walera rejects the open.                                              |
+| `403`             | Token valid but not allowed for this channel.                                                   |
+| `404`             | Treated as revoked / not found.                                                                 |
+| `429`             | Backend rate limiting; treated as a transient denial. Surfaced to the client.                   |
+| `5xx` or timeout  | Treated as a transport failure. On open, returns `503`. On refresh, behavior depends on state.  |
+
+On a background permission refresh, a `401`, `403`, `404`, or a `200`
+that drops the previously-allowed table disconnects the established
+stream with `auth_revoked`. This keeps the runtime contract honest:
+permission changes propagate to active subscribers, not just to new
+opens.
+
+## Wildcard streams
+
+Wildcard streams (subscriptions of the form `/sse/v1/{table}/all`)
+bypass the per-row primary-key check. A subscriber to a wildcard
+stream receives changes for every row in the table — which inherently
+reveals which primary keys are changing. Wildcard streams are
+**intended for publicly-enumerable entities only**.
+
+If a table's primary keys are themselves sensitive (for example, user
+identifiers, order numbers from which volume could be inferred, or any
+identifier whose enumeration leaks business information), do not enable
+wildcard subscriptions for that table. The auth backend should refuse
+wildcard channels for tables whose enumeration is not already public.
+
+The wildcard-stream policy is intentionally restrictive. A backend that
+allows wildcard subscriptions for sensitive tables would defeat the
+field-whitelist guarantee, because the row identifiers themselves
+become a side channel.
+
+## Circuit breaker behavior
+
+Walera wraps the auth client in a circuit breaker so that a
+misbehaving backend cannot cascade into a runtime-wide outage. When
+the failure rate over a sliding window crosses a threshold (above 50%
+sustained), the breaker opens and Walera shifts posture:
+
+- **Established subscriptions** continue to receive events as long as
+  their last successful permission map is within its TTL. This is a
+  bounded fail-open posture for existing streams.
+- **New subscription attempts** are rejected with `503` while the
+  breaker is open. This is a fail-closed posture for new opens.
+
+When the failure rate drops back below the threshold the breaker
+returns to closed and normal authorization resumes. The breaker design
+trades a bounded amount of stale-permission delivery against the
+operational reality that an auth-backend outage should not produce a
+fleet-wide reconnect storm.
+
+See [ADR 0002: Auth Model](./adr/0002-auth-model.md) for the
+delegation rationale and [ADR 0003: Slow Client Policy](./adr/0003-slow-client-policy.md)
+for the subscriber-side counterpart.
+
+## Example backend (Django)
+
+A minimal Django implementation suitable for development and testbench
+use. Replace the in-memory token map with the real session or JWT
+lookup that the rest of the product uses.
+
+```python
+# views.py
+from django.http import JsonResponse
+from django.views.decorators.http import require_GET
+
+TOKENS = {
+    "alice-token": {
+        "user_id": "alice",
+        "tables": {"orders": ["id", "status", "total_cents", "updated_at"]},
+    },
+    "bob-token": {
+        "user_id": "bob",
+        "tables": {"orders": ["id", "status"]},
+    },
+    "service-token": {
+        "user_id": "walera-service",
+        "tables": {"_health": ["id"]},
+    },
+}
+
+
+def bearer_token(request):
+    header = request.headers.get("Authorization", "")
+    if not header.startswith("Bearer "):
+        return ""
+    return header.removeprefix("Bearer ").strip()
+
+
+@require_GET
+def walera_permissions(request):
+    channel = request.GET.get("channel", "")
+    token = bearer_token(request)
+    permissions = TOKENS.get(token)
+
+    if permissions is None:
+        return JsonResponse({"reason": "unauthorized"}, status=401)
+
+    if channel == "_health":
+        if "_health" in permissions["tables"]:
+            return JsonResponse({**permissions, "ttl_seconds": 60})
+        return JsonResponse({"reason": "forbidden"}, status=403)
+
+    table, sep, pk = channel.partition(":")
+    if not sep or not table or not pk:
+        return JsonResponse({"reason": "invalid_channel"}, status=404)
+
+    if table not in permissions["tables"]:
+        return JsonResponse({"reason": "not_allowed"}, status=403)
+
+    return JsonResponse({**permissions, "ttl_seconds": 60})
+```
+
+```python
+# urls.py
+from django.urls import path
+from .views import walera_permissions
+
+urlpatterns = [
+    path("auth/permissions", walera_permissions),
+]
+```
+
+Production checklist for a real backend:
+
+- Never log bearer tokens or row payloads.
+- Keep the endpoint fast — Walera's default auth timeout is two
+  seconds. Slow auth directly increases SSE time-to-first-event.
+- Treat wildcard channels (`<table>:all`) as a distinct permission
+  decision. The default should be deny.
+- To revoke an active stream, return `401` / `403` / `404` — or a map
+  that no longer contains the subscribed table — on the next refresh.
+
+## See also
+
+- [ADR 0002: Auth Model](./adr/0002-auth-model.md)
+- [ADR 0003: Slow Client Policy](./adr/0003-slow-client-policy.md)
+- [Architecture](./architecture.md)
