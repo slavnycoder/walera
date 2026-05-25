@@ -177,15 +177,34 @@ func LoadConfig(k *koanf.Koanf) (Config, error) {
 // database.url / WALERA_DATABASE_URL) into the typed admin and replication
 // connection strings. The base URL IS the admin DSN; the replication DSN is
 // the same URL with the replication=database runtime parameter added to the
-// query string (sslmode and any other params preserved). The base MUST NOT
-// already carry replication=database — that would open the admin connection
-// in replication mode and break ordinary queries. The PG role behind the DSN
-// must hold the REPLICATION attribute; that is a runtime requirement enforced
-// by PostgreSQL at START_REPLICATION, not here.
+// query string (sslmode and any other params preserved). If the supplied base
+// already carries a replication parameter, it is removed from the admin DSN
+// and replaced with Walera's canonical replication=database value only on the
+// replication DSN. The PG role behind the DSN must hold the REPLICATION
+// attribute; that is a runtime requirement enforced by PostgreSQL at
+// START_REPLICATION, not here.
 func DeriveDSNs(base string) (walconn.AdminDSN, walconn.ReplicationDSN, error) {
 	if base == "" {
 		return "", "", errors.New("database.url is required")
 	}
+	adminURL, err := url.Parse(base)
+	if err != nil {
+		return "", "", config.FormatError(
+			"database.url",
+			config.RedactDSN(base),
+			"DSN parse failed: invalid URL",
+			"see docs/operations.md#configuration",
+		)
+	}
+	adminQuery := adminURL.Query()
+	for key := range adminQuery {
+		if strings.EqualFold(key, "replication") {
+			delete(adminQuery, key)
+		}
+	}
+	adminURL.RawQuery = adminQuery.Encode()
+	admin := adminURL.String()
+
 	if _, err := pgconn.ParseConfig(base); err != nil {
 		return "", "", config.FormatError(
 			"database.url",
@@ -194,29 +213,19 @@ func DeriveDSNs(base string) (walconn.AdminDSN, walconn.ReplicationDSN, error) {
 			"see docs/operations.md#configuration",
 		)
 	}
-	// pgconn.ParseConfig silently strips the replication runtime parameter,
-	// so guard against it with a substring check on the raw base value.
-	if strings.Contains(base, "replication=database") {
+	if _, err := pgconn.ParseConfig(admin); err != nil {
 		return "", "", config.FormatError(
 			"database.url",
-			config.RedactDSN(base),
-			"must not contain replication=database (the replication DSN is derived automatically)",
-			"remove replication=database from database.url",
-		)
-	}
-	u, err := url.Parse(base)
-	if err != nil {
-		return "", "", config.FormatError(
-			"database.url",
-			config.RedactDSN(base),
+			config.RedactDSN(admin),
 			"DSN parse failed: "+err.Error(),
 			"see docs/operations.md#configuration",
 		)
 	}
+	u := *adminURL
 	q := u.Query()
 	q.Set("replication", "database")
 	u.RawQuery = q.Encode()
-	return walconn.AdminDSN(base), walconn.ReplicationDSN(u.String()), nil
+	return walconn.AdminDSN(admin), walconn.ReplicationDSN(u.String()), nil
 }
 
 // Validate enforces the wal-package invariants.

@@ -109,9 +109,8 @@ for the full reference (operational tuning + development-only patterns).
 
 - `WALERA_DATABASE_URL` — the single Postgres DSN (the admin connection
   plus the automatically-derived replication connection). The role must
-  hold the `REPLICATION` attribute, the connection must be direct (no
-  PgBouncer), and you must NOT append `replication=database` — Walera adds
-  it.
+  hold the `REPLICATION` attribute, and the connection must be direct (no
+  PgBouncer).
 - `WALERA_WAL_PUBLICATION_NAME` — pgoutput publication name.
 - `WALERA_AUTH_BACKEND_URL` — auth service base URL.
 - `WALERA_AUTH_SERVICE_TOKEN` — bearer token Walera presents to the

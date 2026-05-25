@@ -42,7 +42,7 @@ func TestLoadConfig_Defaults(t *testing.T) {
 
 // TestDeriveDSNs exercises the single-URL derivation helper: the base URL is
 // the admin DSN; the replication DSN is the base with replication=database
-// added; an empty, unparseable, or already-replication base is rejected.
+// added; an empty or unparseable base is rejected.
 func TestDeriveDSNs(t *testing.T) {
 	t.Run("empty rejected", func(t *testing.T) {
 		_, _, err := wal.DeriveDSNs("")
@@ -85,16 +85,22 @@ func TestDeriveDSNs(t *testing.T) {
 		}
 	})
 
-	t.Run("base containing replication=database rejected", func(t *testing.T) {
-		_, _, err := wal.DeriveDSNs("postgres://u:p@h/db?replication=database")
-		if err == nil {
-			t.Fatal("DeriveDSNs: err = nil; want rejection")
+	t.Run("base containing replication parameter is normalized", func(t *testing.T) {
+		admin, repl, err := wal.DeriveDSNs("postgres://u:p@h/db?sslmode=disable&replication=database")
+		if err != nil {
+			t.Fatalf("DeriveDSNs: unexpected error: %v", err)
 		}
-		if !strings.Contains(err.Error(), "database.url") {
-			t.Errorf("err = %q; want substring 'database.url'", err.Error())
+		if strings.Contains(string(admin), "replication=") {
+			t.Errorf("admin = %q; want replication parameter stripped", admin)
 		}
-		if !strings.Contains(err.Error(), "must not contain replication=database") {
-			t.Errorf("err = %q; want substring 'must not contain replication=database'", err.Error())
+		if !strings.Contains(string(admin), "sslmode=disable") {
+			t.Errorf("admin = %q; want sslmode=disable preserved", admin)
+		}
+		if !strings.Contains(string(repl), "replication=database") {
+			t.Errorf("repl = %q; want canonical replication=database added", repl)
+		}
+		if !strings.Contains(string(repl), "sslmode=disable") {
+			t.Errorf("repl = %q; want sslmode=disable preserved", repl)
 		}
 	})
 }

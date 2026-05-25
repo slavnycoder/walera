@@ -241,17 +241,19 @@ defaults — every deployment must supply them.
 
 | Env var                       | YAML key                | Purpose                                                              | Safe value example                                                                          |
 | ----------------------------- | ----------------------- | -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| `WALERA_DATABASE_URL`         | `database.url`          | Single Postgres DSN — admin connection and the derived replication connection. Direct to PG (no PgBouncer); do NOT append `replication=database`. | `postgres://walera:secret@db:5432/app?sslmode=require`                                       |
+| `WALERA_DATABASE_URL`         | `database.url`          | Single Postgres DSN — admin connection and the derived replication connection. Direct to PG (no PgBouncer). | `postgres://walera:secret@db:5432/app?sslmode=require`                                       |
 | `WALERA_AUTH_BACKEND_URL`     | `auth.backend_url`      | Auth backend base URL (https).                                       | `https://auth.example.com`                                                                  |
 | `WALERA_AUTH_SERVICE_TOKEN`   | `auth.service_token`    | Bearer used by Walera's own `_health` probe; required with the URL.  | `service-token-xxxx`                                                                        |
 
 The single role in `WALERA_DATABASE_URL` MUST hold the `REPLICATION`
 attribute. Walera derives the replication connection by adding
 `replication=database` to this base URL at load time (preserving `sslmode`
-and any other query params). Config validation only checks that the base URL
-parses and does NOT already contain `replication=database` — a role lacking
-the `REPLICATION` attribute is therefore NOT caught at config load; it fails
-at RUNTIME when `START_REPLICATION` is issued against PostgreSQL.
+and any other query params). If the base URL already carries a `replication`
+parameter, Walera strips it from the admin connection and sets the derived
+replication connection to `replication=database`. Config validation only
+checks that the base URL parses — a role lacking the `REPLICATION` attribute
+is therefore NOT caught at config load; it fails at RUNTIME when
+`START_REPLICATION` is issued against PostgreSQL.
 
 Note: `WALERA_WAL_PUBLICATION_NAME` and `WALERA_HTTP_ADDR` are listed in
 the spec-name mapping above but ship with safe defaults (`walera_pub`
