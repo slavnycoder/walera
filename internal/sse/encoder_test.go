@@ -143,9 +143,9 @@ func TestEncoder_TxUpdate_MatchedSubset(t *testing.T) {
 
 	var got struct {
 		Changes []struct {
-			Op      string         `json:"op"`
-			PK      string         `json:"pk"`
-			Changed map[string]any `json:"changed"`
+			Op   string         `json:"op"`
+			PK   string         `json:"pk"`
+			Data map[string]any `json:"data"`
 		} `json:"changes"`
 	}
 	if err := json.Unmarshal(payload, &got); err != nil {
@@ -160,8 +160,11 @@ func TestEncoder_TxUpdate_MatchedSubset(t *testing.T) {
 	if got.Changes[0].Op != "update" {
 		t.Errorf("changes[0].op = %q; want %q", got.Changes[0].Op, "update")
 	}
-	if name, _ := got.Changes[0].Changed["name"].(string); name != "bob" {
-		t.Errorf("changes[0].changed.name = %v; want %q", got.Changes[0].Changed["name"], "bob")
+	if name, _ := got.Changes[0].Data["name"].(string); name != "bob" {
+		t.Errorf("changes[0].data.name = %v; want %q", got.Changes[0].Data["name"], "bob")
+	}
+	if strings.Contains(string(out), `"changed"`) {
+		t.Errorf("frame must NOT contain %q (unified into data); got: %s", `"changed"`, out)
 	}
 }
 

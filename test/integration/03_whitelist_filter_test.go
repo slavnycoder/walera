@@ -165,11 +165,11 @@ func Test03WhitelistFilter(t *testing.T) {
 		}
 		// Whitelist excludes `name`; even if PG WAL emits it (it shouldn't
 		// for a column that did not change), the auth filter strips it.
-		if got := c.Changed["email"]; got != "new@x" {
-			t.Errorf("changed.email = %v, want %q", got, "new@x")
+		if got := c.Data["email"]; got != "new@x" {
+			t.Errorf("data.email = %v, want %q", got, "new@x")
 		}
-		if _, ok := c.Changed["name"]; ok {
-			t.Errorf("changed.name leaked through whitelist: %v", c.Changed["name"])
+		if _, ok := c.Data["name"]; ok {
+			t.Errorf("data.name leaked through whitelist: %v", c.Data["name"])
 		}
 	})
 }

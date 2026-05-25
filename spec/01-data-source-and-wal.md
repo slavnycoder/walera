@@ -34,7 +34,7 @@ Use **DEFAULT** (the default). This means:
 
 FULL is rejected because it doubles or triples WAL volume for wide tables. The client uses the "after" state (or a snapshot) for UI; diffs are not the primary use case.
 
-In the SSE event, UPDATE payloads carry a `changed` field containing only modified columns. **Absence of a field means "not changed"** (NOT "now null"). `null` value means "now null". These are distinct semantics; document them in client-facing API docs.
+In the SSE event, UPDATE payloads carry only the modified columns in the unified `data` map (the same field used for INSERT; `op` disambiguates the shape — see [§3.5](03-subscriptions-and-sse.md#35-event-format)). **Absence of a field means "not changed"** (NOT "now null"); `null` value means "now null". These are distinct semantics; document them in client-facing API docs.
 
 ## 1.4. Replication slot
 

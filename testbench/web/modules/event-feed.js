@@ -130,7 +130,7 @@ export function mount(rootEl, _deps) {
   // CONTRACT: only push to in-memory queue. NO DOM ops allowed here.
   function onTx({ channel, payload } = {}) {
     if (!payload) return;
-    // Walera tx payload: { tx_lsn, root, changes: [{op, table, pk, before?, after?, changed?}] }
+    // Walera tx payload: { tx_id, commit_ts, changes: [{op, table, pk, data?}] }
     const changes = Array.isArray(payload.changes) ? payload.changes : [];
     for (const change of changes) {
       const entry = {

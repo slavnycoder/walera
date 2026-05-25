@@ -83,14 +83,15 @@ Each `change` is one of:
 
 ```json
 {"op":"insert","table":"users","pk":"42","data":{"id":42,"name":"Alice","email":"a@x.com"}}
-{"op":"update","table":"users","pk":"42","changed":{"name":"Alicia"}}
+{"op":"update","table":"users","pk":"42","data":{"name":"Alicia"}}
 {"op":"delete","table":"users","pk":"42"}
 ```
 
 Rules:
-- `data` (for insert) — full new row, filtered by whitelist (PK always included).
-- `changed` (for update) — only modified columns, filtered by whitelist. PK always included.
-- `delete` — PK only (matches REPLICA IDENTITY DEFAULT behavior).
+- A single `data` map carries the row payload; `op` disambiguates the shape:
+  - **insert** — `data` is the full new row, filtered by whitelist (PK always included).
+  - **update** — `data` contains **only** the modified columns, filtered by whitelist (PK always included). Absence of a field means "not changed"; presence with `null` means "now NULL" — these are distinct.
+  - **delete** — `data` is absent (matches REPLICA IDENTITY DEFAULT; PK is the sole identifier).
 - `table` is the bare table name (no schema). If multi-schema support is added later, this becomes `schema.table`.
 
 The SSE `id:` field is set to `{tx_id}` for tracing. `Last-Event-ID` resume is NOT implemented — on reconnect, the client takes a fresh snapshot. The Postgres commit LSN is deliberately not exposed on the wire: it is a physical WAL offset that leaks an internal Postgres detail and carries no client-visible semantics. LSN remains available internally for routing, auth-refresh ordering, logs, and metrics.

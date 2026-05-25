@@ -172,7 +172,7 @@ API.
 ```text
 event: tx
 id: 735
-data: {"tx_id":735,"commit_ts":"2026-05-18T08:30:12.123456Z","changes":[{"op":"update","table":"orders","pk":"42","changed":{"status":"paid"}}]}
+data: {"tx_id":735,"commit_ts":"2026-05-18T08:30:12.123456Z","changes":[{"op":"update","table":"orders","pk":"42","data":{"status":"paid"}}]}
 ```
 
 The `data` payload shape:
@@ -185,8 +185,9 @@ type WaleraTx = {
     op: "insert" | "update" | "delete";
     table: string;
     pk: string;
+    // insert → full new row; update → only modified columns
+    // (absence ≠ null); delete → absent.
     data?: Record<string, unknown>;
-    changed?: Record<string, unknown>;
   }>;
 };
 ```

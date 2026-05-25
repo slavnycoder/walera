@@ -142,15 +142,16 @@ export function mount(rootEl, _deps) {
         continue;
       }
 
-      // Walera wire format (encoder.go §changeEvent):
+      // Walera wire format (encoder.go §changeEvent — unified `data`):
       //   INSERT → change.data is the full new row map
-      //   UPDATE → change.changed is a partial map of changed keys only
+      //   UPDATE → change.data is a partial map of changed keys only
+      //   DELETE → change.data is absent
       //   absence ≠ null (wal/types.go) — merge UPDATE into prior row state
       const existing = rows.get(key);
       const prev = existing ? existing.row : null;
       let nextRow;
       if (change.op === "insert" || !prev) {
-        const data = change.data || change.changed || {};
+        const data = change.data || {};
         nextRow = { ...data };
         // PK is carried out-of-band on `change.pk`; ensure it's in the row
         // map so the table cell renders correctly even if the PK column
@@ -159,9 +160,9 @@ export function mount(rootEl, _deps) {
           nextRow[pkColumn] = pkVal;
         }
       } else {
-        // UPDATE — merge `changed` over prior row.
-        const changed = change.changed || {};
-        nextRow = { ...prev, ...changed };
+        // UPDATE — merge the partial `data` over the prior row.
+        const partial = change.data || {};
+        nextRow = { ...prev, ...partial };
       }
       // Establish column order on first observed row. For wildcard lists,
       // prefer the PK column first if present.

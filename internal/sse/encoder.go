@@ -40,12 +40,39 @@ type txEvent struct {
 
 // changeEvent is the JSON shape of one DML change within a tx event.
 // Bare table name (no schema prefix) per spec §3.5.
+//
+// The `data` map carries the row payload, with semantics determined by
+// `op`:
+//   - INSERT: full new row (whitelist-filtered; PK always included).
+//   - UPDATE: only modified columns (whitelist-filtered; PK always
+//     included). Absence of a field means "not changed"; presence with
+//     `null` means "now NULL" — these are distinct.
+//   - DELETE: `data` is absent (PK is the only identifier; matches
+//     REPLICA IDENTITY DEFAULT).
 type changeEvent struct {
-	Op      string         `json:"op"`
-	Table   string         `json:"table"`
-	PK      string         `json:"pk"`
-	Data    map[string]any `json:"data,omitempty"`    // INSERT: full new row
-	Changed map[string]any `json:"changed,omitempty"` // UPDATE: only changed columns
+	Op    string         `json:"op"`
+	Table string         `json:"table"`
+	PK    string         `json:"pk"`
+	Data  map[string]any `json:"data,omitempty"`
+}
+
+// mkChangeEvent maps an internal wal.Change to the unified wire shape.
+// wal.Change keeps separate Data (INSERT) and Changed (UPDATE) maps
+// because the upstream pgoutput pipeline + auth filter operate on them
+// distinctly; on the wire we collapse both into a single `data` field
+// (op disambiguates the semantics — see changeEvent doc comment).
+// DELETE leaves both nil → `data` is omitted via the omitempty tag.
+func mkChangeEvent(ch wal.Change) changeEvent {
+	data := ch.Data
+	if data == nil {
+		data = ch.Changed
+	}
+	return changeEvent{
+		Op:    string(ch.Op),
+		Table: ch.Table,
+		PK:    ch.PK,
+		Data:  data,
+	}
 }
 
 // txToEvent converts a wal.Tx to the JSON-serialisable txEvent shape,
@@ -57,13 +84,7 @@ func txToEvent(tx wal.Tx, matched []int) txEvent {
 	if matched == nil {
 		changes = make([]changeEvent, 0, len(tx.Changes))
 		for _, ch := range tx.Changes {
-			changes = append(changes, changeEvent{
-				Op:      string(ch.Op),
-				Table:   ch.Table,
-				PK:      ch.PK,
-				Data:    ch.Data,
-				Changed: ch.Changed,
-			})
+			changes = append(changes, mkChangeEvent(ch))
 		}
 	} else {
 		changes = make([]changeEvent, 0, len(matched))
@@ -71,14 +92,7 @@ func txToEvent(tx wal.Tx, matched []int) txEvent {
 			if idx < 0 || idx >= len(tx.Changes) {
 				continue // defensive — router builds matched from len(Changes)
 			}
-			ch := tx.Changes[idx]
-			changes = append(changes, changeEvent{
-				Op:      string(ch.Op),
-				Table:   ch.Table,
-				PK:      ch.PK,
-				Data:    ch.Data,
-				Changed: ch.Changed,
-			})
+			changes = append(changes, mkChangeEvent(tx.Changes[idx]))
 		}
 	}
 	return txEvent{

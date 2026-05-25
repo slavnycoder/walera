@@ -215,8 +215,9 @@ type WaleraTx = {
     op: "insert" | "update" | "delete";
     table: string;
     pk: string;
-    data?: Record<string, unknown>;     // present on insert; full row
-    changed?: Record<string, unknown>;  // present on update; diff only
+    // insert → full new row; update → only changed columns
+    // (absence ≠ null); delete → absent.
+    data?: Record<string, unknown>;
   }>;
 };
 ```

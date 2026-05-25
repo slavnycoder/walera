@@ -93,11 +93,10 @@ type txEventPayload struct {
 	TxID     uint32 `json:"tx_id"`
 	CommitTS string `json:"commit_ts"`
 	Changes  []struct {
-		Op      string         `json:"op"`
-		Table   string         `json:"table"`
-		PK      string         `json:"pk"`
-		Data    map[string]any `json:"data,omitempty"`
-		Changed map[string]any `json:"changed,omitempty"`
+		Op    string         `json:"op"`
+		Table string         `json:"table"`
+		PK    string         `json:"pk"`
+		Data  map[string]any `json:"data,omitempty"`
 	} `json:"changes"`
 }
 

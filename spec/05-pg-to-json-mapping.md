@@ -26,6 +26,6 @@ Use the **JS-safe** mapping: values that may lose precision in JavaScript `Numbe
 Notes:
 - `timestamp` without timezone is interpreted as UTC by default. Make this configurable: `naive_timestamp_assume_utc: true`.
 - `jsonb` is parsed for validity and embedded inline — the client should NOT need to `JSON.parse` it again.
-- In an update's `changed` map: **absence of a field means "not changed"**; presence with `null` means "now NULL". These are distinct.
+- In an UPDATE's `data` map (unified field — `op` disambiguates INSERT vs UPDATE shape): **absence of a field means "not changed"**; presence with `null` means "now NULL". These are distinct. (For INSERT, `data` is the full new row, so absence simply means the column was not present in the row, e.g. an unlogged TOAST.)
 
 Use pgoutput's text mode (the default). Binary mode is a possible future CPU optimization.

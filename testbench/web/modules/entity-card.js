@@ -5,7 +5,7 @@
 // UI-SPEC §3.4:
 //   • insert  → reveal the card; render all known fields
 //   • update  → update field values; toggle .field-changed for ~300 ms on each
-//               changed key listed in `change.changed`
+//               key listed in `change.data` (UPDATE carries only changed cols)
 //   • delete  → collapse the card (hide <dl>; show "row deleted at {ts}")
 //   • whitelist behaviour: <dt>/<dd> pairs are created lazily on first
 //     observed key so a demo-bob subscriber (id+status whitelist) never shows
@@ -164,12 +164,13 @@ export function mount(rootEl, _deps) {
         pending.op = "insert";
         continue;
       }
-      // Update — Walera sends `changed` as a key→new-value map containing
+      // Update — Walera sends `data` as a key→new-value map containing
       // ONLY the columns whose values changed (encoder.go §changeEvent:
-      // Changed for UPDATE; absence ≠ null per wal/types.go §"absence ≠ null").
-      const changed = change.changed && typeof change.changed === "object" ? change.changed : {};
-      for (const k of Object.keys(changed)) {
-        rowFields.set(k, changed[k]);
+      // unified `data` field; op disambiguates INSERT vs UPDATE shape;
+      // absence ≠ null per wal/types.go §"absence ≠ null").
+      const updated = change.data && typeof change.data === "object" ? change.data : {};
+      for (const k of Object.keys(updated)) {
+        rowFields.set(k, updated[k]);
         pending.changedFields.add(k);
       }
       if (pending.op !== "insert" && pending.op !== "delete") {
