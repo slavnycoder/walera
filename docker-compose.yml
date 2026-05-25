@@ -1,8 +1,7 @@
 # docker-compose.yml — root quick-start using the published Walera image.
 #
 # `docker compose up` boots:
-#   - postgres — postgres:18-alpine with wal_level=logical and the publication
-#                migration pre-applied to the `walera` database.
+#   - postgres — postgres:18-alpine with wal_level=logical enabled.
 #   - walera   — pulled from ghcr.io/slavnycoder/walera:latest, wired to the
 #                postgres service via the same config file the binary uses
 #                outside compose.
@@ -40,10 +39,6 @@ services:
       - "max_wal_senders=10"
     ports:
       - "5432:5432"
-    volumes:
-      # Init script runs on first boot only (when /var/lib/postgresql/data
-      # is empty). Recreate the volume to re-init.
-      - ./migrations/001_publication.sql.example:/docker-entrypoint-initdb.d/001_publication.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U walera -d walera"]
       interval: 2s
@@ -61,11 +56,14 @@ services:
       # connection. The role MUST hold the REPLICATION attribute; do NOT
       # append replication=database (Walera derives it).
       WALERA_DATABASE_URL: "postgres://walera:walera@postgres:5432/walera?sslmode=disable"
+      # With wal.bootstrap.mode=auto (config.yaml default), Walera creates
+      # this publication on startup when it is absent.
       WALERA_WAL_PUBLICATION_NAME: "cdc_sse_streamer"
       # Wire your own auth backend here. The defaults below point at a
       # placeholder host so the binary starts; readiness will stay 503 until
       # auth.backend_url answers.
       WALERA_AUTH_BACKEND_URL: "${AUTH_BACKEND_URL:-http://host.docker.internal:9000}"
+      WALERA_AUTH_ALLOW_PLAINTEXT: "1"
       WALERA_AUTH_SERVICE_TOKEN: "${AUTH_SERVICE_TOKEN:-service-token}"
       WALERA_HTTP_CORS_ORIGINS: "${CORS_ORIGINS:-http://localhost:3000,http://localhost:5173}"
       GOGC: "200"

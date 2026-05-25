@@ -1,8 +1,7 @@
 # docker-compose.dev.yaml — Walera local development quick-start (D4-24).
 #
 # `docker compose -f docker-compose.dev.yaml up` boots:
-#   - postgres   — postgres:18-alpine with wal_level=logical and the
-#                  publication migration pre-applied to the `walera` DB.
+#   - postgres   — postgres:18-alpine with wal_level=logical enabled.
 #   - walera     — Walera built from the local Dockerfile, configured to
 #                  stream from the postgres service.
 #
@@ -16,10 +15,8 @@
 #   - Postgres 18-alpine is used because it is the smallest official image
 #     that satisfies CLAUDE.md PG ≥ 14 (and matches Plan 04-04's testcontainers
 #     image baseline).
-#   - The migration is mounted as 001_publication.sql so postgres's
-#     /docker-entrypoint-initdb.d hook applies it on first boot only. After
-#     first boot, edits to the .example file have no effect — recreate the
-#     volume to re-init.
+#   - Publication bootstrap uses wal.bootstrap.mode=auto from config.yaml, so
+#     Walera creates the publication on startup when it is absent.
 
 services:
   postgres:
@@ -43,9 +40,6 @@ services:
       - "max_wal_senders=10"
     ports:
       - "5432:5432"
-    volumes:
-      # Init script runs on first boot only (when /var/lib/postgresql/data is empty).
-      - ./migrations/001_publication.sql.example:/docker-entrypoint-initdb.d/001_publication.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U walera -d walera"]
       interval: 2s
@@ -65,7 +59,7 @@ services:
       # connection. The role MUST hold the REPLICATION attribute; do NOT
       # append replication=database (Walera derives it).
       WALERA_DATABASE_URL: "postgres://walera:walera@postgres:5432/walera?sslmode=disable"
-      # Publication name created by the migration above.
+      # Publication name created by wal.bootstrap.mode=auto when absent.
       WALERA_WAL_PUBLICATION_NAME: "cdc_sse_streamer"
       # Go runtime tuning per D4-22.
       GOGC: "200"
