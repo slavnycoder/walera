@@ -63,10 +63,9 @@ func Test01BasicCRUD(t *testing.T) {
 	}
 
 	var payload struct {
-		TxID      uint32 `json:"tx_id"`
-		CommitLSN string `json:"commit_lsn"`
-		CommitTS  string `json:"commit_ts"`
-		Changes   []struct {
+		TxID     uint32 `json:"tx_id"`
+		CommitTS string `json:"commit_ts"`
+		Changes  []struct {
 			Op    string         `json:"op"`
 			Table string         `json:"table"`
 			PK    string         `json:"pk"`

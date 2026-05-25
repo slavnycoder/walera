@@ -171,8 +171,8 @@ API.
 
 ```text
 event: tx
-id: 0/16B23A8/735
-data: {"tx_id":735,"commit_lsn":"0/16B23A8","commit_ts":"2026-05-18T08:30:12.123456Z","changes":[{"op":"update","table":"orders","pk":"42","changed":{"status":"paid"}}]}
+id: 735
+data: {"tx_id":735,"commit_ts":"2026-05-18T08:30:12.123456Z","changes":[{"op":"update","table":"orders","pk":"42","changed":{"status":"paid"}}]}
 ```
 
 The `data` payload shape:
@@ -180,7 +180,6 @@ The `data` payload shape:
 ```ts
 type WaleraTx = {
   tx_id: number;
-  commit_lsn: string;
   commit_ts: string;
   changes: Array<{
     op: "insert" | "update" | "delete";

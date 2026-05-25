@@ -1,7 +1,7 @@
 // Package main — parser_test.go covers ParseFrame against the SSE wire
 // shapes produced by internal/sse/encoder.go (spec §3.5):
 //
-//	event: tx\nid: <commit_lsn>/<tx_id>\ndata: {...}\n\n
+//	event: tx\nid: <tx_id>\ndata: {...}\n\n
 //	event: error\ndata: {"reason":"..."}\n\n
 //	event: shutdown\ndata: {"reason":"service_restart"}\n\n
 //	:\n\n        (heartbeat — single SSE comment line)
@@ -16,7 +16,7 @@ import "testing"
 func TestParseFrame_HappyPath(t *testing.T) {
 	lines := []string{
 		"event: tx",
-		"id: 0/16B23A8/42",
+		"id: 42",
 		"data: {\"tx_id\":42}",
 	}
 	event, data, ok := ParseFrame(lines)
@@ -85,7 +85,7 @@ func TestParseFrame_MalformedNoData(t *testing.T) {
 func TestParseFrame_IgnoresIDLine(t *testing.T) {
 	// Defensive: the id: line is informational; if present without
 	// data: the frame is still incomplete.
-	_, _, ok := ParseFrame([]string{"event: tx", "id: 0/1/1"})
+	_, _, ok := ParseFrame([]string{"event: tx", "id: 1"})
 	if ok {
 		t.Fatal("ParseFrame ok=true for event+id without data; want false")
 	}

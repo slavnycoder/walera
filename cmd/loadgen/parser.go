@@ -4,7 +4,7 @@
 // Wire shape it accepts (spec §3.5, produced by internal/sse/encoder.go):
 //
 //	event: <name>\n
-//	id: <commit_lsn>/<tx_id>\n   (informational; consumed but not returned)
+//	id: <tx_id>\n                (informational; consumed but not returned)
 //	data: <payload>\n
 //	\n                           (blank-line frame terminator, applied by caller)
 //

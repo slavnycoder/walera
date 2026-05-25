@@ -90,10 +90,9 @@ func Test02TxAtomicity(t *testing.T) {
 // Lives in scenario_02 so it's free to evolve as later scenarios need more
 // fields; helpers in other scenario files use scenario-local shapes.
 type txEventPayload struct {
-	TxID      uint32 `json:"tx_id"`
-	CommitLSN string `json:"commit_lsn"`
-	CommitTS  string `json:"commit_ts"`
-	Changes   []struct {
+	TxID     uint32 `json:"tx_id"`
+	CommitTS string `json:"commit_ts"`
+	Changes  []struct {
 		Op      string         `json:"op"`
 		Table   string         `json:"table"`
 		PK      string         `json:"pk"`

@@ -27,13 +27,15 @@ var heartbeatBytes = []byte(":\n\n")
 var shutdownBytes = []byte("event: shutdown\ndata: {\"reason\":\"service_restart\"}\n\n")
 
 // txEvent is the JSON shape of one transaction event in the SSE data
-// payload. Lifted from cmd/cdc-sse/main.go verbatim so the encoding is
-// identical.
+// payload. The Postgres commit LSN is intentionally NOT exposed on the
+// wire — it is a physical WAL offset that leaks an internal Postgres
+// detail and has no client-visible semantics (Walera does not support
+// Last-Event-ID resume per spec §1.4). LSN remains available internally
+// for routing, auth-refresh ordering, logs, and metrics.
 type txEvent struct {
-	TxID      uint32        `json:"tx_id"`
-	CommitLSN string        `json:"commit_lsn"` // pglogrepl.LSN.String() — "0/16B23A8"
-	CommitTS  string        `json:"commit_ts"`  // time.RFC3339Nano UTC
-	Changes   []changeEvent `json:"changes"`
+	TxID     uint32        `json:"tx_id"`
+	CommitTS string        `json:"commit_ts"` // time.RFC3339Nano UTC
+	Changes  []changeEvent `json:"changes"`
 }
 
 // changeEvent is the JSON shape of one DML change within a tx event.
@@ -80,10 +82,9 @@ func txToEvent(tx wal.Tx, matched []int) txEvent {
 		}
 	}
 	return txEvent{
-		TxID:      tx.ID,
-		CommitLSN: tx.CommitLSN.String(),
-		CommitTS:  tx.CommitTS.UTC().Format(time.RFC3339Nano),
-		Changes:   changes,
+		TxID:     tx.ID,
+		CommitTS: tx.CommitTS.UTC().Format(time.RFC3339Nano),
+		Changes:  changes,
 	}
 }
 
@@ -110,10 +111,12 @@ func NewEncoder(maxPayloadBytes int) *Encoder {
 }
 
 // Encode produces the SSE frame bytes for one router.Event:
-// "event: tx\nid: <commit_lsn>/<tx_id>\ndata: <json>\n\n". Returns
-// (frameBytes, false) on success; (nil, true) when the serialized frame
-// exceeds maxPayloadBytes. The returned slice is a fresh copy — the
-// pooled buffer is returned before Encode returns.
+// "event: tx\nid: <tx_id>\ndata: <json>\n\n". The SSE id: field carries
+// only the Postgres transaction id (informational; Walera does not honour
+// Last-Event-ID on reconnect — spec §1.4). Returns (frameBytes, false) on
+// success; (nil, true) when the serialized frame exceeds maxPayloadBytes.
+// The returned slice is a fresh copy — the pooled buffer is returned
+// before Encode returns.
 func (e *Encoder) Encode(ev router.Event) ([]byte, bool) {
 	buf := e.bufPool.Get().(*bytes.Buffer)
 	defer func() {
@@ -123,8 +126,6 @@ func (e *Encoder) Encode(ev router.Event) ([]byte, bool) {
 
 	buf.WriteString("event: tx\n")
 	buf.WriteString("id: ")
-	buf.WriteString(ev.Tx.CommitLSN.String())
-	buf.WriteByte('/')
 	buf.WriteString(strconv.FormatUint(uint64(ev.Tx.ID), 10))
 	buf.WriteString("\ndata: ")
 
@@ -133,7 +134,7 @@ func (e *Encoder) Encode(ev router.Event) ([]byte, bool) {
 		// json.Marshal on these types effectively cannot fail short of an
 		// unsupported value inside Data/Changed. Emit a minimal placeholder
 		// so the writer loop stays simple.
-		payload = []byte(`{"tx_id":0,"commit_lsn":"","commit_ts":"","changes":[]}`)
+		payload = []byte(`{"tx_id":0,"commit_ts":"","changes":[]}`)
 	}
 	buf.Write(payload)
 	buf.WriteString("\n\n")

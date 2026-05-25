@@ -95,9 +95,11 @@ event.
 A single Postgres transaction is delivered as a single SSE event with
 a `changes` array. Row changes inside that array appear in WAL order
 (the order in which Postgres recorded them in the transaction). The
-event's `commit_lsn` and `commit_ts` identify the transaction at the
-WAL level; the `tx_id` matches Postgres's internal transaction
-identifier.
+event's `commit_ts` identifies the transaction's commit wall-clock;
+the `tx_id` matches Postgres's internal transaction identifier. The
+Postgres commit LSN is intentionally not exposed on the wire — it is
+a physical WAL offset with no client-visible semantics (Walera does
+not honour `Last-Event-ID` on reconnect).
 
 This per-transaction grouping is the transactionally-atomic delivery
 contract: a subscriber that receives the event has received a

@@ -8,8 +8,10 @@
 // `go test./...` invocation. This generator is run ONLY when the wire
 // intentionally changes, via `scripts/golden-capture.sh`.
 // The capture must be deterministic: the synthetic tx uses fixed PKs,
-// fixed timestamps, fixed commit_lsn, and a full-access (no-filter)
-// subscriber. No goroutines, no clocks read by the production code path
+// fixed timestamps, fixed tx_id, and a full-access (no-filter)
+// subscriber. (The synthetic CommitLSN is also fixed for internal-state
+// determinism, but it no longer appears on the wire.) No goroutines, no
+// clocks read by the production code path
 // (the encoder uses tx.CommitTS verbatim; the pool's connectedAt is
 // unused in the wire bytes).
 package sse

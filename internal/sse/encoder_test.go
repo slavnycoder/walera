@@ -57,8 +57,11 @@ func TestEncoder_TxInsert(t *testing.T) {
 	if !strings.HasPrefix(s, "event: tx\n") {
 		t.Fatalf("frame must start with %q; got %q", "event: tx\n", s[:min(len(s), 32)])
 	}
-	if !strings.Contains(s, "id: 0/16B23A8/7777\n") {
-		t.Fatalf("frame must contain %q; got: %s", "id: 0/16B23A8/7777\\n", s)
+	if !strings.Contains(s, "id: 7777\n") {
+		t.Fatalf("frame must contain %q; got: %s", "id: 7777\\n", s)
+	}
+	if strings.Contains(s, "commit_lsn") {
+		t.Fatalf("frame must NOT contain %q (LSN removed from wire); got: %s", "commit_lsn", s)
 	}
 	if !strings.Contains(s, "data: {") {
 		t.Fatalf("frame must contain %q; got: %s", "data: {", s)
@@ -81,10 +84,9 @@ func TestEncoder_TxInsert(t *testing.T) {
 	payload := s[dataStart : dataStart+dataEnd]
 
 	var got struct {
-		TxID      uint32 `json:"tx_id"`
-		CommitLSN string `json:"commit_lsn"`
-		CommitTS  string `json:"commit_ts"`
-		Changes   []struct {
+		TxID     uint32 `json:"tx_id"`
+		CommitTS string `json:"commit_ts"`
+		Changes  []struct {
 			Op    string         `json:"op"`
 			Table string         `json:"table"`
 			PK    string         `json:"pk"`
@@ -96,9 +98,6 @@ func TestEncoder_TxInsert(t *testing.T) {
 	}
 	if got.TxID != 7777 {
 		t.Errorf("tx_id = %d; want 7777", got.TxID)
-	}
-	if got.CommitLSN != "0/16B23A8" {
-		t.Errorf("commit_lsn = %q; want %q", got.CommitLSN, "0/16B23A8")
 	}
 	if _, err := time.Parse(time.RFC3339Nano, got.CommitTS); err != nil {
 		t.Errorf("commit_ts %q is not RFC3339Nano parseable: %v", got.CommitTS, err)

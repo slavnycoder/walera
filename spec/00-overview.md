@@ -37,7 +37,7 @@ This service streams PostgreSQL row-level changes to clients over Server-Sent Ev
 | 19 | Subscription index | Sharded hash-map with per-shard RWMutex |
 | 20 | Goroutines | 1 reader + 1 router + N writers (per subscriber) |
 | 21 | Slow consumer policy | Disconnect on buffer overflow |
-| 22 | SSE payload | `event: tx` with `tx_id`, `commit_lsn`, `commit_ts`, `changes[]` |
+| 22 | SSE payload | `event: tx` with `tx_id`, `commit_ts`, `changes[]` (commit LSN deliberately not exposed — internal-only) |
 | 23 | Keep-alive | SSE-comment `:\n\n` every ~15s + TCP keepalive |
 | 24 | Limits | Global concurrency, per-user rate, per-user max conns, max tx size, max payload size |
 | 25 | New subscriber cutoff | Starts from next COMMIT after registration; optional `?since_lsn=` |

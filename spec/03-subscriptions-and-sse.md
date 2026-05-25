@@ -72,8 +72,8 @@ Wildcard-specific tuning:
 
 ```
 event: tx
-id: 16B23A8/12345
-data: {"tx_id":12345,"commit_lsn":"0/16B23A8","commit_ts":"2026-05-14T10:23:45.123Z","changes":[...]}
+id: 12345
+data: {"tx_id":12345,"commit_ts":"2026-05-14T10:23:45.123Z","changes":[...]}
 
 ```
 
@@ -93,7 +93,7 @@ Rules:
 - `delete` — PK only (matches REPLICA IDENTITY DEFAULT behavior).
 - `table` is the bare table name (no schema). If multi-schema support is added later, this becomes `schema.table`.
 
-The SSE `id:` field is set to `{commit_lsn}/{tx_id}` for tracing. `Last-Event-ID` resume is NOT implemented — on reconnect, the client takes a fresh snapshot.
+The SSE `id:` field is set to `{tx_id}` for tracing. `Last-Event-ID` resume is NOT implemented — on reconnect, the client takes a fresh snapshot. The Postgres commit LSN is deliberately not exposed on the wire: it is a physical WAL offset that leaks an internal Postgres detail and carries no client-visible semantics. LSN remains available internally for routing, auth-refresh ordering, logs, and metrics.
 
 Other event types:
 - `event: error` — sent before disconnect when possible: `data: {"reason": "...", "details": "..."}`. Reasons: `auth_revoked`, `auth_unavailable`, `slow_consumer`, `tx_too_large`.

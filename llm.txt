@@ -210,7 +210,6 @@ Event payload TypeScript type:
 ```ts
 type WaleraTx = {
   tx_id: number;
-  commit_lsn: string;        // e.g. "0/16B23A8"
   commit_ts: string;         // RFC3339
   changes: Array<{
     op: "insert" | "update" | "delete";

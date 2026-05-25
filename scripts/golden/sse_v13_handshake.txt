@@ -1,8 +1,8 @@
 retry: 15000
 
 event: tx
-id: 0/16B374A/12345
-data: {"tx_id":12345,"commit_lsn":"0/16B374A","commit_ts":"2026-05-20T00:00:00Z","changes":[{"op":"insert","table":"users","pk":"42","data":{"name":"alice"}},{"op":"update","table":"users","pk":"42","changed":{"name":"bob"}},{"op":"delete","table":"users","pk":"42"}]}
+id: 12345
+data: {"tx_id":12345,"commit_ts":"2026-05-20T00:00:00Z","changes":[{"op":"insert","table":"users","pk":"42","data":{"name":"alice"}},{"op":"update","table":"users","pk":"42","changed":{"name":"bob"}},{"op":"delete","table":"users","pk":"42"}]}
 
 :
 
