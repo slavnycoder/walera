@@ -8,7 +8,7 @@
 # image — but it shares the same security/runtime posture as the walera
 # image so the testbench substrate is uniform:
 #
-#   Stage 1: golang:1.25-alpine → CGO-disabled static binary.
+#   Stage 1: golang:1.25.10-alpine → CGO-disabled static binary.
 #   Stage 2: gcr.io/distroless/static-debian12:nonroot → ships
 #            ca-certificates, /etc/passwd, /etc/group, tzdata; runs as
 #            UID 65532 (nonroot:nonroot).
@@ -36,10 +36,10 @@
 
 # WR-04 fix: pin base images by SHA256 digest for reproducibility +
 # supply-chain audit. Update quarterly via:
-#   docker pull golang:1.25-alpine && \
-#     docker inspect --format='{{index .RepoDigests 0}}' golang:1.25-alpine
-# (resolved 2026-05-17 against docker.io/library and gcr.io).
-FROM golang:1.25-alpine@sha256:8d22e29d960bc50cd025d93d5b7c7d220b1ee9aa7a239b3c8f55a57e987e8d45 AS build
+#   docker pull golang:1.25.10-alpine && \
+#     docker inspect --format='{{index .RepoDigests 0}}' golang:1.25.10-alpine
+# (resolved 2026-05-25 against docker.io/library and gcr.io).
+FROM golang:1.25.10-alpine@sha256:8d22e29d960bc50cd025d93d5b7c7d220b1ee9aa7a239b3c8f55a57e987e8d45 AS build
 WORKDIR /src
 
 # Cache go.mod / go.sum as a separate layer so source-only edits don't bust

@@ -403,12 +403,12 @@ if (( sc4_ok == 1 )); then
   fi
 fi
 
-# SC4.f — Go setup at the version pinned in go.mod.
+# SC4.f — Go setup uses the version pinned in go.mod.
 if (( sc4_ok == 1 )); then
-  if grep -Fq 'actions/setup-go@v5' "${WORKFLOW_FILE}" && grep -Eq "go-version:[[:space:]]*['\"]?1\.25" "${WORKFLOW_FILE}"; then
-    pass "SC4.f workflow uses actions/setup-go@v5 with go-version 1.25"
+  if grep -Fq 'actions/setup-go@v5' "${WORKFLOW_FILE}" && grep -Eq "go-version-file:[[:space:]]*go\\.mod" "${WORKFLOW_FILE}"; then
+    pass "SC4.f workflow uses actions/setup-go@v5 with go-version-file: go.mod"
   else
-    fail "SC4.f workflow missing setup-go@v5 or go-version 1.25"
+    fail "SC4.f workflow missing setup-go@v5 or go-version-file: go.mod"
     sc4_ok=0
   fi
 fi
