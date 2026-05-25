@@ -128,7 +128,7 @@ func BenchmarkIndexChurn(b *testing.B) {
 			b.ReportAllocs()
 			for b.Loop() {
 				idx.Add(churnKey, churnSub)
-				idx.Remove(churnKey)
+				idx.Remove(churnKey, churnSub)
 			}
 		})
 	}

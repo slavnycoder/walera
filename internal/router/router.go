@@ -115,7 +115,7 @@ func (b *Broadcaster) Deregister(sub *Subscriber) {
 	switch sub.Kind() {
 	case KindExact:
 		key := sub.Schema() + "." + sub.Table() + ":" + sub.PK()
-		b.exact.Remove(key)
+		b.exact.Remove(key, sub)
 		b.metrics.SubscribersActive(string(KindExact)).Dec()
 		b.log.Info().
 			Str("subscriber_id", sub.ID()).
@@ -167,7 +167,7 @@ func (b *Broadcaster) routeTx(tx wal.Tx) {
 	}
 }
 
-func (b *Broadcaster) matchExact(key string) *Subscriber {
+func (b *Broadcaster) matchExact(key string) []*Subscriber {
 	return b.exact.Lookup(key)
 }
 
@@ -177,7 +177,7 @@ func (b *Broadcaster) matchWildcard(key string) []*Subscriber {
 
 func (b *Broadcaster) mergeMatches(tx wal.Tx, matched map[*Subscriber][]int) {
 	for i, ch := range tx.Changes {
-		if sub := b.matchExact(ch.Key()); sub != nil {
+		for _, sub := range b.matchExact(ch.Key()) {
 			matched[sub] = append(matched[sub], i)
 		}
 		for _, sub := range b.matchWildcard(ch.WildcardKey()) {

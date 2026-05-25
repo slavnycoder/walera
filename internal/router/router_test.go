@@ -486,6 +486,69 @@ func TestBroadcaster_ExactFanOut_SingleMatch(t *testing.T) {
 	<-done
 }
 
+// TestBroadcaster_ExactFanOut_MultipleSubscribersSameRow verifies exact
+// subscriptions support more than one client on the same schema.table:pk and
+// deregister by subscriber pointer rather than deleting the whole key.
+func TestBroadcaster_ExactFanOut_MultipleSubscribersSameRow(t *testing.T) {
+	t.Parallel()
+
+	b, reg := mkBroadcaster(10000)
+	a := mkExactSub("public", "users", "42", 0, 4)
+	c := mkExactSub("public", "users", "42", 0, 4)
+	recordedFor(t, a).useEncoder(b.enc.(*stubEncoder))
+	recordedFor(t, c).useEncoder(b.enc.(*stubEncoder))
+	b.Register(a)
+	b.Register(c)
+
+	if got, want := b.ExactLen(), 2; got != want {
+		t.Fatalf("ExactLen after two exact subscribers: got %d; want %d", got, want)
+	}
+	if v := gatherGauge(t, reg, "walera_subscribers_active", "type", "exact"); v != 2 {
+		t.Fatalf("subscribers_active{type=exact} after two Registers: got %v; want 2", v)
+	}
+
+	txCh := make(chan wal.Tx, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done, _ := runIngest(b, ctx, txCh)
+
+	sendTx(t, txCh, mkTx(pglogrepl.LSN(0x110), 11, mkChange(wal.OpInsert, "public", "users", "42")))
+
+	for _, sub := range []*Subscriber{a, c} {
+		ev := drainOne(t, sub, 200*time.Millisecond)
+		if got, want := ev.MatchedIndices, []int{0}; !equalInts(got, want) {
+			t.Errorf("subscriber %s MatchedIndices: got %v; want %v", sub.ID(), got, want)
+		}
+	}
+
+	b.Deregister(a)
+	if got, want := b.ExactLen(), 1; got != want {
+		t.Fatalf("ExactLen after deregistering one exact subscriber: got %d; want %d", got, want)
+	}
+	if v := gatherGauge(t, reg, "walera_subscribers_active", "type", "exact"); v != 1 {
+		t.Fatalf("subscribers_active{type=exact} after one Deregister: got %v; want 1", v)
+	}
+
+	sendTx(t, txCh, mkTx(pglogrepl.LSN(0x120), 12, mkChange(wal.OpUpdate, "public", "users", "42")))
+
+	expectNoFrame(t, a, 50*time.Millisecond)
+	ev := drainOne(t, c, 200*time.Millisecond)
+	if got, want := ev.MatchedIndices, []int{0}; !equalInts(got, want) {
+		t.Errorf("remaining subscriber MatchedIndices: got %v; want %v", got, want)
+	}
+
+	b.Deregister(c)
+	if got, want := b.ExactLen(), 0; got != want {
+		t.Errorf("ExactLen after deregistering both exact subscribers: got %d; want %d", got, want)
+	}
+	if v := gatherGauge(t, reg, "walera_subscribers_active", "type", "exact"); v != 0 {
+		t.Errorf("subscribers_active{type=exact} after both Deregisters: got %v; want 0", v)
+	}
+
+	cancel()
+	<-done
+}
+
 // TestBroadcaster_WildcardFanOut_MultiChange confirms that a wildcard
 // subscriber receives ONE Event aggregating ALL matching changes in a tx
 // (transactional atomicity preserved via per-subscriber accumulation).

@@ -11,7 +11,7 @@ const numShards = 8
 
 type shard struct {
 	mu   sync.RWMutex
-	subs map[string]*Subscriber
+	subs map[string]map[*Subscriber]struct{}
 }
 
 type index struct {
@@ -21,7 +21,7 @@ type index struct {
 func newIndex() *index {
 	idx := &index{}
 	for i := range idx.shards {
-		idx.shards[i].subs = make(map[string]*Subscriber, 16)
+		idx.shards[i].subs = make(map[string]map[*Subscriber]struct{}, 16)
 	}
 	return idx
 }
@@ -33,23 +33,40 @@ func (idx *index) shardFor(key string) *shard {
 func (idx *index) Add(key string, sub *Subscriber) {
 	s := idx.shardFor(key)
 	s.mu.Lock()
-	s.subs[key] = sub
+	if s.subs[key] == nil {
+		s.subs[key] = make(map[*Subscriber]struct{}, 1)
+	}
+	s.subs[key][sub] = struct{}{}
 	s.mu.Unlock()
 }
 
-func (idx *index) Remove(key string) {
+func (idx *index) Remove(key string, sub *Subscriber) {
 	s := idx.shardFor(key)
 	s.mu.Lock()
-	delete(s.subs, key)
+	subs := s.subs[key]
+	if len(subs) > 0 {
+		delete(subs, sub)
+		if len(subs) == 0 {
+			delete(s.subs, key)
+		}
+	}
 	s.mu.Unlock()
 }
 
-func (idx *index) Lookup(key string) *Subscriber {
+func (idx *index) Lookup(key string) []*Subscriber {
 	s := idx.shardFor(key)
 	s.mu.RLock()
-	sub := s.subs[key]
+	subs := s.subs[key]
+	if len(subs) == 0 {
+		s.mu.RUnlock()
+		return nil
+	}
+	out := make([]*Subscriber, 0, len(subs))
+	for sub := range subs {
+		out = append(out, sub)
+	}
 	s.mu.RUnlock()
-	return sub
+	return out
 }
 
 func (idx *index) Len() int {
@@ -57,7 +74,9 @@ func (idx *index) Len() int {
 	for i := range idx.shards {
 		s := &idx.shards[i]
 		s.mu.RLock()
-		total += len(s.subs)
+		for _, subs := range s.subs {
+			total += len(subs)
+		}
 		s.mu.RUnlock()
 	}
 	return total
@@ -68,8 +87,10 @@ func (idx *index) Snapshot() []*Subscriber {
 	for i := range idx.shards {
 		s := &idx.shards[i]
 		s.mu.RLock()
-		for _, sub := range s.subs {
-			out = append(out, sub)
+		for _, subs := range s.subs {
+			for sub := range subs {
+				out = append(out, sub)
+			}
 		}
 		s.mu.RUnlock()
 	}
