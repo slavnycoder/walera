@@ -105,12 +105,10 @@ services:
       # WALERA_HOST_PORT in .env (default 8080).
       - "127.0.0.1:${WALERA_HOST_PORT:-8080}:8080"
     environment:
-      # PG — service-DNS (NO host.docker.internal); replication DSN MUST
-      # include &replication=database (Pitfall 6 / pglogrepl requirement;
-      # spec §1). POSTGRES_PASSWORD is the same credential Phase 05 enforces
-      # at line 16 above.
-      WALERA_WAL_POSTGRES_DSN: "postgres://walera:${POSTGRES_PASSWORD}@postgres:5432/walera?sslmode=disable"
-      WALERA_WAL_REPLICATION_DSN: "postgres://walera:${POSTGRES_PASSWORD}@postgres:5432/walera?sslmode=disable&replication=database"
+      # PG — service-DNS (NO host.docker.internal). Walera derives both the
+      # admin and replication DSNs from this single base DSN; do not append
+      # replication=database here.
+      WALERA_DATABASE_URL: "postgres://walera:${POSTGRES_PASSWORD}@postgres:5432/walera?sslmode=disable"
       WALERA_WAL_PUBLICATION_NAME: "cdc_sse_streamer"
       # Auth — Phase 05 mock-auth on the testbench-net bridge. The env var
       # below maps to koanf path auth.backend_url (config.go:351 validation).
