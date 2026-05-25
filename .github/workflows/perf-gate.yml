@@ -139,4 +139,5 @@ jobs:
 
       - name: Compose down (always; t.Cleanup primary, this is belt-and-braces)
         if: always()
-        run: cd testbench && docker compose down -v --remove-orphans || true
+        working-directory: testbench
+        run: docker compose down -v --remove-orphans || true
