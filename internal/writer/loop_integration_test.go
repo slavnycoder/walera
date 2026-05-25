@@ -1,9 +1,5 @@
 //go:build integration
 
-// Package writer — loop_integration_test.go boots a testcontainers Postgres
-// with the testbench demo schema and exercises commitOnce end-to-end. The
-// build tag keeps these tests out of the default `go test ./...` run so unit
-// tests stay fast; CI invokes `go test -tags=integration` separately.
 package writer
 
 import (
@@ -22,11 +18,9 @@ import (
 	"github.com/testcontainers/testcontainers-go/wait"
 )
 
-// schemaSQL returns the testbench/migrations/002_demo_schema.sql contents.
-// The integration test resolves the path relative to repo root.
 func schemaSQL(t *testing.T) string {
 	t.Helper()
-	// Resolve repo root from the test working dir (internal/writer).
+
 	cwd, err := os.Getwd()
 	if err != nil {
 		t.Fatalf("getwd: %v", err)
@@ -35,8 +29,6 @@ func schemaSQL(t *testing.T) string {
 	return filepath.Join(root, "testbench", "migrations", "002_demo_schema.sql")
 }
 
-// bootPG launches PostgreSQL 18 with logical replication enabled and the
-// demo schema applied (001 publication + 002 demo). Returns the admin DSN.
 func bootPG(t *testing.T) string {
 	t.Helper()
 	ctx := context.Background()
@@ -59,8 +51,7 @@ func bootPG(t *testing.T) string {
 		testcontainers.WithEnv(map[string]string{
 			"POSTGRES_INITDB_ARGS": "",
 		}),
-		// Logical replication is not strictly required for these writer tests
-		// but matches the testbench production posture.
+
 		testcontainers.WithWaitStrategy(
 			wait.ForLog("database system is ready to accept connections").
 				WithOccurrence(2).
@@ -116,7 +107,6 @@ func TestCommitOnce_Orders_FiresRootBumpTrigger(t *testing.T) {
 		t.Fatalf("commitOnce orders: %v", err)
 	}
 
-	// The most recently inserted orders row should have 2 line_items.
 	var liCount int
 	if err := p.QueryRow(ctx,
 		"SELECT COUNT(*) FROM line_items WHERE orders_id = (SELECT MAX(id) FROM orders)").Scan(&liCount); err != nil {
@@ -126,7 +116,6 @@ func TestCommitOnce_Orders_FiresRootBumpTrigger(t *testing.T) {
 		t.Errorf("line_items count for newest orders = %d, want 2", liCount)
 	}
 
-	// The trigger should have bumped orders.updated_at to ~now.
 	var bumped bool
 	if err := p.QueryRow(ctx,
 		"SELECT updated_at > NOW() - interval '5 seconds' FROM orders WHERE id = (SELECT MAX(id) FROM orders)").Scan(&bumped); err != nil {
@@ -187,8 +176,6 @@ func TestCommitOnce_TxTimeout(t *testing.T) {
 	}
 }
 
-// Sanity: confirm the demo schema is reachable through pgx directly (helps
-// debug environment misconfigurations).
 func TestBootPG_Reachable(t *testing.T) {
 	dsn := bootPG(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -209,8 +196,6 @@ func TestBootPG_Reachable(t *testing.T) {
 	}
 }
 
-// guard against accidental imports tree-shaking pgxpool out of go.sum.
 var _ = pgxpool.Pool{}
 
-// unused helper kept to silence the formatter when we later wire mock probes.
 func _unused() { _ = fmt.Sprintf("") }

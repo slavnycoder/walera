@@ -1,6 +1,3 @@
-// Package sse — pool_panic_test.go covers the NewPool construction
-// gate: each required Deps field must panic with the exact format
-// "sse.NewPool: Deps.<Field> is required".
 package sse
 
 import (
@@ -43,8 +40,6 @@ func TestNewPool_PanicsOnNilDeps(t *testing.T) {
 	}
 }
 
-// assertSSEPanic mirrors require.PanicsWithValue without pulling in
-// testify. Shared with handler_panic_test.go via package-local scope.
 func assertSSEPanic(t *testing.T, want any, fn func()) {
 	t.Helper()
 	defer func() {

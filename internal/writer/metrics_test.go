@@ -1,7 +1,3 @@
-// Package writer — metrics_test.go covers the private WriterRegistry that
-// owns the Prometheus metric set. Tests assert counter / gauge values via
-// the gatherer's Gather() output and prometheus/testutil helpers without
-// touching the global default registry.
 package writer
 
 import (
@@ -13,8 +9,6 @@ import (
 	dto "github.com/prometheus/client_model/go"
 )
 
-// helperFamilies returns metric-family names from the registry in sorted
-// order for stable assertions.
 func helperFamilies(t *testing.T, r *WriterRegistry) []string {
 	t.Helper()
 	mf, err := r.Gatherer().Gather()
@@ -29,8 +23,6 @@ func helperFamilies(t *testing.T, r *WriterRegistry) []string {
 	return names
 }
 
-// findFamily looks up a metric family by name in the gathered output.
-// Returns nil when not present.
 func findFamily(t *testing.T, r *WriterRegistry, name string) *dto.MetricFamily {
 	t.Helper()
 	mf, err := r.Gatherer().Gather()
@@ -45,8 +37,6 @@ func findFamily(t *testing.T, r *WriterRegistry, name string) *dto.MetricFamily 
 	return nil
 }
 
-// metricValueByLabels returns the float value of a metric in family `name`
-// matching every label in `want`. Returns (-1, false) when no series matches.
 func metricValueByLabels(t *testing.T, r *WriterRegistry, name string, want map[string]string) (float64, bool) {
 	t.Helper()
 	fam := findFamily(t, r, name)
@@ -79,10 +69,6 @@ NEXT:
 func TestNewRegistry_RegistersExpectedMetrics(t *testing.T) {
 	r := NewRegistry()
 
-	// Materialise the Vec families that don't have statically-known label
-	// values so the gather output includes them. Prometheus does not emit
-	// CounterVec/GaugeVec children until WithLabelValues materialises them
-	// (the pre-touch pattern used in internal/metrics for known-label series).
 	r.TxTotal("steady", "orders")
 	r.RowsTotal("steady", "orders", "insert", 0)
 	r.SetActiveScenario("steady")
@@ -90,12 +76,11 @@ func TestNewRegistry_RegistersExpectedMetrics(t *testing.T) {
 
 	names := helperFamilies(t, r)
 
-	// All writer_* families must be present in the gather output now.
 	want := []string{
 		"writer_tx_total",
 		"writer_rows_total",
 		"writer_commit_rate",
-		"writer_errors_total", // pre-touched in NewRegistry for known reasons.
+		"writer_errors_total",
 		"writer_scenario",
 		"writer_overload_events_total",
 		"writer_pool_busy",
@@ -111,16 +96,11 @@ func TestNewRegistry_RegistersExpectedMetrics(t *testing.T) {
 		}
 	}
 
-	// Smoke-check that the Go runtime collector is registered.
 	if !have["go_goroutines"] {
 		t.Errorf("go_goroutines missing — Go runtime collector not registered")
 	}
 }
 
-// TestNewRegistry_PreTouchesErrorReasons ensures every classify() label
-// (pg_conn|pg_constraint|pg_other|tx_timeout) is visible in /metrics from
-// t=0 without waiting for the first error — required for dashboards / alert
-// rules that reference specific reason labels.
 func TestNewRegistry_PreTouchesErrorReasons(t *testing.T) {
 	r := NewRegistry()
 	for _, reason := range []string{"pg_conn", "pg_constraint", "pg_other", "tx_timeout"} {
@@ -158,10 +138,6 @@ func TestRowsTotal_Labels(t *testing.T) {
 	}
 }
 
-// TestSetCommitRate_ResetsOnScenarioSwitch documents the CONTEXT-locked
-// decision: SetActiveScenario calls commitRate.Reset() so that the old-scenario
-// series is REMOVED from the gather output (not merely set to 0). The next
-// SetCommitRate(new, value) call recreates the series for the new scenario.
 func TestSetCommitRate_ResetsOnScenarioSwitch(t *testing.T) {
 	r := NewRegistry()
 	r.SetCommitRate("smoke", 5)
@@ -173,8 +149,6 @@ func TestSetCommitRate_ResetsOnScenarioSwitch(t *testing.T) {
 	r.SetActiveScenario("steady")
 	r.SetCommitRate("steady", 100)
 
-	// After Reset() + SetCommitRate for steady, the smoke series should be
-	// gone from the gather output entirely.
 	if v, ok := metricValueByLabels(t, r, "writer_commit_rate",
 		map[string]string{"scenario": "smoke"}); ok {
 		t.Errorf("smoke series still present after Reset() — value=%v (expected removed)", v)
@@ -195,7 +169,7 @@ func TestSetActiveScenario(t *testing.T) {
 	}
 
 	r.SetActiveScenario("spike")
-	// Old steady series removed (Reset semantics).
+
 	if _, ok := metricValueByLabels(t, r, "writer_scenario",
 		map[string]string{"scenario": "steady"}); ok {
 		t.Errorf("steady series still present after switch to spike")
@@ -253,8 +227,6 @@ func TestUptime(t *testing.T) {
 	}
 }
 
-// TestNewRegistry_HelpStringsPresent ensures every writer_* family has a
-// non-empty Help string (operator-readability invariant).
 func TestNewRegistry_HelpStringsPresent(t *testing.T) {
 	r := NewRegistry()
 	mf, _ := r.Gatherer().Gather()

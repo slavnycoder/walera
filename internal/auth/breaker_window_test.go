@@ -1,9 +1,3 @@
-// Package auth — breaker_window_test.go validates the 30-bucket sliding-window
-// ring buffer that backs the circuit-breaker failure-rate calculation.
-//
-// All tests live in `package auth` because window, bucket, newWindow, Record,
-// FailureRate, and tick are unexported. The same-package convention mirrors
-// the existing internal/auth/map_test.go.
 package auth
 
 import (
@@ -83,7 +77,7 @@ func TestWindow_AcrossBuckets(t *testing.T) {
 	if total != 15 {
 		t.Errorf("total: got %d; want 15", total)
 	}
-	// 10/15 ≈ 0.6667
+
 	if rate < 0.66 || rate > 0.67 {
 		t.Errorf("rate: got %v; want in [0.66, 0.67]", rate)
 	}
@@ -95,8 +89,7 @@ func TestWindow_RotationZeroesEnteringBucket(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		w.Record(true)
 	}
-	// 30 ticks rotates fully back to the starting bucket; the entering-bucket
-	// zero on the last rotation wipes the original 5 successes.
+
 	for i := 0; i < 30; i++ {
 		w.tick()
 	}
@@ -125,7 +118,7 @@ func TestWindow_PartialRotationKeepsRecentBuckets(t *testing.T) {
 	if total != 15 {
 		t.Errorf("total: got %d; want 15", total)
 	}
-	// 10/15 ≈ 0.6667
+
 	if rate < 0.66 || rate > 0.67 {
 		t.Errorf("rate: got %v; want in [0.66, 0.67]", rate)
 	}

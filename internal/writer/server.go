@@ -1,7 +1,3 @@
-// Package writer — server.go stands up the writer binary's HTTP control
-// surface: GET /healthz, GET /metrics, POST /control. Handlers mutate the
-// active scenarioState behind an atomic.Pointer; the commit loop picks the
-// new value up on its next iteration. See INVARIANTS.md.
 package writer
 
 import (
@@ -25,8 +21,6 @@ const (
 	httpIdleTimeout       = 60 * time.Second
 )
 
-// ServerDeps bundles the runtime references the HTTP handlers mutate.
-// See INVARIANTS.md (atomic-pointer publication, CORS contract).
 type ServerDeps struct {
 	Limiter      *rate.Limiter
 	ScenarioPtr  *atomic.Pointer[scenarioState]
@@ -37,36 +31,28 @@ type ServerDeps struct {
 	CORSOrigins  []string
 }
 
-// controlRequest is the JSON body shape accepted by POST /control. Pointer
-// fields preserve "absent → leave unchanged" semantics.
 type controlRequest struct {
 	CommitRate *float64 `json:"commit_rate,omitempty"`
 	RowsPerTx  *int     `json:"rows_per_tx,omitempty"`
 	Scenario   *string  `json:"scenario,omitempty"`
 }
 
-// controlResponse is the JSON body returned by /control after a successful
-// apply: the full current effective config (not just the diff).
 type controlResponse struct {
 	CommitRate float64 `json:"commit_rate"`
 	RowsPerTx  int     `json:"rows_per_tx"`
 	Scenario   string  `json:"scenario"`
 }
 
-// healthzResponse is the JSON body returned by /healthz.
 type healthzResponse struct {
 	Status        string  `json:"status"`
 	UptimeSeconds float64 `json:"uptime_seconds"`
 	Scenario      string  `json:"scenario"`
 }
 
-// ServerConfig is the value-type bag for NewServer.
 type ServerConfig struct {
 	Addr string
 }
 
-// validateServerDeps panics with the canonical message format when any
-// required ServerDeps field is nil. Logger is exempt (zero value usable).
 func validateServerDeps(d ServerDeps) {
 	if d.Limiter == nil {
 		panic("writer.NewServer: Deps.Limiter is required")
@@ -79,8 +65,6 @@ func validateServerDeps(d ServerDeps) {
 	}
 }
 
-// NewServer builds the *http.Server with /healthz, /metrics, /control
-// registered on a fresh http.ServeMux.
 func NewServer(cfg ServerConfig, deps ServerDeps) *http.Server {
 	validateServerDeps(deps)
 	mux := http.NewServeMux()
@@ -103,7 +87,6 @@ func NewServer(cfg ServerConfig, deps ServerDeps) *http.Server {
 	}
 }
 
-// healthzHandler emits the {status,uptime_seconds,scenario} JSON body.
 func healthzHandler(deps ServerDeps) http.HandlerFunc {
 	return func(w http.ResponseWriter, _ *http.Request) {
 		st := deps.ScenarioPtr.Load()
@@ -122,10 +105,6 @@ func healthzHandler(deps ServerDeps) http.HandlerFunc {
 	}
 }
 
-// decodeControlRequest caps the body, decodes JSON, and validates the
-// per-field bounds. On any failure it writes the 400 response itself and
-// returns ok=false. Unknown JSON fields are silently ignored (forward
-// compatibility — see INVARIANTS.md).
 func decodeControlRequest(w http.ResponseWriter, r *http.Request) (controlRequest, bool) {
 	r.Body = http.MaxBytesReader(w, r.Body, controlBodyMaxBytes)
 
@@ -149,9 +128,6 @@ func decodeControlRequest(w http.ResponseWriter, r *http.Request) (controlReques
 	return req, true
 }
 
-// controlMerge is the snapshot+merge result: the effective scenario name,
-// rate, rows, and (separately) the previous scenario state to preserve
-// StartedAt on a partial update.
 type controlMerge struct {
 	prev         *scenarioState
 	prevName     string
@@ -160,9 +136,6 @@ type controlMerge struct {
 	newRowsPerTx int
 }
 
-// resolveControlMutation snapshots the current scenarioState and folds the
-// request fields over it. Returns ok=false (and writes a 400) when there is
-// no prior state and the request did not supply a scenario name.
 func resolveControlMutation(deps ServerDeps, w http.ResponseWriter, req controlRequest) (controlMerge, bool) {
 	prev := deps.ScenarioPtr.Load()
 	m := controlMerge{prev: prev}
@@ -188,9 +161,6 @@ func resolveControlMutation(deps ServerDeps, w http.ResponseWriter, req controlR
 	return m, true
 }
 
-// applyControlMutation publishes the new scenarioState, retunes the limiter,
-// and updates the Registry. The order matters — see INVARIANTS.md
-// (scenario-publication ordering, StartedAt preservation).
 func applyControlMutation(deps ServerDeps, w http.ResponseWriter, req controlRequest, m controlMerge) bool {
 	activeScenario := BuildScenario(m.newName, m.newRate, m.newRowsPerTx, deps.RampDuration)
 	if activeScenario == nil {
@@ -218,7 +188,6 @@ func applyControlMutation(deps ServerDeps, w http.ResponseWriter, req controlReq
 	return true
 }
 
-// respondControl emits the 200 + controlResponse JSON body.
 func respondControl(w http.ResponseWriter, m controlMerge) {
 	resp := controlResponse{
 		CommitRate: m.newRate,
@@ -230,7 +199,6 @@ func respondControl(w http.ResponseWriter, m controlMerge) {
 	_ = json.NewEncoder(w).Encode(resp)
 }
 
-// controlHandler returns the closure that backs POST /control.
 func controlHandler(deps ServerDeps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		req, ok := decodeControlRequest(w, r)
@@ -248,8 +216,6 @@ func controlHandler(deps ServerDeps) http.HandlerFunc {
 	}
 }
 
-// applyCORSHeaders mirrors internal/sse.handleCORS. See INVARIANTS.md (CORS).
-// Returns true when ACAO was set so callers can act on the match.
 func applyCORSHeaders(w http.ResponseWriter, r *http.Request, allowed []string) bool {
 	if len(allowed) == 0 {
 		return false
@@ -269,8 +235,6 @@ func applyCORSHeaders(w http.ResponseWriter, r *http.Request, allowed []string) 
 	return false
 }
 
-// withCORS wraps a handler so cross-origin POST /control requests get the
-// reflected Access-Control-Allow-Origin header on origin match.
 func withCORS(h http.HandlerFunc, allowed []string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		applyCORSHeaders(w, r, allowed)
@@ -278,8 +242,6 @@ func withCORS(h http.HandlerFunc, allowed []string) http.HandlerFunc {
 	}
 }
 
-// preflightHandler returns the OPTIONS /control responder. Always 204; the
-// ACAO+ACAM+ACAH headers are emitted only when the Origin matches.
 func preflightHandler(allowed []string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		matched := applyCORSHeaders(w, r, allowed)
@@ -292,7 +254,6 @@ func preflightHandler(allowed []string) http.HandlerFunc {
 	}
 }
 
-// writeError emits a JSON error body with the supplied status.
 func writeError(w http.ResponseWriter, status int, msg string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)

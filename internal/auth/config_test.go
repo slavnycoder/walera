@@ -60,8 +60,6 @@ func TestLoadConfig_HTTPSOverrideAccepted(t *testing.T) {
 	}
 }
 
-// TestLoadConfig_BreakerCooldownLessThanRequestTimeout exercises the
-// cross-field combination rule on the auth breaker (cooldown >= request_timeout).
 func TestLoadConfig_BreakerCooldownLessThanRequestTimeout(t *testing.T) {
 	k := newK(t)
 	_ = k.Set("auth.request_timeout", "5s")
@@ -75,7 +73,6 @@ func TestLoadConfig_BreakerCooldownLessThanRequestTimeout(t *testing.T) {
 	}
 }
 
-// TestLoadConfig_BackendURLSchemaRules covers BackendURL parse rules.
 func TestLoadConfig_BackendURLSchemaRules(t *testing.T) {
 	cases := []struct {
 		name        string

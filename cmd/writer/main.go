@@ -1,15 +1,3 @@
-// Command writer drives quantitative, scenario-named load against the
-// testbench Postgres. Six built-in scenarios (smoke, ramp-up, steady,
-// spike, soak, stress); single commit goroutine paced by a token-bucket
-// limiter with optional Poisson inter-arrival overlay.
-//
-// Usage:
-//
-//	./writer [--config path] [--scenario name|list] [--commit-rate N]
-//	         [--rows-per-tx N] [--pg-dsn DSN] [--pool-max-conns N]
-//	         [--http-addr :PORT] [--target-tables a,b,c]
-//	         [--arrival-distribution poisson|uniform] [--ramp-duration 5m]
-//	         [--log-level debug|info|warn|error] [-healthcheck]
 package main
 
 import (
@@ -35,9 +23,6 @@ import (
 	"github.com/walera/walera/internal/writer"
 )
 
-// writerFlags bundles the flag.* pointers populated by registerFlags so the
-// startup helpers can address them by name without dragging the flag set
-// through every signature.
 type writerFlags struct {
 	configPath   *string
 	scenarioName *string
@@ -115,11 +100,6 @@ func main() {
 	gracefulShutdown(srv, commitDone, logger)
 }
 
-// runHealthcheck implements the -healthcheck short-circuit. Resolves the
-// bound port via the same precedence chain the real server uses
-// (defaults < YAML < env < flag) so flag / YAML changes are honoured.
-// Never touches Postgres; ignores Load errors and falls back to
-// flag / env / default port resolution.
 func runHealthcheck(configPath, httpAddrFlag string) {
 	addr := ""
 	if cfg, err := writer.Load(configPath, flag.CommandLine); err == nil {
@@ -148,8 +128,6 @@ func runHealthcheck(configPath, httpAddrFlag string) {
 	os.Exit(0)
 }
 
-// printScenarioList prints the six registered scenario names in a fixed
-// order and exits 0. Used by `writer --scenario list` for operator UX.
 func printScenarioList() {
 	reg := writer.Registry()
 	order := []string{"smoke", "ramp-up", "steady", "spike", "soak", "stress"}
@@ -165,8 +143,6 @@ func newLogger() zerolog.Logger {
 	return zerolog.New(os.Stderr).With().Timestamp().Caller().Logger()
 }
 
-// setMaxprocs reads the cgroup CPU quota and sets GOMAXPROCS accordingly.
-// Errors are logged at warn; never fatal.
 func setMaxprocs(logger zerolog.Logger) {
 	_, err := maxprocs.Set(maxprocs.Logger(func(format string, args ...interface{}) {
 		logger.Info().Msgf("maxprocs: "+format, args...)
@@ -176,8 +152,6 @@ func setMaxprocs(logger zerolog.Logger) {
 	}
 }
 
-// loadConfig runs the koanf precedence chain (defaults < YAML < env < flags)
-// and fatals on validation failure.
 func loadConfig(configPath string, logger zerolog.Logger) *writer.WriterConfig {
 	cfg, err := writer.Load(configPath, flag.CommandLine)
 	if err != nil {
@@ -194,8 +168,6 @@ func applyLogLevel(logger zerolog.Logger, level string) zerolog.Logger {
 	return logger.Level(zerolog.InfoLevel)
 }
 
-// newScenarioPtr constructs the initial scenario state and wraps it in an
-// atomic pointer so the /control handler can swap it without locks.
 func newScenarioPtr(cfg *writer.WriterConfig) *atomic.Pointer[writer.ScenarioStateExport] {
 	scenario := buildScenarioFromConfig(cfg)
 	state := writer.NewScenarioState(scenario, time.Now(), cfg.Scenario.CommitRate, cfg.Scenario.RowsPerTx, cfg.PG.TargetTables)
@@ -211,8 +183,6 @@ func newRegistryWithScenario(cfg *writer.WriterConfig) *writer.WriterRegistry {
 	return reg
 }
 
-// samplePoolStats polls pgxpool.Stat every second to drive the writer_pool_*
-// gauges. Returns when ctx is cancelled.
 func samplePoolStats(ctx context.Context, pool *pgxpool.Pool, reg *writer.WriterRegistry) {
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
@@ -227,9 +197,6 @@ func samplePoolStats(ctx context.Context, pool *pgxpool.Pool, reg *writer.Writer
 	}
 }
 
-// runScenarioTicker drives scenario.Tick at 100ms cadence and pushes any
-// commit-rate change into the limiter + writer_commit_rate gauge so
-// /metrics reflects target rate without waiting for a /control POST.
 func runScenarioTicker(
 	ctx context.Context,
 	scenarioPtr *atomic.Pointer[writer.ScenarioStateExport],
@@ -256,12 +223,6 @@ func runScenarioTicker(
 	}
 }
 
-// launchCommitLoop starts the commit goroutine. Returns a channel that
-// receives the loop's exit error. The goroutine recovers panics, logs them
-// with stack (PII-safe — no row args), and exits non-zero so the kubelet
-// restarts the container rather than leaving a zombie. The recover sits
-// here, not inside RunCommitLoop, to keep the loop body PII-clean and let
-// any future writer-internal panic surface the same way.
 func launchCommitLoop(
 	ctx context.Context,
 	pool *pgxpool.Pool,
@@ -298,10 +259,6 @@ func launchCommitLoop(
 	return done
 }
 
-// startHTTPServer constructs the /healthz + /metrics + /control listener
-// and runs it in a background goroutine. CORS origins default to empty
-// (CORS disabled); the testbench compose passes WRITER_HTTP_CORS_ORIGINS
-// so the browser UI at the Caddy frontend can POST /control.
 func startHTTPServer(
 	cfg *writer.WriterConfig,
 	lim *rate.Limiter,
@@ -340,8 +297,6 @@ func logStartup(logger zerolog.Logger, cfg *writer.WriterConfig) {
 		Msg("writer started")
 }
 
-// gracefulShutdown serialises the 10s HTTP shutdown deadline, a best-effort
-// 2s drain of the commit loop, then returns so the deferred pool.Close runs.
 func gracefulShutdown(srv *http.Server, commitDone chan error, logger zerolog.Logger) {
 	logger.Info().Msg("shutdown signal received")
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -355,10 +310,6 @@ func gracefulShutdown(srv *http.Server, commitDone chan error, logger zerolog.Lo
 	}
 }
 
-// buildScenarioFromConfig instantiates the scenario named by cfg with the
-// overrides from cfg.Scenario applied. Falls back to "smoke" when the name
-// is unrecognized. Delegates to writer.BuildScenario so the construction
-// path is identical to the one used by the POST /control handler.
 func buildScenarioFromConfig(cfg *writer.WriterConfig) writer.Scenario {
 	s := writer.BuildScenario(cfg.Scenario.Name, cfg.Scenario.CommitRate, cfg.Scenario.RowsPerTx, cfg.Scenario.RampDuration)
 	if s == nil {
@@ -367,5 +318,4 @@ func buildScenarioFromConfig(cfg *writer.WriterConfig) writer.Scenario {
 	return s
 }
 
-// Compile-time sanity that we link pgxpool.
 var _ = pgxpool.Pool{}

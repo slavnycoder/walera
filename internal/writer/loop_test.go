@@ -55,12 +55,8 @@ func TestClassify_NetConn(t *testing.T) {
 	}
 }
 
-// TestRunCommitLoop_RespectsScenarioSwap drives the loop with the test
-// commit function and an in-memory rate.Limiter, verifying that swapping the
-// scenarioState changes the observed commit count over a fixed window.
 func TestRunCommitLoop_RespectsScenarioSwap(t *testing.T) {
-	// Stub the commit function with a fast no-op so the loop is bound by the
-	// rate.Limiter, not by Postgres latency.
+
 	origCommitOnce := commitOnceFn
 	t.Cleanup(func() { commitOnceFn = origCommitOnce })
 	commitOnceFn = func(ctx context.Context, _ commitOncePool, target string, rows int, _ *mathrand.Rand, _ WriterPGConfig) error {
@@ -94,11 +90,9 @@ func TestRunCommitLoop_RespectsScenarioSwap(t *testing.T) {
 		close(doneCh)
 	}()
 
-	// Window 1 (200ms at 10/s ≈ 2 commits).
 	time.Sleep(200 * time.Millisecond)
 	baseline := atomic.LoadInt64(&commitCount)
 
-	// Swap to 50 tx/s.
 	lim.SetLimit(rate.Limit(50))
 	newSt := &scenarioState{
 		Scenario:   newSteadyScenario(50, 1),
@@ -108,9 +102,8 @@ func TestRunCommitLoop_RespectsScenarioSwap(t *testing.T) {
 		Targets:    []string{"orders"},
 	}
 	swapScenario(&ptr, newSt)
-	atomic.StoreInt64(&commitCount, 0) // reset window counter
+	atomic.StoreInt64(&commitCount, 0)
 
-	// Window 2 (200ms at 50/s ≈ 10 commits; allow scheduling tolerance).
 	time.Sleep(200 * time.Millisecond)
 	after := atomic.LoadInt64(&commitCount)
 
@@ -118,10 +111,7 @@ func TestRunCommitLoop_RespectsScenarioSwap(t *testing.T) {
 	<-doneCh
 
 	t.Logf("baseline window commits: %d; after-swap window commits: %d", baseline, after)
-	// Threshold ≥5: at 50 tx/s over 200ms the ideal is 10; CI scheduling
-	// jitter pushes the observed count into a band roughly 5–12. The
-	// invariant we care about is that the post-swap window observes
-	// noticeably more commits than the pre-swap window.
+
 	if after < 5 {
 		t.Errorf("after-swap commit count %d < 5 (expected ≥5 at 50tx/s over 200ms)", after)
 	}
@@ -158,14 +148,12 @@ func TestRunCommitLoop_CancelExits(t *testing.T) {
 
 	select {
 	case <-done:
-		// ok
+
 	case <-time.After(500 * time.Millisecond):
 		t.Fatalf("RunCommitLoop did not exit within 500ms of ctx cancel")
 	}
 }
 
-// TestRunCommitLoop_OnError exercises the onError callback path by injecting
-// a failing commit function.
 func TestRunCommitLoop_OnError(t *testing.T) {
 	origCommitOnce := commitOnceFn
 	t.Cleanup(func() { commitOnceFn = origCommitOnce })

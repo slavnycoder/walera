@@ -18,9 +18,6 @@ func newWildcardTestSubscriber(id string) *Subscriber {
 	)
 }
 
-// TestWildcard_AddLookupRemove verifies the multi-subscriber-per-key contract
-// of the wildcard index: Add appends, Lookup returns a copy of the slice,
-// Remove removes by pointer identity.
 func TestWildcard_AddLookupRemove(t *testing.T) {
 	t.Parallel()
 	w := newWildcardIndex()
@@ -43,7 +40,6 @@ func TestWildcard_AddLookupRemove(t *testing.T) {
 		t.Errorf("Len after two Adds: got %d; want %d", got, want)
 	}
 
-	// Mutating the returned slice MUST NOT affect the index (copy-before-unlock).
 	subs[0] = nil
 	if got := w.Lookup(key); got[0] != a {
 		t.Errorf("mutating Lookup result leaked into index: got %p; want %p", got[0], a)
@@ -67,8 +63,6 @@ func TestWildcard_AddLookupRemove(t *testing.T) {
 	}
 }
 
-// TestWildcard_LookupEmpty asserts that an unknown key returns nil (not an
-// empty non-nil slice — the doc comment promises nil).
 func TestWildcard_LookupEmpty(t *testing.T) {
 	t.Parallel()
 	w := newWildcardIndex()
@@ -77,8 +71,6 @@ func TestWildcard_LookupEmpty(t *testing.T) {
 	}
 }
 
-// TestWildcard_RemoveOfUnknownNoOp asserts that Remove on a missing key /
-// missing subscriber is a no-op and does not panic.
 func TestWildcard_RemoveOfUnknownNoOp(t *testing.T) {
 	t.Parallel()
 	w := newWildcardIndex()
@@ -87,7 +79,6 @@ func TestWildcard_RemoveOfUnknownNoOp(t *testing.T) {
 		t.Errorf("Len after no-op Remove: got %d; want %d", got, want)
 	}
 
-	// Now add one, then try to remove a different pointer with the same key.
 	a := newWildcardTestSubscriber("a")
 	b := newWildcardTestSubscriber("b")
 	w.Add("public.users", a)

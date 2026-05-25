@@ -1,6 +1,3 @@
-// Package router — router_panic_test.go covers the New construction gate:
-// every required Deps field panics with the exact message
-// "router.New: Deps.<Field> is required" when nil.
 package router
 
 import (
@@ -11,8 +8,6 @@ import (
 	"github.com/walera/walera/internal/metrics"
 )
 
-// validBroadcasterDeps returns a fully-populated Deps so each per-field
-// test only nils one field.
 func validBroadcasterDeps() Deps {
 	return Deps{
 		Logger:  zerolog.Nop(),
@@ -59,9 +54,6 @@ func TestNewBroadcaster_PanicsOnNilDeps(t *testing.T) {
 	}
 }
 
-// assertPanicsWithValue runs fn and asserts that it panicked with a value
-// equal to want. Mirrors testify's require.PanicsWithValue without taking
-// on the testify dep — the project keeps testify as an indirect-only.
 func assertPanicsWithValue(t *testing.T, want any, fn func()) {
 	t.Helper()
 	defer func() {

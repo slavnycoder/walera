@@ -1,6 +1,3 @@
-// Package limits — limits_panic_test.go covers the limits.New construction
-// gate: every required Deps field panics with the exact message
-// "limits.New: Deps.<Field> is required" when nil.
 package limits
 
 import (
@@ -12,8 +9,6 @@ import (
 	"github.com/walera/walera/internal/metrics"
 )
 
-// validLimitsDeps returns a fully-populated Deps so each per-field test
-// only nils one field.
 func validLimitsDeps() Deps {
 	return Deps{
 		Logger:  zerolog.Nop(),
@@ -59,9 +54,6 @@ func TestNewLimits_PanicsOnNilDeps(t *testing.T) {
 	}
 }
 
-// assertLimitsPanicsWithValue runs fn and asserts that it panicked with a
-// value equal to want. Mirrors testify's require.PanicsWithValue without
-// taking on the testify dep.
 func assertLimitsPanicsWithValue(t *testing.T, want any, fn func()) {
 	t.Helper()
 	defer func() {

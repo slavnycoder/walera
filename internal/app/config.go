@@ -1,5 +1,3 @@
-// Package app — config.go owns the aggregate AppConfig assembled by
-// LoadAppConfig. See internal/app/doc.go for the package narrative.
 package app
 
 import (
@@ -25,10 +23,6 @@ import (
 	"github.com/walera/walera/internal/wal"
 )
 
-// stringToNamedDurationHook converts a string ("10s" / "8s") into
-// ShutdownDeadline / DrainDeadline. koanf's default
-// StringToTimeDurationHookFunc only matches the bare time.Duration type;
-// this hook closes the gap for the named-duration wrappers.
 func stringToNamedDurationHook() mapstructure.DecodeHookFuncType {
 	shutdownT := reflect.TypeOf(ShutdownDeadline(0))
 	drainT := reflect.TypeOf(DrainDeadline(0))
@@ -39,7 +33,7 @@ func stringToNamedDurationHook() mapstructure.DecodeHookFuncType {
 		if t != shutdownT && t != drainT {
 			return data, nil
 		}
-		// Belt-and-suspenders for hook-chain reordering; see IN-02.
+
 		s, ok := data.(string)
 		if !ok {
 			return data, nil
@@ -55,12 +49,6 @@ func stringToNamedDurationHook() mapstructure.DecodeHookFuncType {
 	}
 }
 
-// shutdownDecoderConfig returns a mapstructure.DecoderConfig with the
-// named-duration hook for ShutdownDeadline / DrainDeadline plus the
-// stdlib StringToTimeDuration hook. Used by LoadAppConfig's shutdown
-// sub-unmarshal. The patched koanf textUnmarshalerHookFunc is
-// package-private and the upstream version diverges; ShutdownConfig has
-// no TextUnmarshaler fields so neither helper is needed today (see IN-01).
 func shutdownDecoderConfig() *mapstructure.DecoderConfig {
 	return &mapstructure.DecoderConfig{
 		DecodeHook: mapstructure.ComposeDecodeHookFunc(
@@ -72,9 +60,6 @@ func shutdownDecoderConfig() *mapstructure.DecoderConfig {
 	}
 }
 
-// AppConfig is the aggregate root configuration for the cdc-sse binary,
-// composing the per-package typed Config structs plus app-local
-// Log/HTTP/Shutdown sub-configs.
 type AppConfig struct {
 	Log      LogConfig
 	WAL      wal.Config
@@ -87,75 +72,45 @@ type AppConfig struct {
 	Shutdown ShutdownConfig
 }
 
-// LogConfig controls the structured logger (zerolog).
 type LogConfig struct {
-	// Level: debug | info | warn | error. Default: info.
 	Level string `koanf:"level"`
-	// DevMode enables the human-readable console writer. Disable in production.
+
 	DevMode bool `koanf:"dev_mode"`
 }
 
-// HTTPConfig holds the HTTP server / SSE listener configuration.
-// Field names map to koanf keys under the "http." prefix.
 type HTTPConfig struct {
-	// Addr is the TCP listen address. Default ":8080".
 	Addr string `koanf:"addr"`
 
-	// CORSOrigins is the allowlist of Origin values for which the SSE
-	// handler reflects Access-Control-Allow-Origin + ACAC. Canonicalised
-	// once at load time.
 	CORSOrigins []string `koanf:"cors_origins"`
 
-	// MaxPayloadBytes is the maximum serialized SSE payload size per event.
-	// Default 10 MiB.
 	MaxPayloadBytes int `koanf:"max_payload_bytes"`
 
-	// WriteTimeout is the per-frame SSE write deadline. Default 5s.
 	WriteTimeout time.Duration `koanf:"write_timeout"`
 
-	// MaxHeaderBytes caps the request-header byte size. Default 16 KiB.
 	MaxHeaderBytes int `koanf:"max_header_bytes"`
 
-	// H2CEnabled toggles unencrypted HTTP/2 on the SSE listener. Default true.
 	H2CEnabled bool `koanf:"h2c_enabled"`
 
-	// PProfAddr is the bind address for the OPT-IN pprof listener.
-	// Default "" (disabled); must bind loopback unless
-	// WALERA_PPROF_ALLOW_PUBLIC=1.
 	PProfAddr string `koanf:"pprof_addr"`
 
-	// PoolFactor multiplies runtime.GOMAXPROCS(0). Default 2, must be >= 1.
 	PoolFactor int `koanf:"pool_factor"`
 
-	// SubQueueSize is the per-subscriber channel capacity. Default 32, >= 1.
 	SubQueueSize int `koanf:"sub_queue_size"`
 
-	// MaxWaitMs is the SSE-pool worker timer-armed batch-drain ceiling.
-	// Default 2 ms, >= 0.
 	MaxWaitMs int `koanf:"max_wait_ms"`
 
-	// DrainThresholdSubs forces an immediate batch drain at this dirty-sub
-	// count. Default 0 (built-in formula), >= 0.
 	DrainThresholdSubs int `koanf:"drain_threshold_subs"`
 
-	// MaxBatchBytesPerSub is the per-sub buffered-frame byte cap before
-	// force-flush. Default 64 KiB, >= 1.
 	MaxBatchBytesPerSub int `koanf:"max_batch_bytes_per_sub"`
 
-	// BatchingDisabled forces drain every cycle. Default false.
 	BatchingDisabled bool `koanf:"batching_disabled"`
 }
 
-// ShutdownConfig holds graceful-shutdown deadlines.
-// Deadline (default 10s) is the hard cap; DrainDeadline (default 8s) is
-// the inner broadcaster fan-out deadline and must be <= Deadline.
 type ShutdownConfig struct {
 	Deadline      ShutdownDeadline `koanf:"deadline"`
 	DrainDeadline DrainDeadline    `koanf:"drain_deadline"`
 }
 
-// canonicalOrigin normalises a CORS allowlist entry to "scheme://host"
-// (lower-cased). Returns ("", false) on parse failure or missing scheme/host.
 func canonicalOrigin(s string) (string, bool) {
 	u, err := url.Parse(s)
 	if err != nil || u.Scheme == "" || u.Host == "" {
@@ -164,8 +119,6 @@ func canonicalOrigin(s string) (string, bool) {
 	return strings.ToLower(u.Scheme) + "://" + strings.ToLower(u.Host), true
 }
 
-// applyAppDefaults registers every koanf default: app-local Log/HTTP/Shutdown
-// plus each internal/<pkg>.ApplyDefaults.
 func applyAppDefaults(k *koanf.Koanf) {
 	_ = k.Set("log.level", "info")
 	_ = k.Set("log.dev_mode", false)
@@ -193,10 +146,6 @@ func applyAppDefaults(k *koanf.Koanf) {
 	metrics.ApplyDefaults(k)
 }
 
-// LoadAppConfig reads the YAML at path, overlays WALERA_-prefixed env
-// vars, dispatches to each internal/<pkg>.LoadConfig, and returns the
-// aggregate AppConfig. Returns a non-nil error joining every validation
-// failure. If path is empty / missing, env + defaults only.
 func LoadAppConfig(path string) (*AppConfig, error) {
 	k, err := config.LoadKoanf(path, applyAppDefaults)
 	if err != nil {
@@ -211,7 +160,7 @@ func LoadAppConfig(path string) (*AppConfig, error) {
 	if err := k.UnmarshalWithConf("http", &cfg.HTTP, koanf.UnmarshalConf{Tag: "koanf"}); err != nil {
 		return nil, fmt.Errorf("http config: unmarshal: %w", err)
 	}
-	// shutdown uses the named-duration decoder (see shutdownDecoderConfig).
+
 	if err := k.UnmarshalWithConf("shutdown", &cfg.Shutdown, koanf.UnmarshalConf{
 		Tag:           "koanf",
 		DecoderConfig: shutdownDecoderConfig(),
@@ -219,7 +168,6 @@ func LoadAppConfig(path string) (*AppConfig, error) {
 		return nil, fmt.Errorf("shutdown config: unmarshal: %w", err)
 	}
 
-	// Collect per-package errors so misconfigs surface in one startup message.
 	var errs []error
 	walCfg, err := wal.LoadConfig(k)
 	if err != nil {
@@ -227,9 +175,6 @@ func LoadAppConfig(path string) (*AppConfig, error) {
 	}
 	cfg.WAL = walCfg
 
-	// The admin and replication DSNs both derive from the single top-level
-	// database.url (env WALERA_DATABASE_URL). DeriveDSNs validates the base
-	// and produces the replication variant by adding replication=database.
 	adminDSN, replDSN, dsnErr := wal.DeriveDSNs(k.String("database.url"))
 	if dsnErr != nil {
 		errs = append(errs, dsnErr)
@@ -278,7 +223,6 @@ func LoadAppConfig(path string) (*AppConfig, error) {
 		return nil, fmt.Errorf("config: validation failed: %w", errors.Join(errs...))
 	}
 
-	// SEC-09 — canonicalise cors_origins once at load (validateHTTP ran first).
 	canon := make([]string, 0, len(cfg.HTTP.CORSOrigins))
 	for _, raw := range cfg.HTTP.CORSOrigins {
 		if c, ok := canonicalOrigin(raw); ok {
@@ -290,7 +234,6 @@ func LoadAppConfig(path string) (*AppConfig, error) {
 	return cfg, nil
 }
 
-// validateHTTP enforces the app-local HTTP invariants.
 func validateHTTP(c *HTTPConfig) error {
 	var errs []error
 	if c.Addr == "" {
@@ -351,7 +294,7 @@ func validateHTTP(c *HTTPConfig) error {
 	if c.MaxBatchBytesPerSub < 1 {
 		errs = append(errs, fmt.Errorf("http.max_batch_bytes_per_sub must be >= 1 (got %d)", c.MaxBatchBytesPerSub))
 	}
-	// SEC-09 — every cors_origins entry must parse with scheme + host.
+
 	for i, raw := range c.CORSOrigins {
 		if _, ok := canonicalOrigin(raw); !ok {
 			errs = append(errs, fmt.Errorf("http.cors_origins[%d] (%q) is not a valid URL with scheme and host", i, raw))
@@ -363,7 +306,6 @@ func validateHTTP(c *HTTPConfig) error {
 	return nil
 }
 
-// validateShutdown enforces the app-local shutdown invariants.
 func validateShutdown(c *ShutdownConfig) error {
 	var errs []error
 	if c.Deadline <= 0 {

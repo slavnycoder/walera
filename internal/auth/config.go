@@ -1,4 +1,3 @@
-// Package auth — config.go: typed config sub-structs + LoadConfig.
 package auth
 
 import (
@@ -13,52 +12,32 @@ import (
 	"github.com/walera/walera/internal/config"
 )
 
-// Config holds every auth knob. Mounted at the "auth." key in the root koanf
-// tree.
 type Config struct {
-	// BackendURL is the base URL of the external auth service. Mandatory.
 	BackendURL string `koanf:"backend_url"`
 
-	// DefaultTTLSeconds is the default permission-map TTL. Default: 60.
 	DefaultTTLSeconds int `koanf:"default_ttl_seconds"`
 
-	// HealthChannel is the channel name used by health.Server's auth probe.
-	// Default: "_health".
 	HealthChannel string `koanf:"health_channel"`
 
-	// RequestTimeout caps every HTTP call to the auth backend. Default: 2s.
 	RequestTimeout time.Duration `koanf:"request_timeout"`
 
-	// Breaker holds the auth circuit-breaker tuning sub-struct.
 	Breaker BreakerConfig `koanf:"breaker"`
 }
 
-// BreakerConfig tunes the auth circuit breaker.
 type BreakerConfig struct {
-	// WindowBuckets is the rolling-window bucket count. Default: 30.
 	WindowBuckets int `koanf:"window_buckets"`
 
-	// BucketSeconds is the duration of each window bucket in seconds. Default: 1.
 	BucketSeconds int `koanf:"bucket_seconds"`
 
-	// FailureRateThreshold is the failure ratio that opens the breaker once
-	// DebounceFloor calls have accumulated. Default: 0.5.
 	FailureRateThreshold float64 `koanf:"failure_rate_threshold"`
 
-	// DebounceFloor is the minimum sample size before the failure-rate
-	// threshold can fire. Default: 20.
 	DebounceFloor int `koanf:"debounce_floor"`
 
-	// Cooldown is how long the breaker stays Open before transitioning to
-	// HalfOpen. Default: 30s.
 	Cooldown time.Duration `koanf:"cooldown"`
 
-	// StaleRefreshJitter bounds random jitter on background refresh
-	// scheduling. Default: 5s.
 	StaleRefreshJitter time.Duration `koanf:"stale_refresh_jitter"`
 }
 
-// ApplyDefaults registers the auth.* defaults on the supplied koanf instance.
 func ApplyDefaults(k *koanf.Koanf) {
 	_ = k.Set("auth.default_ttl_seconds", 60)
 	_ = k.Set("auth.health_channel", "_health")
@@ -71,8 +50,6 @@ func ApplyDefaults(k *koanf.Koanf) {
 	_ = k.Set("auth.breaker.stale_refresh_jitter", "5s")
 }
 
-// LoadConfig unmarshals the "auth" subtree from k into a Config and runs all
-// auth-specific validation.
 func LoadConfig(k *koanf.Koanf) (Config, error) {
 	var cfg Config
 	if err := k.UnmarshalWithConf("auth", &cfg, koanf.UnmarshalConf{Tag: "koanf"}); err != nil {
@@ -84,7 +61,6 @@ func LoadConfig(k *koanf.Koanf) (Config, error) {
 	return cfg, nil
 }
 
-// Validate enforces the auth-package invariants.
 func (c Config) Validate() error {
 	var errs []error
 	if c.BackendURL == "" {
@@ -114,7 +90,7 @@ func (c Config) Validate() error {
 				"include host[:port] in the URL",
 			))
 		default:
-			// SEC-04 — require https unless the dev escape hatch is set.
+
 			if u.Scheme != "https" && os.Getenv("WALERA_AUTH_ALLOW_PLAINTEXT") != "1" {
 				errs = append(errs, errors.New("auth.backend_url must use https:// (override with WALERA_AUTH_ALLOW_PLAINTEXT=1 for dev)"))
 			}
@@ -123,8 +99,7 @@ func (c Config) Validate() error {
 	if c.RequestTimeout <= 0 {
 		errs = append(errs, errors.New("auth.request_timeout must be > 0"))
 	}
-	// Cross-field rule: cooldown must be >= request_timeout so the half-open
-	// probe has at least one full request-timeout window.
+
 	if c.RequestTimeout > 0 && c.Breaker.Cooldown > 0 && c.Breaker.Cooldown < c.RequestTimeout {
 		errs = append(errs, config.FormatError(
 			"auth.breaker.cooldown vs auth.request_timeout",

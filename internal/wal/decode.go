@@ -1,9 +1,3 @@
-// Package wal — decode.go decodes pgoutput Begin/Insert/Update/Delete/Commit
-// messages into typed Tx values via the txBuilder accumulator.
-//
-// txBuilder accumulates Begin → Change → Commit messages into a Tx value.
-// Call Reset() whenever the replication connection is dropped so that no
-// partial transaction survives across reconnects.
 package wal
 
 import (
@@ -12,38 +6,24 @@ import (
 	"github.com/jackc/pglogrepl"
 )
 
-// inFlightTx holds the incomplete state for a transaction that has begun but not
-// yet committed.
 type inFlightTx struct {
 	xid      uint32
 	finalLSN pglogrepl.LSN
 	changes  []Change
 }
 
-// txBuilder accumulates pglogrepl decoded messages into a Tx.
-//
-// Usage sequence per transaction:
-//
-//	HandleBegin → HandleRelation / HandleInsert / HandleUpdate / HandleDelete → HandleCommit
-//
-// On reconnect, call Reset() before re-entering the read loop.
 type txBuilder struct {
 	inFlight *inFlightTx
 }
 
-// newTxBuilder returns a fresh, empty txBuilder.
 func newTxBuilder() *txBuilder {
 	return &txBuilder{}
 }
 
-// Reset discards any in-flight transaction state. Call this on every reconnect
-// path so that no half-assembled transaction bleeds into the next replication session.
 func (b *txBuilder) Reset() {
 	b.inFlight = nil
 }
 
-// HandleBegin starts accumulating a new transaction.
-// Any existing in-flight state is discarded (defensive; PG guarantees no nested Begin).
 func (b *txBuilder) HandleBegin(msg *pglogrepl.BeginMessage) {
 	b.inFlight = &inFlightTx{
 		xid:      msg.Xid,
@@ -51,20 +31,13 @@ func (b *txBuilder) HandleBegin(msg *pglogrepl.BeginMessage) {
 	}
 }
 
-// HandleRelation delegates to cache.Update and returns any resulting error.
-// The caller (reader) should log non-fatal errors (errCompositePK / errUnsupportedPKType)
-// and skip streaming that table.
 func (b *txBuilder) HandleRelation(msg *pglogrepl.RelationMessage, cache *relationCache) error {
 	return cache.Update(msg)
 }
 
-// HandleInsert builds and appends a Change{Op: OpInsert} to the in-flight transaction.
-//
-// If the relation OID is not yet in cache (e.g. the Relation message was skipped due
-// to an unsupported PK), the change is skipped and an error is returned.
 func (b *txBuilder) HandleInsert(msg *pglogrepl.InsertMessage, cache *relationCache) error {
 	if b.inFlight == nil {
-		return nil // no active tx; skip (defensive)
+		return nil
 	}
 
 	rel, ok := cache.Get(msg.RelationID)
@@ -90,11 +63,6 @@ func (b *txBuilder) HandleInsert(msg *pglogrepl.InsertMessage, cache *relationCa
 	return nil
 }
 
-// HandleUpdate builds and appends a Change{Op: OpUpdate} to the in-flight transaction.
-//
-// Only columns present in NewTuple with a non-TOAST data type are included in
-// Change.Changed. Absent columns (TOAST) are not included — absence means "not
-// changed", not null (spec §5 "absence ≠ null" / D-13).
 func (b *txBuilder) HandleUpdate(msg *pglogrepl.UpdateMessage, cache *relationCache) error {
 	if b.inFlight == nil {
 		return nil
@@ -111,7 +79,6 @@ func (b *txBuilder) HandleUpdate(msg *pglogrepl.UpdateMessage, cache *relationCa
 		Op:     OpUpdate,
 	}
 
-	// Build Changed map from NewTuple, skipping TOAST columns (absence = not changed).
 	changed, pk, pkCol, err := buildChangedMap(msg.NewTuple, rel)
 	if err != nil {
 		return fmt.Errorf("wal: HandleUpdate %s.%s: %w", rel.Schema, rel.Table, err)
@@ -120,7 +87,6 @@ func (b *txBuilder) HandleUpdate(msg *pglogrepl.UpdateMessage, cache *relationCa
 	ch.PK = pk
 	ch.PKCol = pkCol
 
-	// If the PK column was TOAST in NewTuple, fall back to OldTuple for the PK value.
 	if ch.PK == "" && msg.OldTuple != nil {
 		oldPK, oldPKCol, err := extractPKFromTuple(msg.OldTuple, rel)
 		if err == nil {
@@ -133,10 +99,6 @@ func (b *txBuilder) HandleUpdate(msg *pglogrepl.UpdateMessage, cache *relationCa
 	return nil
 }
 
-// HandleDelete builds and appends a Change{Op: OpDelete} to the in-flight transaction.
-//
-// Under REPLICA IDENTITY DEFAULT, PG sends only the PK column in OldTuple.
-// Data and Changed are intentionally nil for DELETE.
 func (b *txBuilder) HandleDelete(msg *pglogrepl.DeleteMessage, cache *relationCache) error {
 	if b.inFlight == nil {
 		return nil
@@ -165,8 +127,6 @@ func (b *txBuilder) HandleDelete(msg *pglogrepl.DeleteMessage, cache *relationCa
 	return nil
 }
 
-// HandleCommit finalises the in-flight transaction and returns it. Returns nil if no
-// transaction is in progress (defensive — should not happen with a well-behaved PG).
 func (b *txBuilder) HandleCommit(msg *pglogrepl.CommitMessage) *Tx {
 	if b.inFlight == nil {
 		return nil
@@ -181,10 +141,6 @@ func (b *txBuilder) HandleCommit(msg *pglogrepl.CommitMessage) *Tx {
 	return tx
 }
 
-// --- helpers ---
-
-// buildDataMap converts all columns in a TupleData (from an InsertMessage) into a
-// map[string]any using mapValue, and returns the primary key value and column name.
 func buildDataMap(tuple *pglogrepl.TupleData, rel *relationInfo) (data map[string]any, pk, pkCol string, err error) {
 	if tuple == nil {
 		return nil, "", "", nil
@@ -209,7 +165,6 @@ func buildDataMap(tuple *pglogrepl.TupleData, rel *relationInfo) (data map[strin
 		}
 		data[relCol.Name] = v
 
-		// Capture PK value as its text representation.
 		if relCol.Name == pkColName {
 			pk = textPK(col, relCol)
 			pkCol = relCol.Name
@@ -218,8 +173,6 @@ func buildDataMap(tuple *pglogrepl.TupleData, rel *relationInfo) (data map[strin
 	return data, pk, pkCol, nil
 }
 
-// buildChangedMap converts non-TOAST columns in a NewTuple (from an UpdateMessage)
-// into the Changed map. TOAST columns are skipped (absence = not changed).
 func buildChangedMap(tuple *pglogrepl.TupleData, rel *relationInfo) (changed map[string]any, pk, pkCol string, err error) {
 	if tuple == nil {
 		return nil, "", "", nil
@@ -237,7 +190,6 @@ func buildChangedMap(tuple *pglogrepl.TupleData, rel *relationInfo) (changed map
 		}
 		relCol := rel.Columns[i]
 
-		// Skip TOAST columns — they are unchanged, and we must not include them.
 		if col.DataType == pglogrepl.TupleDataTypeToast {
 			continue
 		}
@@ -249,7 +201,6 @@ func buildChangedMap(tuple *pglogrepl.TupleData, rel *relationInfo) (changed map
 		}
 		changed[relCol.Name] = v
 
-		// Capture PK if present in NewTuple (non-TOAST).
 		if relCol.Name == pkColName {
 			pk = textPK(col, relCol)
 			pkCol = relCol.Name
@@ -258,8 +209,6 @@ func buildChangedMap(tuple *pglogrepl.TupleData, rel *relationInfo) (changed map
 	return changed, pk, pkCol, nil
 }
 
-// extractPKFromTuple scans a TupleData for the PK column and returns its text value.
-// Used for UPDATE (fallback when PK was TOAST in NewTuple) and DELETE.
 func extractPKFromTuple(tuple *pglogrepl.TupleData, rel *relationInfo) (pk, pkCol string, err error) {
 	if tuple == nil || len(rel.PKCols) == 0 {
 		return "", "", nil
@@ -278,15 +227,13 @@ func extractPKFromTuple(tuple *pglogrepl.TupleData, rel *relationInfo) (pk, pkCo
 	return "", "", fmt.Errorf("PK column %q not found in tuple", pkColName)
 }
 
-// textPK returns the PK value as a string suitable for Change.PK.
-// For non-NULL text-mode columns, this is simply the raw text bytes.
 func textPK(col *pglogrepl.TupleDataColumn, relCol *pglogrepl.RelationMessageColumn) string {
 	if col.DataType == pglogrepl.TupleDataTypeNull {
 		return ""
 	}
 	if col.DataType == pglogrepl.TupleDataTypeToast {
-		return "" // TOAST PK → caller falls back to OldTuple
+		return ""
 	}
-	// mapValue with text representation — but for PK we just want the raw text.
+
 	return string(col.Data)
 }

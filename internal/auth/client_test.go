@@ -19,8 +19,6 @@ import (
 	"github.com/walera/walera/internal/metrics"
 )
 
-// --- helpers ---
-
 type fakeBreaker struct {
 	mu      sync.Mutex
 	results []bool
@@ -43,8 +41,6 @@ func (f *fakeBreaker) Last() (bool, bool) {
 	return f.results[len(f.results)-1], true
 }
 
-// gatherCounter returns the counter value at <name>{labelKey=labelVal}, or 0
-// if absent.
 func gatherCounter(t *testing.T, reg *metrics.Registry, name, labelKey, labelVal string) float64 {
 	t.Helper()
 	families, err := reg.Gatherer().Gather()
@@ -64,8 +60,6 @@ func gatherCounter(t *testing.T, reg *metrics.Registry, name, labelKey, labelVal
 	return 0
 }
 
-// gatherHistogramSampleCount returns the sample count for the given histogram
-// family (0 if absent).
 func gatherHistogramSampleCount(t *testing.T, reg *metrics.Registry, name string) uint64 {
 	t.Helper()
 	families, err := reg.Gatherer().Gather()
@@ -96,8 +90,6 @@ func matchLabel(m *dto.Metric, key, val string) bool {
 	return false
 }
 
-// newTestClient bundles the boilerplate for constructing a Client pointing at
-// a httptest server.
 func newTestClient(t *testing.T, baseURL string, timeout time.Duration) (*Client, *fakeBreaker, *metrics.Registry) {
 	t.Helper()
 	fb := &fakeBreaker{}
@@ -109,10 +101,7 @@ func newTestClient(t *testing.T, baseURL string, timeout time.Duration) (*Client
 	return New(cfg, Deps{Logger: zerolog.Nop(), Breaker: fb, Metrics: mc}), fb, mc
 }
 
-// validBody is the canonical 200 response body used by the OK tests.
 const validBody = `{"user_id":"u1","tables":{"users":["id","name"]},"ttl_seconds":60}`
-
-// --- tests ---
 
 func TestClient_Permissions_OK(t *testing.T) {
 	t.Parallel()
@@ -271,7 +260,7 @@ func TestClient_Permissions_NetworkError(t *testing.T) {
 	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {}))
 	url := srv.URL
-	srv.Close() // close immediately so connect refuses
+	srv.Close()
 
 	c, fb, mc := newTestClient(t, url, 2*time.Second)
 	_, err := c.Permissions(context.Background(), "tok", "users:42", "req-6")
@@ -441,12 +430,6 @@ func TestMap_Allowed_Lookup(t *testing.T) {
 	}
 }
 
-// TestPermissions_OutboundRequestID_InvalidSubstituted — SEC-02 / F-P1-02
-// defense-in-depth: when an invalid X-Request-ID reaches auth.Client.Permissions
-// (programmer-contract violation; the SSE handler should normally have
-// rejected it earlier), the client substitutes a freshly-generated 32-char
-// hex ID, emits a Warn log, and proceeds. The backend MUST see the
-// substitute ID, not the malformed input.
 func TestPermissions_OutboundRequestID_InvalidSubstituted(t *testing.T) {
 	t.Parallel()
 
@@ -485,8 +468,7 @@ func TestPermissions_OutboundRequestID_InvalidSubstituted(t *testing.T) {
 	if !strings.Contains(logOut, "outbound X-Request-ID failed validation") {
 		t.Errorf("expected Warn log; got %q", logOut)
 	}
-	// Warn log must include invalid_len, invalid_id_truncated, and
-	// substitute_id so operators can correlate the substitution.
+
 	if !strings.Contains(logOut, `"invalid_len":`) {
 		t.Errorf("WR-02: Warn log missing invalid_len field; got %q", logOut)
 	}
@@ -498,11 +480,6 @@ func TestPermissions_OutboundRequestID_InvalidSubstituted(t *testing.T) {
 	}
 }
 
-// TestPermissions_OutboundRequestID_Truncated_LogsBoundedOriginal asserts
-// that when a malformed X-Request-ID is longer than the 16-byte log hygiene
-// cap, the Warn log records only the first 16 bytes followed by "..." in
-// invalid_id_truncated. invalid_len retains the full length verbatim so the
-// size signal is preserved.
 func TestPermissions_OutboundRequestID_Truncated_LogsBoundedOriginal(t *testing.T) {
 	t.Parallel()
 
@@ -520,8 +497,6 @@ func TestPermissions_OutboundRequestID_Truncated_LogsBoundedOriginal(t *testing.
 		RequestTimeout: 2 * time.Second,
 	}, Deps{Logger: logger, Metrics: metrics.New()})
 
-	// 200-byte malformed ID — contains a space (regex miss) AND exceeds
-	// the 128-byte length cap. Either alone would trigger substitution.
 	bad := strings.Repeat("A", 100) + " " + strings.Repeat("B", 99)
 	_, err := c.Permissions(context.Background(), "client-tok", "users:42", bad)
 	if err != nil {
@@ -529,19 +504,18 @@ func TestPermissions_OutboundRequestID_Truncated_LogsBoundedOriginal(t *testing.
 	}
 
 	logOut := buf.String()
-	// invalid_len must be the full byte length (200), not the truncated 16.
+
 	wantLen := fmt.Sprintf(`"invalid_len":%d`, len(bad))
 	if !strings.Contains(logOut, wantLen) {
 		t.Errorf("WR-02: invalid_len must record full length %d; got %q", len(bad), logOut)
 	}
-	// invalid_id_truncated must be the first 16 bytes + "...".
+
 	wantTrunc := `"invalid_id_truncated":"` + strings.Repeat("A", 16) + `..."`
 	if !strings.Contains(logOut, wantTrunc) {
 		t.Errorf("WR-02: invalid_id_truncated must be 16-byte prefix+\"...\"; got %q", logOut)
 	}
 }
 
-// TestTruncateForLog covers the truncation helper directly.
 func TestTruncateForLog(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -565,9 +539,6 @@ func TestTruncateForLog(t *testing.T) {
 	}
 }
 
-// TestPermissions_OutboundRequestID_ValidPassedThrough — SEC-02 happy
-// path: a valid X-Request-ID is forwarded verbatim and produces NO Warn
-// log line.
 func TestPermissions_OutboundRequestID_ValidPassedThrough(t *testing.T) {
 	t.Parallel()
 
@@ -607,11 +578,6 @@ func TestPermissions_OutboundRequestID_ValidPassedThrough(t *testing.T) {
 	}
 }
 
-// TestValidOutboundRequestID — table-driven cases for the boundary branches
-// in validOutboundRequestID (length cap, empty string, regex misses, the
-// valid charset spectrum). Locks the coverage of every branch in the
-// helper so the per-package gate stays above 85 % even without the
-// substitute-fresh-ID path being exercised end-to-end.
 func TestValidOutboundRequestID(t *testing.T) {
 	t.Parallel()
 
@@ -619,15 +585,15 @@ func TestValidOutboundRequestID(t *testing.T) {
 		in   string
 		want bool
 	}{
-		{"", false},                       // empty
-		{"abc", true},                     // basic alnum
-		{"abc.123-DEF_xyz", true},         // full charset
-		{strings.Repeat("a", 128), true},  // exactly at cap
-		{strings.Repeat("a", 129), false}, // over cap
-		{"has spaces", false},             // regex miss
-		{"has\ttab", false},               // regex miss
-		{"unicode—😀—chars", false},        // non-ASCII
-		{`"; alert(1); //`, false},        // adversarial
+		{"", false},
+		{"abc", true},
+		{"abc.123-DEF_xyz", true},
+		{strings.Repeat("a", 128), true},
+		{strings.Repeat("a", 129), false},
+		{"has spaces", false},
+		{"has\ttab", false},
+		{"unicode—😀—chars", false},
+		{`"; alert(1); //`, false},
 	}
 	for _, tc := range cases {
 		if got := validOutboundRequestID(tc.in); got != tc.want {
@@ -641,8 +607,7 @@ func TestClient_New_PreTouchesAllResultLabels(t *testing.T) {
 	mc := metrics.New()
 	_ = New(Config{BackendURL: "http://x", RequestTimeout: time.Second}, Deps{Logger: zerolog.Nop(), Metrics: mc})
 	for _, label := range []string{"ok", "unauthorized", "forbidden", "not_found", "unavailable"} {
-		// gatherCounter returns 0 for both "missing" and "zero". A series
-		// must be present after pre-touch — verify via Gather() families.
+
 		families, err := mc.Gatherer().Gather()
 		if err != nil {
 			t.Fatalf("Gather: %v", err)
@@ -664,15 +629,9 @@ func TestClient_New_PreTouchesAllResultLabels(t *testing.T) {
 	}
 }
 
-// TestClient_SetBreaker_NilSubstitutesNop asserts SetBreaker(nil) installs
-// nopBreaker{} (not a literal nil) so subsequent c.bk.* calls remain
-// non-panicking. Asserted via the BreakerHook contract surface rather than
-// pointer-equality (interface satisfaction is the contract).
 func TestClient_SetBreaker_NilSubstitutesNop(t *testing.T) {
 	t.Parallel()
-	// Construct a Client with a real fakeBreaker initially, then overwrite
-	// via SetBreaker(nil). The post-condition: c.bk.RecordResult must not
-	// panic and c.bk.Allow() must return true (nopBreaker's contract).
+
 	fb := &fakeBreaker{}
 	c := New(Config{
 		BackendURL:     "http://x",
@@ -681,22 +640,17 @@ func TestClient_SetBreaker_NilSubstitutesNop(t *testing.T) {
 
 	c.SetBreaker(nil)
 
-	// Behavior assertion: nopBreaker contract.
-	c.bk.RecordResult(false) // must not panic
-	c.bk.RecordResult(true)  // must not panic
+	c.bk.RecordResult(false)
+	c.bk.RecordResult(true)
 	if got := c.bk.Allow(); !got {
 		t.Errorf("c.bk.Allow() after SetBreaker(nil) = %v; want true (nopBreaker)", got)
 	}
-	// And the previously-installed fakeBreaker must NOT have seen the calls.
+
 	if _, ok := fb.Last(); ok {
 		t.Errorf("fakeBreaker was unexpectedly called after SetBreaker(nil): results=%v", fb.results)
 	}
 }
 
-// TestClient_SetBreaker_InstallsHook asserts SetBreaker(hook) installs the
-// hook so subsequent Client paths route through it. The Client is built with
-// Deps.Breaker: nil (substituted to nopBreaker{} by auth.New) so the
-// assertion proves the swap happens.
 func TestClient_SetBreaker_InstallsHook(t *testing.T) {
 	t.Parallel()
 	c := New(Config{
@@ -707,10 +661,6 @@ func TestClient_SetBreaker_InstallsHook(t *testing.T) {
 	fb := &fakeBreaker{}
 	c.SetBreaker(fb)
 
-	// Drive a direct RecordResult through the installed hook to prove the
-	// swap. (Going through Permissions would require a httptest server +
-	// network round-trip; the BreakerHook contract is what SetBreaker
-	// installs, so asserting via that surface is the minimal proof.)
 	c.bk.RecordResult(true)
 	c.bk.RecordResult(false)
 
@@ -718,7 +668,7 @@ func TestClient_SetBreaker_InstallsHook(t *testing.T) {
 	if !ok {
 		t.Fatalf("fakeBreaker.Last(): got (_, false); want a recorded result")
 	}
-	if last { // last RecordResult was false
+	if last {
 		t.Errorf("fakeBreaker last result: got %v; want false", last)
 	}
 }

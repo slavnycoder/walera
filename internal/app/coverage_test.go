@@ -6,8 +6,6 @@ import (
 	"testing"
 )
 
-// TestLoad_MalformedYAML drives the YAML-parse-error branch of Load that the
-// happy-path tests do not reach.
 func TestLoad_MalformedYAML(t *testing.T) {
 	setPhase3RequiredEnv(t)
 	path := writeTempYAML(t, "database:\n  url: \"x\"\n  : invalid\n")
@@ -18,9 +16,6 @@ func TestLoad_MalformedYAML(t *testing.T) {
 	}
 }
 
-// TestLoad_MissingPathUsesEnvOnly verifies the "path empty / file does not
-// exist" early-return branch of Load: defaults + env are sufficient when the
-// caller passes an empty path or a path that does not exist on disk.
 func TestLoad_MissingPathUsesEnvOnly(t *testing.T) {
 	setPhase3RequiredEnv(t)
 	t.Setenv("WALERA_DATABASE_URL", "postgres://a:b@localhost/db")
@@ -34,7 +29,6 @@ func TestLoad_MissingPathUsesEnvOnly(t *testing.T) {
 		t.Errorf("WAL.PublicationName = %q; want %q", cfg.WAL.PublicationName, "envpub")
 	}
 
-	// Non-existent path goes through the same env-only branch.
 	tmp := t.TempDir()
 	nonExistent := tmp + string(os.PathSeparator) + "no-such-file.yaml"
 	cfg2, err := LoadAppConfig(nonExistent)
@@ -46,9 +40,6 @@ func TestLoad_MissingPathUsesEnvOnly(t *testing.T) {
 	}
 }
 
-// TestValidate_ResetAfterSuccessBounds covers the reconnect-config validation
-// branch that the existing table-driven test does not reach:
-// `wal.reconnect.reset_after_success_duration must be > 0`.
 func TestValidate_ResetAfterSuccessBounds(t *testing.T) {
 	setPhase3RequiredEnv(t)
 	tests := []struct {

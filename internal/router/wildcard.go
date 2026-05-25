@@ -1,4 +1,3 @@
-// Package router — wildcard.go: single-mutex wildcard subscription index. See doc.go invariant 3.
 package router
 
 import "sync"

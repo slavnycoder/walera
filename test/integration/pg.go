@@ -1,19 +1,5 @@
 //go:build integration
 
-// Package integration — pg.go wraps testcontainers-go/modules/postgres to boot
-// a PostgreSQL 18 container configured for logical replication (wal_level =
-// logical, max_replication_slots = 10, max_wal_senders = 10). The init script
-// at testdata/001_publication.sql is executed by the docker-entrypoint at
-// initdb time and creates the cdc_sse_streamer publication along with the
-// users / orders / audit_log table stubs the scenarios need.
-//
-// CRITICAL — DB NAME (Pitfall G6): we boot under the `walera_test` database
-// (NEVER the default `postgres`). The system DB on a PG container is owned by
-// internal processes and is brittle for replication-slot tests.
-//
-// Build tag: every file in test/integration/ except doc.go starts with
-// `//go:build integration` so `go test ./...` reports `[no test files]` for
-// this package without the tag (Pitfall G4).
 package integration
 
 import (
@@ -25,29 +11,17 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	_ "github.com/jackc/pgx/v5/stdlib" // enables postgres.WithSQLDriver("pgx") fast path
+	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 	"github.com/testcontainers/testcontainers-go/wait"
 )
 
-// PG wraps a running postgres container plus its admin DSN. Used directly by
-// scenarios (PG.Exec) and indirectly by the spawned binary (PG.DSN /
-// PG.ReplicationDSN propagate into the generated walera-test.yaml config).
 type PG struct {
 	Container *postgres.PostgresContainer
 	DSN       string
 }
 
-// NewPG boots a `postgres:18-alpine` container with wal_level=logical and
-// runs the publication migration. Caller invokes via NewHarness(t) or
-// directly. On test cleanup the container is terminated.
-//
-// The wait strategy uses `wait.ForLog("database system is ready to accept
-// connections").WithOccurrence(2)` per TEST-04: PG logs that message twice
-// during init — once at the end of initdb (single-user mode), once at the
-// final ready-to-accept-connections moment after the entrypoint script has
-// finished running 001_publication.sql.
 func NewPG(t *testing.T) *PG {
 	t.Helper()
 	ctx := context.Background()
@@ -82,22 +56,10 @@ func NewPG(t *testing.T) *PG {
 	return &PG{Container: c, DSN: dsn}
 }
 
-// Stop terminates the container. Used by the restart-resume scenario
-// (test 07). For other scenarios this is a no-op invoked only via
-// t.Cleanup.
 func (p *PG) Stop(ctx context.Context) error {
 	return testcontainers.TerminateContainer(p.Container)
 }
 
-// Exec opens a one-shot connection to the admin DSN and runs sql with args.
-// Convenience for scenarios that need to fire DML against the test DB
-// (INSERT / UPDATE / DELETE / BEGIN-COMMIT blocks).
-//
-// A fresh connection per call is intentional: it sidesteps the connection-
-// pool lifecycle complications that would otherwise leak across t.Cleanup
-// boundaries when scenarios run with t.Parallel(). The boot cost (~5ms per
-// connect to a local container) is well under the budget for the four
-// scenarios in this plan.
 func (p *PG) Exec(ctx context.Context, sql string, args ...any) error {
 	conn, err := pgx.Connect(ctx, p.DSN)
 	if err != nil {
@@ -110,10 +72,6 @@ func (p *PG) Exec(ctx context.Context, sql string, args ...any) error {
 	return nil
 }
 
-// ExecBatch runs every statement in stmts inside a single explicit
-// transaction (BEGIN / ... / COMMIT). Used by scenario 02 to construct a
-// multi-row tx whose WAL representation MUST arrive at the subscriber as ONE
-// Event with N changes (transactional atomicity).
 func (p *PG) ExecBatch(ctx context.Context, stmts []string, perStmtArgs [][]any) error {
 	if len(stmts) != len(perStmtArgs) {
 		return errors.New("pg execbatch: len(stmts) != len(perStmtArgs)")
@@ -140,19 +98,6 @@ func (p *PG) ExecBatch(ctx context.Context, stmts []string, perStmtArgs [][]any)
 	return nil
 }
 
-// CreatePublication issues `CREATE PUBLICATION <name> FOR TABLE <tables...>`
-// against the admin DSN. If tables is empty, falls back to
-// `CREATE PUBLICATION <name> FOR ALL TABLES`. Registers a t.Cleanup that
-// calls DropPublication so scenarios don't have to remember teardown.
-//
-// Helper that unblocks the 14_slot_lifecycle_test.go scenarios on the
-// WAL-01 publication-reuse path. The helper takes fully-qualified table
-// names exactly as the caller supplies them — no implicit schema prefix
-// or sanitization. Callers derive unique publication names from t.Name()
-// to avoid collisions under t.Parallel.
-//
-// SQL errors fail the test via t.Fatalf — there is no recovery path for a
-// scenario that cannot install its publication.
 func (p *PG) CreatePublication(t *testing.T, name string, tables []string) {
 	t.Helper()
 	ctx := context.Background()
@@ -168,9 +113,6 @@ func (p *PG) CreatePublication(t *testing.T, name string, tables []string) {
 	t.Cleanup(func() { p.DropPublication(t, name) })
 }
 
-// DropPublication issues `DROP PUBLICATION IF EXISTS <name>` against the
-// admin DSN. Idempotent — the IF EXISTS clause keeps double-drop from
-// t.Cleanup + an explicit scenario teardown safe.
 func (p *PG) DropPublication(t *testing.T, name string) {
 	t.Helper()
 	ctx := context.Background()
@@ -180,20 +122,6 @@ func (p *PG) DropPublication(t *testing.T, name string) {
 	}
 }
 
-// CreateLogicalSlot issues
-//
-//	SELECT pg_create_logical_replication_slot(<name>, 'pgoutput', <temporary>)
-//
-// against the admin DSN. When temporary=false, registers a t.Cleanup
-// calling DropSlot for safe teardown. When temporary=true, NO cleanup is
-// registered because temporary slots vanish automatically on session close
-// — registering a cleanup would race with that drop and produce noisy
-// "slot does not exist" errors.
-//
-// Unblocks the SlotAlreadyExists scenario in
-// 14_slot_lifecycle_test.go, which pre-creates a non-temporary slot with
-// the name Walera would otherwise pick to assert the observable
-// already-exists behaviour.
 func (p *PG) CreateLogicalSlot(t *testing.T, name string, temporary bool) {
 	t.Helper()
 	ctx := context.Background()
@@ -211,10 +139,6 @@ func (p *PG) CreateLogicalSlot(t *testing.T, name string, temporary bool) {
 	}
 }
 
-// DropSlot drops the replication slot if it currently exists. Prechecks
-// pg_replication_slots so the helper is safe to call from t.Cleanup after a
-// temporary slot has already vanished — PG raises if the slot is missing
-// at drop time, which would surface as noisy cleanup output.
 func (p *PG) DropSlot(t *testing.T, name string) {
 	t.Helper()
 	if !p.SlotExists(t, name) {
@@ -226,10 +150,6 @@ func (p *PG) DropSlot(t *testing.T, name string) {
 	}
 }
 
-// SlotExists returns true when pg_replication_slots contains a row whose
-// slot_name matches name. Used by 14_slot_lifecycle_test.go to verify
-// temporary-slot lifecycle (slot present while connected, absent after the
-// replication connection closes).
 func (p *PG) SlotExists(t *testing.T, name string) bool {
 	t.Helper()
 	ctx := context.Background()
@@ -248,10 +168,6 @@ func (p *PG) SlotExists(t *testing.T, name string) bool {
 	return exists
 }
 
-// joinIdents concatenates identifier strings with ", " for use in the
-// FOR TABLE clause of CreatePublication. The caller is responsible for
-// supplying schema-qualified or unqualified identifiers exactly as PG
-// expects — the helper does not validate or quote.
 func joinIdents(idents []string) string {
 	switch len(idents) {
 	case 0:
@@ -267,17 +183,10 @@ func joinIdents(idents []string) string {
 	}
 }
 
-// ReplicationDSN returns the admin DSN with `replication=database` appended
-// in the query string. The Walera replication code path (pgconn directly via
-// pglogrepl) requires this query parameter.
-//
-// Uses net/url so we correctly preserve any pre-existing query keys (the
-// testcontainers DSN typically only sets `sslmode`).
 func (p *PG) ReplicationDSN() string {
 	u, err := url.Parse(p.DSN)
 	if err != nil {
-		// Best-effort fallback: testcontainers always returns a parseable URL,
-		// but if that invariant changes we still produce something useable.
+
 		return p.DSN + "&replication=database"
 	}
 	q := u.Query()

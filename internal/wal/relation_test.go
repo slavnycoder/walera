@@ -7,8 +7,6 @@ import (
 	"github.com/jackc/pglogrepl"
 )
 
-// makeRelMsg creates a test pglogrepl.RelationMessage with the given schema,
-// table, relation ID, and columns. Use pkFlag=true to mark a column as PK.
 func makeRelMsg(id uint32, schema, table string, cols []struct {
 	name     string
 	dataType uint32
@@ -32,8 +30,6 @@ func makeRelMsg(id uint32, schema, table string, cols []struct {
 	return msg
 }
 
-// TestRelationCacheUpdate verifies that a well-formed relation message (single
-// int4 PK column) is stored successfully and retrievable.
 func TestRelationCacheUpdate(t *testing.T) {
 	t.Parallel()
 	cache := newRelationCache()
@@ -76,8 +72,6 @@ func TestRelationCacheUpdate(t *testing.T) {
 	}
 }
 
-// TestRelationCacheCompositePKRejected verifies that a relation message with two
-// PK-flagged columns returns errCompositePK.
 func TestRelationCacheCompositePKRejected(t *testing.T) {
 	t.Parallel()
 	cache := newRelationCache()
@@ -88,7 +82,7 @@ func TestRelationCacheCompositePKRejected(t *testing.T) {
 		isPK     bool
 	}{
 		{"order_id", OIDInt4, true},
-		{"item_id", OIDInt4, true}, // composite PK — must be rejected
+		{"item_id", OIDInt4, true},
 		{"qty", OIDInt4, false},
 	})
 
@@ -101,8 +95,6 @@ func TestRelationCacheCompositePKRejected(t *testing.T) {
 	}
 }
 
-// TestRelationCacheUnsupportedPKOID verifies that relations with PK columns
-// of unsupported OIDs are rejected with errUnsupportedPKType.
 func TestRelationCacheUnsupportedPKOID(t *testing.T) {
 	t.Parallel()
 
@@ -145,8 +137,6 @@ func TestRelationCacheUnsupportedPKOID(t *testing.T) {
 	}
 }
 
-// TestRelationCacheUUIDDataType verifies that uuid (2950), text (25), and int8 (20)
-// PKs are all accepted as allowed scalar PK OIDs.
 func TestRelationCacheUUIDDataType(t *testing.T) {
 	t.Parallel()
 
@@ -188,13 +178,10 @@ func TestRelationCacheUUIDDataType(t *testing.T) {
 	}
 }
 
-// TestRelationCacheOverwrite verifies that updating the same relation OID replaces
-// the previous entry (handles schema changes / DDL ALTER TABLE).
 func TestRelationCacheOverwrite(t *testing.T) {
 	t.Parallel()
 	cache := newRelationCache()
 
-	// Initial schema: id int4, name text.
 	msg1 := makeRelMsg(400, "public", "products", []struct {
 		name     string
 		dataType uint32
@@ -211,7 +198,6 @@ func TestRelationCacheOverwrite(t *testing.T) {
 		t.Fatalf("first update: expected 2 columns, got %d", len(info1.Columns))
 	}
 
-	// DDL: table gained a "price" column.
 	msg2 := makeRelMsg(400, "public", "products", []struct {
 		name     string
 		dataType uint32
@@ -231,14 +217,12 @@ func TestRelationCacheOverwrite(t *testing.T) {
 	if len(info2.Columns) != 3 {
 		t.Errorf("second update: expected 3 columns, got %d", len(info2.Columns))
 	}
-	// Pointer should differ (new entry was stored).
+
 	if info1 == info2 {
 		t.Error("second update: expected a new relationInfo pointer, got same pointer")
 	}
 }
 
-// TestRelationCacheNoPKRejected verifies that a table with no PK-flagged columns
-// is rejected (REPLICA IDENTITY NOTHING or no REPLICA IDENTITY).
 func TestRelationCacheNoPKRejected(t *testing.T) {
 	t.Parallel()
 	cache := newRelationCache()
@@ -256,13 +240,12 @@ func TestRelationCacheNoPKRejected(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for table with no PK, got nil")
 	}
-	// Should be errCompositePK (used for "0 PK columns" case too, as documented).
+
 	if !errors.Is(err, errCompositePK) {
 		t.Errorf("expected errCompositePK, got: %v", err)
 	}
 }
 
-// TestRelationCacheGetMiss verifies that Get returns (nil, false) for an unknown OID.
 func TestRelationCacheGetMiss(t *testing.T) {
 	t.Parallel()
 	cache := newRelationCache()

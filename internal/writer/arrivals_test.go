@@ -17,7 +17,6 @@ func TestWaitArrival_Uniform_DeterministicSpacing(t *testing.T) {
 	rng := mathrand.New(mathrand.NewPCG(42, 42))
 	ctx := context.Background()
 
-	// Burn the initial token immediately (limiter starts with one slot).
 	if err := waitArrival(ctx, lim, DistUniform, rng); err != nil {
 		t.Fatalf("waitArrival initial: %v", err)
 	}
@@ -35,7 +34,7 @@ func TestWaitArrival_Uniform_DeterministicSpacing(t *testing.T) {
 
 	mean := meanFloat(intervals)
 	stddev := stddevFloat(intervals, mean)
-	// Target 1/λ = 0.1 s = 100 ms.
+
 	if math.Abs(mean-0.1) > 0.05 {
 		t.Errorf("uniform mean = %.4f s, want ~0.1 s ±0.05", mean)
 	}
@@ -51,7 +50,6 @@ func TestWaitArrival_Poisson_ExponentialShape(t *testing.T) {
 	rng := mathrand.New(mathrand.NewPCG(42, 42))
 	ctx := context.Background()
 
-	// Warm up to absorb initial limiter token + any startup transient.
 	for i := 0; i < 5; i++ {
 		if err := waitArrival(ctx, lim, DistPoisson, rng); err != nil {
 			t.Fatalf("warmup: %v", err)
@@ -70,13 +68,11 @@ func TestWaitArrival_Poisson_ExponentialShape(t *testing.T) {
 	}
 	mean := meanFloat(intervals)
 	stddev := stddevFloat(intervals, mean)
-	// Mean should be ~ 1/λ = 100 ms. Tolerate scheduling jitter ±15 ms over 1000 samples.
+
 	if math.Abs(mean-0.1) > 0.015 {
 		t.Errorf("poisson mean = %.4f s, want ~0.1 s ±0.015", mean)
 	}
-	// Coefficient of variation of an exponential distribution is 1.0.
-	// The composed mechanism (rate limiter + Exp jitter consuming a token)
-	// produces near-exponential inter-arrivals; tolerate a wide band.
+
 	cov := stddev / mean
 	if cov < 0.5 || cov > 1.3 {
 		t.Errorf("poisson CoV (stddev/mean) = %.3f, want in [0.5, 1.3]", cov)
@@ -84,11 +80,10 @@ func TestWaitArrival_Poisson_ExponentialShape(t *testing.T) {
 }
 
 func TestWaitArrival_Cancel(t *testing.T) {
-	lim := rate.NewLimiter(rate.Limit(0.01), 1) // ~100 s between tokens
+	lim := rate.NewLimiter(rate.Limit(0.01), 1)
 	rng := mathrand.New(mathrand.NewPCG(1, 1))
 	ctx, cancel := context.WithCancel(context.Background())
 
-	// Burn the initial token immediately so the next call blocks.
 	if err := waitArrival(ctx, lim, DistUniform, rng); err != nil {
 		t.Fatalf("first waitArrival: %v", err)
 	}

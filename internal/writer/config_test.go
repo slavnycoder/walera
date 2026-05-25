@@ -8,8 +8,6 @@ import (
 	"time"
 )
 
-// resetEnv unsets any WRITER_* env var so tests are isolated. Returns a
-// restoration function.
 func resetEnv(t *testing.T) func() {
 	t.Helper()
 	saved := map[string]string{}
@@ -30,15 +28,13 @@ func resetEnv(t *testing.T) func() {
 	}
 }
 
-// newTestFlagSet returns an empty flag set so Load does not attempt to read
-// command-line flags from `go test`.
 func newTestFlagSet() *flag.FlagSet {
 	return flag.NewFlagSet("writer-test", flag.ContinueOnError)
 }
 
 func TestLoad_Defaults(t *testing.T) {
 	defer resetEnv(t)()
-	// PG.DSN is required; set it so we exercise defaults for the rest.
+
 	t.Setenv("WRITER_PG_DSN", "postgres://u:p@h/db?sslmode=disable")
 
 	cfg, err := Load("", newTestFlagSet())
@@ -133,11 +129,6 @@ func TestLoad_TargetTablesCSV(t *testing.T) {
 	}
 }
 
-// TestLoad_CORSOriginsFromCommaSeparatedEnv asserts that the
-// WRITER_HTTP_CORS_ORIGINS env var (a single comma-separated string) is
-// coerced to []string via the env transform. Mirrors walera's
-// TestLoad_CORSOriginsFromSingleStringEnv pattern. Empty entries (stray
-// trailing comma, double comma) are dropped; whitespace is trimmed.
 func TestLoad_CORSOriginsFromCommaSeparatedEnv(t *testing.T) {
 	defer resetEnv(t)()
 	t.Setenv("WRITER_PG_DSN", "postgres://u:p@h/db?sslmode=disable")
@@ -158,9 +149,6 @@ func TestLoad_CORSOriginsFromCommaSeparatedEnv(t *testing.T) {
 	}
 }
 
-// TestLoad_CORSOriginsDefault asserts the default config has an empty
-// allowlist (CORS disabled — current behavior preserved when the env var
-// is absent).
 func TestLoad_CORSOriginsDefault(t *testing.T) {
 	defer resetEnv(t)()
 	t.Setenv("WRITER_PG_DSN", "postgres://u:p@h/db?sslmode=disable")
@@ -174,9 +162,6 @@ func TestLoad_CORSOriginsDefault(t *testing.T) {
 	}
 }
 
-// TestLoad_DatabaseURLFallback_Resolves verifies that WALERA_DATABASE_URL
-// alone (no -pg-dsn flag, no WRITER_PG_DSN) resolves pg.dsn and passes
-// validation.
 func TestLoad_DatabaseURLFallback_Resolves(t *testing.T) {
 	defer resetEnv(t)()
 	t.Setenv("WALERA_DATABASE_URL", "postgres://shared:p@h/db?sslmode=disable")
@@ -190,8 +175,6 @@ func TestLoad_DatabaseURLFallback_Resolves(t *testing.T) {
 	}
 }
 
-// TestLoad_WriterPGDSNWinsOverDatabaseURL verifies WRITER_PG_DSN takes
-// precedence over the WALERA_DATABASE_URL fallback.
 func TestLoad_WriterPGDSNWinsOverDatabaseURL(t *testing.T) {
 	defer resetEnv(t)()
 	t.Setenv("WRITER_PG_DSN", "postgres://writer:p@h/db")
@@ -206,8 +189,6 @@ func TestLoad_WriterPGDSNWinsOverDatabaseURL(t *testing.T) {
 	}
 }
 
-// TestLoad_PGDSNFlagWinsOverDatabaseURL verifies an explicitly-set -pg-dsn
-// flag wins over the WALERA_DATABASE_URL fallback.
 func TestLoad_PGDSNFlagWinsOverDatabaseURL(t *testing.T) {
 	defer resetEnv(t)()
 	t.Setenv("WALERA_DATABASE_URL", "postgres://shared:p@h/db")
@@ -227,8 +208,6 @@ func TestLoad_PGDSNFlagWinsOverDatabaseURL(t *testing.T) {
 	}
 }
 
-// TestLoad_NoPGDSNSource_StillRequired verifies that with none of the three
-// sources set, validation still fails with "pg.dsn is required".
 func TestLoad_NoPGDSNSource_StillRequired(t *testing.T) {
 	defer resetEnv(t)()
 	t.Setenv("WALERA_DATABASE_URL", "")

@@ -1,30 +1,5 @@
 //go:build integration
 
-// Package integration — scenario 14: replication slot and publication
-// lifecycle (WAL-01) plus the WAL-06 temporary-slot assertion that locks
-// the doc-to-code contract from docs/adr/0004-replication-slot-policy.md.
-//
-// Subtests:
-//   - PublicationReuse        — start Walera against the fixture publication;
-//     INSERTs flow through (binds without re-creating).
-//   - PublicationMissing      — DROP the seeded publication before starting
-//     Walera; assert the bootstrap.mode="auto" path re-creates it and
-//     INSERTs flow through. The default test harness sets bootstrap.mode
-//     implicitly via the wal-config defaults (auto / FOR ALL TABLES fallback
-//     when wal.bootstrap.tables is empty).
-//   - SlotCreate              — fresh boot; query pg_replication_slots for
-//     the Walera-derived slot; assert temporary=true, active=true.
-//   - SlotAlreadyExists       — pre-create a non-temporary slot whose name
-//     does NOT collide with the binary's pid-derived name; assert the
-//     binary's own slot is created alongside it (proving the slot policy
-//     uniquely names each runtime). Codifies the observable behaviour
-//     without depending on a forced collision (the binary's pid is
-//     unpredictable; a pid-collision scenario is non-deterministic).
-//   - TemporarySlotLifecycle  — D-09 assertion: assert the slot Walera
-//     creates is temporary=true; SIGTERM the binary; poll pg_replication_slots
-//     until the slot disappears.
-//
-// Citations: WAL-01, WAL-06.
 package integration
 
 import (
@@ -39,12 +14,6 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// derivedSlotName mirrors wal.Config.NewSlotName(hostname, pid): lower-cases
-// alphabetic runes and rewrites every other rune outside [a-z0-9_] to '_',
-// then appends `_<pid>`. Duplicated here (rather than imported from
-// internal/wal) because deps-check forbids test/integration from importing
-// internal/wal — the integration package observes Walera externally via
-// the spawned binary and admin DB.
 func derivedSlotName(prefix, hostname string, pid int) string {
 	var b strings.Builder
 	b.Grow(len(hostname))
@@ -61,11 +30,6 @@ func derivedSlotName(prefix, hostname string, pid int) string {
 	return fmt.Sprintf("%s_%s_%d", prefix, b.String(), pid)
 }
 
-// waitForSlotPrefix polls pg_replication_slots until the first slot whose
-// slot_name starts with prefix appears, or the deadline elapses. Returns
-// (slot_name, temporary, active, ok). Used because the binary's pid (and
-// therefore exact slot suffix) is not directly visible from the test —
-// the prefix walera_test_<sanitised-host>_ is sufficient to find it.
 func waitForSlotPrefix(t *testing.T, p *PG, prefix string, deadline time.Duration) (string, bool, bool, bool) {
 	t.Helper()
 	end := time.Now().Add(deadline)
@@ -79,9 +43,6 @@ func waitForSlotPrefix(t *testing.T, p *PG, prefix string, deadline time.Duratio
 	return "", false, false, false
 }
 
-// findSlotByPrefix returns the first pg_replication_slots row whose slot_name
-// starts with prefix and (when skip != "") is not equal to skip. ok=false
-// when no such row exists.
 func findSlotByPrefix(t *testing.T, p *PG, prefix, skip string) (string, bool, bool, bool) {
 	t.Helper()
 	ctx := context.Background()
@@ -113,9 +74,7 @@ func Test14SlotLifecycle(t *testing.T) {
 	t.Parallel()
 
 	t.Run("PublicationReuse", func(t *testing.T) {
-		// The seeded publication (cdc_sse_streamer) is created by
-		// testdata/001_publication.sql before Walera connects. The
-		// bootstrap.mode="auto" "publication exists" branch binds it.
+
 		h := NewHarness(t)
 		h.Auth.SetMap(
 			"test-token", "test-user",
@@ -148,8 +107,7 @@ func Test14SlotLifecycle(t *testing.T) {
 	})
 
 	t.Run("PublicationMissing", func(t *testing.T) {
-		// Boot PG (publication seeded), DROP the publication, then spawn
-		// Walera. The auto-bootstrap path must re-create the publication.
+
 		pg := NewPG(t)
 		auth := NewMockAuth(t)
 		auth.SetMap(
@@ -189,8 +147,7 @@ func Test14SlotLifecycle(t *testing.T) {
 	})
 
 	t.Run("SlotCreate", func(t *testing.T) {
-		// Fresh harness; the binary creates one temporary pgoutput slot at
-		// startup. Assert the observable shape: temporary=true, active=true.
+
 		h := NewHarness(t)
 		h.Auth.SetMap(
 			"test-token", "test-user",
@@ -210,14 +167,7 @@ func Test14SlotLifecycle(t *testing.T) {
 	})
 
 	t.Run("SlotAlreadyExists", func(t *testing.T) {
-		// Pre-create a non-temporary slot whose name does NOT collide with
-		// the binary's pid-derived name (we use synthetic pid 99999 — the
-		// spawned binary's real pid will differ). Assert the binary's own
-		// slot is created alongside the pre-created one. This codifies the
-		// observable behaviour: the slot-name derivation (hostname + pid)
-		// is collision-avoiding by construction; the binary does not abort
-		// on the presence of unrelated pre-existing slots in the same
-		// namespace.
+
 		pg := NewPG(t)
 		auth := NewMockAuth(t)
 		auth.SetMap(
@@ -234,10 +184,9 @@ func Test14SlotLifecycle(t *testing.T) {
 
 		bin := SpawnBinary(t, pg.DSN, pg.ReplicationDSN(), auth.URL())
 
-		// Walera's own slot appears with a different pid suffix.
 		binSlot, temp, _, ok := findSlotByPrefix(t, pg, "walera_test_", preCreated)
 		if !ok {
-			// Give the reader a moment to bootstrap its slot.
+
 			deadline := time.Now().Add(10 * time.Second)
 			for time.Now().Before(deadline) {
 				binSlot, temp, _, ok = findSlotByPrefix(t, pg, "walera_test_", preCreated)
@@ -259,8 +208,7 @@ func Test14SlotLifecycle(t *testing.T) {
 	})
 
 	t.Run("TemporarySlotLifecycle", func(t *testing.T) {
-		// D-09 assertion: the slot is temporary=true AND vanishes when the
-		// binary's replication connection closes. Source of truth for WAL-06.
+
 		pg := NewPG(t)
 		auth := NewMockAuth(t)
 		auth.SetMap(
@@ -278,15 +226,10 @@ func Test14SlotLifecycle(t *testing.T) {
 			t.Fatalf("WAL-06 / D-10 finding: slot %q is not temporary; fix internal/wal/slot.go::bootstrapSlot to pass Temporary: true", slotName)
 		}
 
-		// SIGTERM the binary to close the replication connection. The
-		// harness's t.Cleanup also signals SIGTERM later — idempotent.
 		if err := bin.Signal(syscall.SIGTERM); err != nil {
 			t.Fatalf("SIGTERM binary: %v", err)
 		}
 
-		// Poll pg_replication_slots until the slot disappears. Temporary
-		// slots are dropped automatically when the replication connection
-		// closes (ADR-04 §"Temporary slot policy").
 		deadline := time.Now().Add(15 * time.Second)
 		for time.Now().Before(deadline) {
 			if !pg.SlotExists(t, slotName) {

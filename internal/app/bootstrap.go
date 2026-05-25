@@ -15,12 +15,8 @@ import (
 	"github.com/walera/walera/internal/walconn"
 )
 
-// pgRoleNameRe matches the PostgreSQL unquoted identifier shape
-// (NAMEDATALEN - 1 = 63). Mirrors internal/config.pgIdentRe.
 var pgRoleNameRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,62}$`)
 
-// bootstrapConfig carries the fields read off AppConfig.WAL into
-// bootstrapPublication. Package-private.
 type bootstrapConfig struct {
 	Mode            string
 	PublicationName string
@@ -30,13 +26,8 @@ type bootstrapConfig struct {
 	PostgresDSN     string
 }
 
-// verifyPGPrereqs confirms the three required PostgreSQL GUCs
-// (wal_level=logical, max_replication_slots>=1, max_wal_senders>=1) at
-// admin-connection time so misconfiguration fails startup with an
-// actionable message instead of a delayed WAL-reader error.
 func verifyPGPrereqs(ctx context.Context, adminConn walconn.AdminConn, logger zerolog.Logger) error {
-	// Named pointer types (AdminConn *pgx.Conn) do NOT inherit *pgx.Conn's
-	// method set; convert once at the boundary.
+
 	conn := (*pgx.Conn)(adminConn)
 	readPGSetting := func(name string) (string, error) {
 		var setting string
@@ -59,7 +50,7 @@ func verifyPGPrereqs(ctx context.Context, adminConn walconn.AdminConn, logger ze
 		if err != nil {
 			return err
 		}
-		// strconv.Atoi rejects non-integer forms; n < 1 rules out 0/negative.
+
 		n, err := strconv.Atoi(setting)
 		if err != nil || n < 1 {
 			return failPGSetting(name, setting, ">= 1")
@@ -84,19 +75,8 @@ func verifyPGPrereqs(ctx context.Context, adminConn walconn.AdminConn, logger ze
 	return nil
 }
 
-// verifyReplicationRole confirms the connecting role can start a walsender —
-// i.e. it holds the REPLICATION attribute or is a superuser. PostgreSQL's
-// REPLICATION is a direct role attribute, never inherited via membership, so
-// checking the connecting role's own pg_roles row (rolname = current_user) is
-// correct. Run at admin-connection time so a misconfigured role fails startup
-// with an actionable message instead of an opaque, retried-forever walsender
-// error in the WAL reader.
-//
-// SECURITY: logs the role NAME only (an identifier, like bootstrapEnsureRole)
-// — never the DSN or password.
 func verifyReplicationRole(ctx context.Context, adminConn walconn.AdminConn, logger zerolog.Logger) error {
-	// Named pointer types (AdminConn *pgx.Conn) do NOT inherit *pgx.Conn's
-	// method set; convert once at the boundary.
+
 	conn := (*pgx.Conn)(adminConn)
 	var (
 		rolname        string
@@ -124,8 +104,6 @@ func verifyReplicationRole(ctx context.Context, adminConn walconn.AdminConn, log
 	return nil
 }
 
-// bootstrapPublication dispatches the publication bootstrap / existence
-// check on cfg.Mode (auto|verify|off).
 func bootstrapPublication(ctx context.Context, adminConn walconn.AdminConn, cfg bootstrapConfig, logger zerolog.Logger) error {
 	conn := (*pgx.Conn)(adminConn)
 	switch cfg.Mode {
@@ -150,9 +128,7 @@ func bootstrapPublication(ctx context.Context, adminConn walconn.AdminConn, cfg 
 			Int("table_count", tableCount).
 			Msg("publication check passed")
 	case "auto":
-		// Optional idempotent role creation. Errors are downgraded to
-		// warnings; the WAL reader surfaces auth failures on its own
-		// connection attempt.
+
 		if cfg.CreateRoles {
 			bootstrapEnsureRole(ctx, walconn.AdminConn(conn), cfg.ReplicationDSN, true, logger)
 			bootstrapEnsureRole(ctx, walconn.AdminConn(conn), cfg.PostgresDSN, false, logger)
@@ -167,9 +143,7 @@ func bootstrapPublication(ctx context.Context, adminConn walconn.AdminConn, cfg 
 			return fmt.Errorf("publication existence check failed (%s): %w", cfg.PublicationName, err)
 		}
 		if exists {
-			// Inventory tables; auto-mode zero-count is a warning (FOR ALL
-			// TABLES publications populate as tables are added). Live
-			// publication reconciliation is a DBA action; we never mutate it.
+
 			var tableCount int
 			if err := conn.QueryRow(ctx,
 				"SELECT count(*) FROM pg_publication_tables WHERE pubname = $1",
@@ -191,9 +165,7 @@ func bootstrapPublication(ctx context.Context, adminConn walconn.AdminConn, cfg 
 				bootstrapVerifyTables(ctx, walconn.AdminConn(conn), cfg.PublicationName, cfg.Tables, logger)
 			}
 		} else {
-			// Publication missing — create. Identifier interpolation is safe;
-			// publication_name + tables were validated at config.Load
-			// (pgIdentRe + pgQualifiedTableRe).
+
 			var ddl, mode string
 			if len(cfg.Tables) > 0 {
 				ddl = fmt.Sprintf(
@@ -219,15 +191,12 @@ func bootstrapPublication(ctx context.Context, adminConn walconn.AdminConn, cfg 
 				Msg("publication created (bootstrap.mode=auto)")
 		}
 	default:
-		// Unreachable: config.validate rejects invalid modes at Load.
+
 		panic(fmt.Sprintf("unreachable: invalid bootstrap.mode %q passed validation", cfg.Mode))
 	}
 	return nil
 }
 
-// checkSlotHeadroom warns when free replication slots fall below
-// wal.slot_headroom_min. Errors are downgraded to warnings — slot
-// exhaustion is a soft signal, not a startup gate.
 func checkSlotHeadroom(ctx context.Context, adminConn walconn.AdminConn, headroomMin int, slotName string, logger zerolog.Logger) {
 	conn := (*pgx.Conn)(adminConn)
 	var maxSlots, usedSlots int
@@ -260,11 +229,6 @@ func checkSlotHeadroom(ctx context.Context, adminConn walconn.AdminConn, headroo
 		Msg("slot headroom check passed")
 }
 
-// bootstrapEnsureRole idempotently creates a PostgreSQL role from the
-// dsn's `username`+`password`. Existing role → no-op; failures
-// downgrade to warn (the runtime connection surfaces real auth errors).
-// isReplication=true adds REPLICATION; otherwise grants pg_monitor.
-// Password is never logged.
 func bootstrapEnsureRole(ctx context.Context, adminConn walconn.AdminConn, dsn string, isReplication bool, logger zerolog.Logger) {
 	conn := (*pgx.Conn)(adminConn)
 	u, err := url.Parse(dsn)
@@ -277,15 +241,13 @@ func bootstrapEnsureRole(ctx context.Context, adminConn walconn.AdminConn, dsn s
 	username := u.User.Username()
 	password, hasPassword := u.User.Password()
 	if username == "" || !hasPassword {
-		// No has_username/has_password fields — they'd leak secret-presence
-		// signals to log aggregators.
+
 		logger.Warn().
 			Bool("replication", isReplication).
 			Msg("bootstrap.create_roles: DSN lacks username or password; cannot provision role")
 		return
 	}
-	// pgRoleNameRe gates the CREATE ROLE branch (PostgreSQL DDL does not
-	// accept parameters for identifiers).
+
 	if !pgRoleNameRe.MatchString(username) {
 		logger.Warn().
 			Str("role", username).
@@ -311,8 +273,7 @@ func bootstrapEnsureRole(ctx context.Context, adminConn walconn.AdminConn, dsn s
 	if isReplication {
 		attrs = "LOGIN REPLICATION"
 	}
-	// Defense in depth: refuse passwords with backslash or NUL. The
-	// single-quote-escape below presumes standard_conforming_strings=on.
+
 	if strings.ContainsAny(password, "\\\x00") {
 		logger.Warn().
 			Bool("replication", isReplication).
@@ -341,9 +302,6 @@ func bootstrapEnsureRole(ctx context.Context, adminConn walconn.AdminConn, dsn s
 	}
 }
 
-// bootstrapVerifyTables compares wal.bootstrap.tables against
-// pg_publication_tables and warns on mismatches. Never mutates the
-// publication (DBA action).
 func bootstrapVerifyTables(ctx context.Context, adminConn walconn.AdminConn, publication string, want []string, logger zerolog.Logger) {
 	conn := (*pgx.Conn)(adminConn)
 	rows, err := conn.Query(ctx,

@@ -1,4 +1,3 @@
-// Package router — router.go: Broadcaster fan-out engine. See doc.go invariants 1-7 and INVARIANTS.md §Concurrency.
 package router
 
 import (
@@ -14,19 +13,10 @@ import (
 	"github.com/walera/walera/internal/wal"
 )
 
-// encoderIface is the package-private seam over the Event-to-wire encoder.
-// It is intentionally distinct from internal/sse's same-named control-frame
-// encoderIface (EncodeHeartbeat/EncodeShutdown/EncodeError): the two
-// interfaces have non-overlapping method sets and serve different roles.
-// router must not import sse; unifying them would invert the dependency
-// direction. See INVARIANTS.md §Concurrency "encoderIface decoupling".
 type encoderIface interface {
 	Encode(Event) ([]byte, bool)
 }
 
-// Broadcaster owns the routing data plane (exact + wildcard indexes) and
-// the Ingest loop. Construct via New. Register/Deregister are concurrent-safe;
-// Ingest is single-goroutine. See doc.go invariants 1-7.
 type Broadcaster struct {
 	cfg      Config
 	log      zerolog.Logger
@@ -36,15 +26,11 @@ type Broadcaster struct {
 	wildcard *wildcardIndex
 }
 
-// Deps bundles Broadcaster collaborators. Metrics + Encoder required (panic on nil);
-// Logger is value-type with usable Nop zero value.
 type Deps struct {
-	// Logger is the structured logger; zero value is a usable Nop.
 	Logger zerolog.Logger
-	// Metrics is the typed Prometheus registry. Required.
+
 	Metrics *metrics.Registry
-	// Encoder produces SSE wire bytes from a router.Event. Required. Production
-	// passes sse.NewEncoder(cfg.Http.MaxPayloadBytes); tests stub.
+
 	Encoder encoderIface
 }
 
@@ -57,10 +43,6 @@ func validateDeps(d Deps) {
 	}
 }
 
-// New constructs a Broadcaster with empty indexes. No error return — there
-// are no failure modes at construction. Pre-touches the three walera_tx_dropped_total
-// reason series ("slow_consumer", "tx_too_large", "multi_root") so they appear in
-// Gather() from t=0; see INVARIANTS.md §Concurrency for the multi_root pre-touch site.
 func New(cfg Config, deps Deps) *Broadcaster {
 	validateDeps(deps)
 	b := &Broadcaster{
@@ -77,10 +59,6 @@ func New(cfg Config, deps Deps) *Broadcaster {
 	return b
 }
 
-// Register inserts sub into the matching index and increments
-// walera_subscribers_active{type=<kind>}. Called by the SSE handler;
-// Deregister is the writer-side counterpart (single-owner cleanup, doc.go #7).
-// Never logs row data. Approved fields: subscriber_id, kind, channel, start_lsn.
 func (b *Broadcaster) Register(sub *Subscriber) {
 	switch sub.Kind() {
 	case KindExact:
@@ -106,10 +84,6 @@ func (b *Broadcaster) Register(sub *Subscriber) {
 	}
 }
 
-// Deregister removes sub from the matching index and decrements
-// walera_subscribers_active{type=<kind>}. Single-owner cleanup: invoked
-// ONLY by the SSE writer goroutine's defer (doc.go #7). Reason logged is
-// sub.Reason() — empty string on a clean client close.
 func (b *Broadcaster) Deregister(sub *Subscriber) {
 	reason := sub.Reason()
 	switch sub.Kind() {
@@ -136,9 +110,6 @@ func (b *Broadcaster) Deregister(sub *Subscriber) {
 	}
 }
 
-// Ingest is the single-goroutine consumer of txCh. Returns nil on txCh
-// close, ctx.Err() on cancellation. Single-reader invariant (doc.go #1) —
-// callers MUST not invoke Ingest from more than one goroutine.
 func (b *Broadcaster) Ingest(ctx context.Context, txCh <-chan wal.Tx) error {
 	for {
 		select {
@@ -255,30 +226,12 @@ func (b *Broadcaster) dispatchEvent(tx wal.Tx, sub *Subscriber, indices []int) {
 	}
 }
 
-// ExactLen returns the total number of registered exact subscribers across
-// all 8 shards. Sampled by the metrics-sampler to update
-// walera_routing_index_size{index_kind="exact"}.
-// Metrics returns the registry this Broadcaster publishes counters into;
-// exposed for the composition-root singleton-identity test.
 func (b *Broadcaster) Metrics() *metrics.Registry { return b.metrics }
 
 func (b *Broadcaster) ExactLen() int { return b.exact.Len() }
 
-// WildcardLen returns the total number of registered wildcard subscribers
-// across every "<schema>.<table>" key. Sampled by the metrics-sampler to
-// update walera_routing_index_size{index_kind="wildcard"}.
 func (b *Broadcaster) WildcardLen() int { return b.wildcard.Len() }
 
-// Shutdown drains every active subscriber by calling sub.Drop("shutdown")
-// and waiting for each subscriber's writer to complete (sub.Done() closing).
-// Returns nil on clean drain, context.DeadlineExceeded on drainDeadline
-// expiry, or ctx.Err() if the parent context is cancelled first.
-//
-// Snapshots both indexes once under copy-before-unlock, fans out per-sub via
-// safego.Go (doc.go #8), and bounds total wait by drainDeadline + ctx.Done().
-// Called CONCURRENTLY with http.Server.Shutdown in cmd/cdc-sse/main.go —
-// the shutdown frame + conn close lets srv.Shutdown's StateActive→StateIdle
-// poller make progress on otherwise-pinned SSE connections.
 func (b *Broadcaster) Shutdown(ctx context.Context, drainDeadline time.Duration) error {
 	subs := append(b.exact.Snapshot(), b.wildcard.Snapshot()...)
 

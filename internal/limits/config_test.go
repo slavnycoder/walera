@@ -63,8 +63,6 @@ func TestLoadConfig_TrustedProxiesRejectsBadCIDR(t *testing.T) {
 	}
 }
 
-// TestLoadConfig_SchemaRules — D-12 layer 2 positive-rate / non-negative
-// duration rules for the limits package.
 func TestLoadConfig_SchemaRules(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -117,11 +115,8 @@ func TestLoadConfig_SchemaRules(t *testing.T) {
 	}
 }
 
-// Suppress "imported and not used" if SweepInterval/time isn't otherwise
-// referenced after edits.
 var _ = time.Second
 
-// TestLoadConfig_CombinationRules — D-12 layer 3 burst-vs-rate pairs.
 func TestLoadConfig_CombinationRules(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -160,8 +155,6 @@ func TestLoadConfig_CombinationRules(t *testing.T) {
 	}
 }
 
-// TestLoadConfig_CombinationRules_BurstEqualToRateOK — when burst equals
-// rate (the inclusive edge) the loader accepts the config.
 func TestLoadConfig_CombinationRules_BurstEqualToRateOK(t *testing.T) {
 	k := newK(t)
 	_ = k.Set("limits.per_user_burst", 5)

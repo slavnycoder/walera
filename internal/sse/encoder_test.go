@@ -1,5 +1,3 @@
-// Package sse — encoder_test.go asserts byte-level wire-format compliance
-// with spec §3.5 and exercises the sync.Pool buffer path under -race.
 package sse
 
 import (
@@ -16,12 +14,8 @@ import (
 	"github.com/walera/walera/internal/wal"
 )
 
-// fixedCommitTS is a stable timestamp used by encoder tests so the data
-// payload's commit_ts field is deterministic across runs.
 var fixedCommitTS = time.Date(2026, 5, 15, 12, 30, 45, 123456789, time.UTC)
 
-// buildTx is a small test-helper that constructs a wal.Tx with the supplied
-// commit LSN / tx id / changes — keeps tests readable.
 func buildTx(commitLSN pglogrepl.LSN, txID uint32, changes []wal.Change) wal.Tx {
 	return wal.Tx{
 		ID:        txID,
@@ -70,7 +64,6 @@ func TestEncoder_TxInsert(t *testing.T) {
 		t.Fatalf("frame must end with %q; got tail %q", "}\\n\\n", s[len(s)-min(len(s), 8):])
 	}
 
-	// Extract and re-parse the data payload.
 	const dataPrefix = "data: "
 	dataStart := strings.Index(s, dataPrefix)
 	if dataStart < 0 {
@@ -184,7 +177,7 @@ func TestEncoder_EncodeError_QuotesEscaped(t *testing.T) {
 
 	enc := NewEncoder(0)
 	got := enc.EncodeError(`a"b`)
-	// The reason must be JSON-escaped — embedded " becomes \".
+
 	if !bytes.Contains(got, []byte(`{"reason":"a\"b"}`)) {
 		t.Errorf("escaped reason missing in frame: %q", got)
 	}
@@ -204,15 +197,6 @@ func TestEncoder_EncodeHeartbeat(t *testing.T) {
 	}
 }
 
-// TestEncoder_EncodeShutdown asserts byte-exact compliance with the
-// shutdown-frame contract: the shutdown frame is the constant
-//
-//	event: shutdown
-//	data: {"reason":"service_restart"}
-//
-// terminated by the SSE frame-blank-line (\n\n). The event name is `shutdown`
-// (not `error`) and the data payload uses the canonical reason string
-// `service_restart` — both are stable wire contracts that clients branch on.
 func TestEncoder_EncodeShutdown(t *testing.T) {
 	t.Parallel()
 
@@ -222,9 +206,7 @@ func TestEncoder_EncodeShutdown(t *testing.T) {
 	if !bytes.Equal(got, want) {
 		t.Errorf("EncodeShutdown = %q\nwant            %q", got, want)
 	}
-	// The returned slice is the package-level constant; multiple calls must
-	// return the same underlying bytes (no per-call allocation), matching
-	// the EncodeHeartbeat contract.
+
 	got2 := enc.EncodeShutdown()
 	if !bytes.Equal(got, got2) {
 		t.Errorf("EncodeShutdown not stable across calls")
@@ -261,8 +243,6 @@ func TestEncoder_PoolReuse(t *testing.T) {
 	wg.Wait()
 }
 
-// TestEncoder_RespectsPayloadCap. With MaxPayloadBytes=100,
-// any non-trivial event overflows and Encode returns (nil, true).
 func TestEncoder_RespectsPayloadCap(t *testing.T) {
 	t.Parallel()
 
@@ -290,8 +270,6 @@ func TestEncoder_RespectsPayloadCap(t *testing.T) {
 	}
 }
 
-// TestEncoder_BelowCapEncodesNormally happy path. With a 10 MiB
-// cap, a small event encodes and overflow=false.
 func TestEncoder_BelowCapEncodesNormally(t *testing.T) {
 	t.Parallel()
 
@@ -309,12 +287,10 @@ func TestEncoder_BelowCapEncodesNormally(t *testing.T) {
 	}
 }
 
-// TestEncoder_HeartbeatNotCapped — EncodeHeartbeat ignores the cap; the
-// heartbeat byte slice is a 3-byte package constant.
 func TestEncoder_HeartbeatNotCapped(t *testing.T) {
 	t.Parallel()
 
-	enc := NewEncoder(1) // absurdly low cap
+	enc := NewEncoder(1)
 	got := enc.EncodeHeartbeat()
 	if len(got) != 3 {
 		t.Errorf("len(heartbeat) = %d; want 3", len(got))

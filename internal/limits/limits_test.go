@@ -14,8 +14,6 @@ import (
 	"github.com/walera/walera/internal/metrics"
 )
 
-// --- helpers ---
-
 func gatherCounter(t *testing.T, reg *metrics.Registry, name, labelKey, labelVal string) float64 {
 	t.Helper()
 	families, err := reg.Gatherer().Gather()
@@ -63,7 +61,6 @@ func matchLabel(m *dto.Metric, key, val string) bool {
 	return false
 }
 
-// mkLimits constructs a Limits with caps suited to small unit tests.
 func mkLimits(t *testing.T, globalCap, perUserCap int) *Limits {
 	t.Helper()
 	mc := metrics.New()
@@ -79,9 +76,6 @@ func mkLimits(t *testing.T, globalCap, perUserCap int) *Limits {
 	}, Deps{Logger: zerolog.Nop(), Metrics: mc})
 }
 
-// mkLimitsWithLogCapture constructs a Limits whose logger writes to a
-// bytes.Buffer the test can inspect — used by SEC-10 / F-P2-07 tests that
-// assert on the Warn log line emitted by ReleaseGlobal's default branch.
 func mkLimitsWithLogCapture(t *testing.T, globalCap, perUserCap int) (*Limits, *bytes.Buffer) {
 	t.Helper()
 	mc := metrics.New()
@@ -98,8 +92,6 @@ func mkLimitsWithLogCapture(t *testing.T, globalCap, perUserCap int) (*Limits, *
 		SweepIdleThreshold:   5 * time.Minute,
 	}, Deps{Logger: logger, Metrics: mc}), &buf
 }
-
-// --- tests ---
 
 func TestLimits_AcquireGlobal_Succeeds_BelowCap(t *testing.T) {
 	t.Parallel()
@@ -186,7 +178,7 @@ func TestLimits_ReleasePerUser_Decrements(t *testing.T) {
 	_, _ = l.AcquirePerUser("u1")
 	_, _ = l.AcquirePerUser("u1")
 	l.ReleasePerUser("u1")
-	// Should be able to acquire again now (was at cap=2 after two acquires).
+
 	ok, n := l.AcquirePerUser("u1")
 	if !ok || n != 2 {
 		t.Fatalf("acquire after release: got (%v, %d); want (true, 2)", ok, n)
@@ -195,7 +187,7 @@ func TestLimits_ReleasePerUser_Decrements(t *testing.T) {
 
 func TestLimits_AllowPreAuthRate_TokenBucket(t *testing.T) {
 	t.Parallel()
-	// rate=1/s, burst=2 → first two succeed; third (within same instant) fails.
+
 	l := mkLimits(t, 100, 100)
 	if !l.AllowPreAuthRate("1.1.1.1") {
 		t.Fatal("first AllowPreAuthRate: got false; want true")
@@ -247,16 +239,14 @@ func TestLimits_AllowPreAuthRate_DifferentIPsIndependent(t *testing.T) {
 func TestLimits_RunSweeper_RemovesIdleEntries(t *testing.T) {
 	t.Parallel()
 	l := mkLimits(t, 100, 100)
-	// Seed an entry.
+
 	_ = l.AllowPreAuthRate("1.1.1.1")
 	v, ok := l.preAuthRate.Load("1.1.1.1")
 	if !ok {
 		t.Fatal("seeded entry missing after AllowPreAuthRate")
 	}
-	v.(*rateEntry).lastSeen.Store(0) // ancient timestamp
+	v.(*rateEntry).lastSeen.Store(0)
 
-	// Cutoff is "now" — any entry with lastSeen<now is removed (which
-	// includes the one we just zeroed).
 	l.sweep(&l.preAuthRate, time.Now().UnixNano())
 
 	if _, ok := l.preAuthRate.Load("1.1.1.1"); ok {
@@ -268,7 +258,7 @@ func TestLimits_RunSweeper_KeepsActiveEntries(t *testing.T) {
 	t.Parallel()
 	l := mkLimits(t, 100, 100)
 	_ = l.AllowPreAuthRate("1.1.1.1")
-	// Cutoff = far in the past → no entries are stale.
+
 	l.sweep(&l.preAuthRate, 0)
 	if _, ok := l.preAuthRate.Load("1.1.1.1"); !ok {
 		t.Fatal("active entry incorrectly removed by sweep")
@@ -288,7 +278,7 @@ func TestLimits_PreTouchesLimitRejectedSeries(t *testing.T) {
 func TestLimits_PreAuthRetryAfter_Defaults(t *testing.T) {
 	t.Parallel()
 	l := mkLimits(t, 100, 100)
-	// Absent entry → 1s default.
+
 	if got := l.preAuthRetryAfter("never-seen"); got != time.Second {
 		t.Errorf("PreAuthRetryAfter(absent): got %s; want 1s", got)
 	}
@@ -297,11 +287,11 @@ func TestLimits_PreAuthRetryAfter_Defaults(t *testing.T) {
 func TestLimits_PerUserRateRetryAfter(t *testing.T) {
 	t.Parallel()
 	l := mkLimits(t, 100, 100)
-	// Absent entry → default.
+
 	if got := l.perUserRateRetryAfter("never-seen"); got != time.Second {
 		t.Errorf("PerUserRateRetryAfter(absent): got %s; want 1s", got)
 	}
-	// Populate via Allow then call RetryAfter — should be non-negative.
+
 	_ = l.AllowPerUserRate("u1")
 	d := l.perUserRateRetryAfter("u1")
 	if d < 0 {
@@ -312,30 +302,26 @@ func TestLimits_PerUserRateRetryAfter(t *testing.T) {
 func TestLimits_PreAuthRetryAfter_Populated(t *testing.T) {
 	t.Parallel()
 	l := mkLimits(t, 100, 100)
-	// Exhaust burst to ensure RetryAfter returns a non-zero delay.
+
 	_ = l.AllowPreAuthRate("ip1")
 	_ = l.AllowPreAuthRate("ip1")
-	_ = l.AllowPreAuthRate("ip1") // rejected
+	_ = l.AllowPreAuthRate("ip1")
 	d := l.preAuthRetryAfter("ip1")
 	if d < 0 {
 		t.Errorf("PreAuthRetryAfter(exhausted): got %s; want >= 0", d)
 	}
 }
 
-// TestReleaseGlobal_WithoutAcquire_LogsWarn — SEC-10 / F-P2-07 closure:
-// ReleaseGlobal invoked without a prior successful AcquireGlobal logs a
-// Warn (mirrors ReleasePerUser's existing Warn at limits.go:123). No
-// panic, no negative counter — AcquireGlobal still succeeds afterwards.
 func TestReleaseGlobal_WithoutAcquire_LogsWarn(t *testing.T) {
 	t.Parallel()
 	l, buf := mkLimitsWithLogCapture(t, 10, 5)
 
-	l.ReleaseGlobal() // no prior Acquire
+	l.ReleaseGlobal()
 
 	if !strings.Contains(buf.String(), "ReleaseGlobal without prior Acquire") {
 		t.Errorf("expected Warn log; got %q", buf.String())
 	}
-	// Underflow contract preserved: AcquireGlobal still succeeds.
+
 	if !l.AcquireGlobal() {
 		t.Error("AcquireGlobal failed after defensive ReleaseGlobal — counter went negative?")
 	}
@@ -344,14 +330,10 @@ func TestReleaseGlobal_WithoutAcquire_LogsWarn(t *testing.T) {
 func TestLimits_ReleasePerUser_DefensiveWarn(t *testing.T) {
 	t.Parallel()
 	l := mkLimits(t, 100, 100)
-	// Releasing an unknown user must not panic; just logs a Warn.
+
 	l.ReleasePerUser("never-seen-user")
 }
 
-// --- Trusted-proxy allowlist ---
-
-// mkLimitsWithTrustedProxies constructs a Limits whose Config carries the
-// supplied trusted_proxies CIDRs. Mirrors mkLimits in shape.
 func mkLimitsWithTrustedProxies(t *testing.T, proxies []string) *Limits {
 	t.Helper()
 	mc := metrics.New()
@@ -455,7 +437,6 @@ func TestLimits_RunSweeper_ExitsOnCtxCancel(t *testing.T) {
 		SweepIdleThreshold:   10 * time.Millisecond,
 	}, Deps{Logger: zerolog.Nop(), Metrics: mc})
 
-	// Seed an idle entry that the sweeper should remove on its first tick.
 	_ = l.AllowPreAuthRate("idle.ip")
 	if v, ok := l.preAuthRate.Load("idle.ip"); ok {
 		v.(*rateEntry).lastSeen.Store(0)
@@ -468,7 +449,6 @@ func TestLimits_RunSweeper_ExitsOnCtxCancel(t *testing.T) {
 		close(done)
 	}()
 
-	// Give the sweeper at least one tick.
 	time.Sleep(60 * time.Millisecond)
 	cancel()
 
@@ -478,7 +458,6 @@ func TestLimits_RunSweeper_ExitsOnCtxCancel(t *testing.T) {
 		t.Fatal("RunSweeper did not exit within 200ms of ctx cancel")
 	}
 
-	// Sweeper should have removed the idle entry.
 	if _, ok := l.preAuthRate.Load("idle.ip"); ok {
 		t.Error("idle entry not removed by RunSweeper across at least one tick")
 	}

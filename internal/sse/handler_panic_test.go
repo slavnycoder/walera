@@ -1,6 +1,3 @@
-// Package sse — handler_panic_test.go covers the NewHandler construction
-// gate: each required Deps field must panic with the exact format
-// "sse.NewHandler: Deps.<Field> is required".
 package sse
 
 import (
@@ -16,9 +13,6 @@ import (
 	"github.com/walera/walera/internal/router"
 )
 
-// newHandlerPanicValidDeps returns a fully-populated Deps so each
-// per-field test only nils one field. Uses lightweight collaborators —
-// nothing crosses a network or spawns a goroutine.
 func newHandlerPanicValidDeps(t *testing.T) (Config, Deps) {
 	t.Helper()
 	logger := zerolog.Nop()
@@ -38,8 +32,7 @@ func newHandlerPanicValidDeps(t *testing.T) (Config, Deps) {
 		},
 	}
 	breaker := auth.NewBreaker(authCfg.Breaker, auth.BreakerDeps{
-		// sseTestProber adapter declared in handler_test.go — both files
-		// are in `package sse` and compile together as a single test binary.
+
 		Prober:  sseTestProber(func(_ context.Context) error { return nil }),
 		Logger:  logger,
 		Metrics: m,
@@ -94,9 +87,7 @@ func newHandlerPanicValidDeps(t *testing.T) (Config, Deps) {
 }
 
 func TestNewHandler_PanicsOnNilDeps(t *testing.T) {
-	// NOTE: not t.Parallel() — each sub-test builds its own pool via
-	// newHandlerPanicValidDeps with t.Cleanup; running the table in
-	// parallel would proliferate goroutine accounting in -race runs.
+
 	cases := []struct {
 		name    string
 		mutate  func(d *Deps)

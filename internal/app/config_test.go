@@ -8,8 +8,6 @@ import (
 	"time"
 )
 
-// writeTempYAML creates a temporary YAML config file and returns its path.
-// The caller is responsible for cleanup (t.Cleanup is used).
 func writeTempYAML(t *testing.T, content string) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -20,15 +18,11 @@ func writeTempYAML(t *testing.T, content string) string {
 	return path
 }
 
-// setPhase3RequiredEnv sets the Phase-3 mandatory auth backend URL needed for
-// Load() to pass validation. Phase-2 tests call this before Load to keep their
-// focus on Phase-2 fields without re-asserting Phase-3 defaults.
 func setPhase3RequiredEnv(t *testing.T) {
 	t.Helper()
 	t.Setenv("WALERA_AUTH_BACKEND_URL", "https://auth.example/test")
 }
 
-// TestLoad_YAMLFields verifies that Load() correctly reads fields from a YAML file.
 func TestLoad_YAMLFields(t *testing.T) {
 	setPhase3RequiredEnv(t)
 	path := writeTempYAML(t, `
@@ -65,16 +59,14 @@ wal:
 	}
 }
 
-// TestLoad_EnvOverride verifies that a WALERA_-prefixed env var overrides the YAML value.
 func TestLoad_EnvOverride(t *testing.T) {
 	setPhase3RequiredEnv(t)
-	// YAML file does NOT set publication_name.
+
 	path := writeTempYAML(t, `
 database:
   url: "postgres://admin:x@localhost/db"
 `)
 
-	// Set env var override.
 	t.Setenv("WALERA_WAL_PUBLICATION_NAME", "env_publication")
 
 	cfg, err := LoadAppConfig(path)
@@ -87,10 +79,8 @@ database:
 	}
 }
 
-// TestLoad_MissingMandatoryFields verifies that Load() returns a non-nil error
-// when mandatory fields are absent.
 func TestLoad_MissingMandatoryFields(t *testing.T) {
-	// Empty YAML file — all mandatory fields are missing.
+
 	path := writeTempYAML(t, ``)
 
 	_, err := LoadAppConfig(path)
@@ -99,9 +89,6 @@ func TestLoad_MissingMandatoryFields(t *testing.T) {
 	}
 }
 
-// TestLoad_DatabaseURLEnvDerivesBothDSNs verifies that WALERA_DATABASE_URL
-// alone (no YAML database.url) populates both the admin PostgresDSN (the base
-// URL unchanged) and the derived ReplicationDSN (base + replication=database).
 func TestLoad_DatabaseURLEnvDerivesBothDSNs(t *testing.T) {
 	setPhase3RequiredEnv(t)
 	t.Setenv("WALERA_DATABASE_URL", "postgres://admin:pass@host:5432/db?sslmode=disable")
@@ -123,8 +110,6 @@ func TestLoad_DatabaseURLEnvDerivesBothDSNs(t *testing.T) {
 	}
 }
 
-// TestLoad_MissingDatabaseURL verifies that omitting both database.url and
-// WALERA_DATABASE_URL fails with the "database.url is required" message.
 func TestLoad_MissingDatabaseURL(t *testing.T) {
 	setPhase3RequiredEnv(t)
 	t.Setenv("WALERA_DATABASE_URL", "")
@@ -139,12 +124,6 @@ func TestLoad_MissingDatabaseURL(t *testing.T) {
 	}
 }
 
-// SlotName is covered by internal/wal.Config.NewSlotName tests
-// (internal/wal/coverage_test.go::TestConfig_NewSlotName); the config-side
-// duplicate method was removed because it had no production callers.
-
-// TestLoad_Defaults verifies that optional fields receive their documented defaults
-// when neither YAML nor env provides a value.
 func TestLoad_Defaults(t *testing.T) {
 	setPhase3RequiredEnv(t)
 	path := writeTempYAML(t, `
@@ -173,11 +152,8 @@ wal:
 	}
 }
 
-// TestLoad_DefaultsForPhase2Fields verifies that the HTTP + Router
-// defaults are applied.
 func TestLoad_DefaultsForPhase2Fields(t *testing.T) {
-	// All three mandatory WAL fields come from env so validation passes
-	// without writing a YAML file.
+
 	t.Setenv("WALERA_DATABASE_URL", "postgres://a:b@localhost/db")
 	t.Setenv("WALERA_WAL_PUBLICATION_NAME", "pub")
 	setPhase3RequiredEnv(t)
@@ -207,11 +183,6 @@ func TestLoad_DefaultsForPhase2Fields(t *testing.T) {
 	}
 }
 
-// TestApplyDefaults_HttpWriteTimeoutAndMaxHeaderBytes verifies that the
-// Phase-13 SEC-01 / F-P1-01 defaults (http.write_timeout=5s,
-// http.max_header_bytes=16 KiB) land on the loaded Config when neither YAML
-// nor env overrides are present, and that the env-var transform accepts the
-// expected overrides.
 func TestApplyDefaults_HttpWriteTimeoutAndMaxHeaderBytes(t *testing.T) {
 	setPhase2RequiredEnv(t)
 	setPhase3RequiredEnv(t)
@@ -229,9 +200,6 @@ func TestApplyDefaults_HttpWriteTimeoutAndMaxHeaderBytes(t *testing.T) {
 	}
 }
 
-// TestEnvOverride_HttpWriteTimeoutAndMaxHeaderBytes confirms the koanf env
-// transform routes WALERA_HTTP_WRITE_TIMEOUT and WALERA_HTTP_MAX_HEADER_BYTES
-// onto cfg.HTTP.WriteTimeout / MaxHeaderBytes (SEC-01 / F-P1-01).
 func TestEnvOverride_HttpWriteTimeoutAndMaxHeaderBytes(t *testing.T) {
 	setPhase2RequiredEnv(t)
 	setPhase3RequiredEnv(t)
@@ -250,8 +218,6 @@ func TestEnvOverride_HttpWriteTimeoutAndMaxHeaderBytes(t *testing.T) {
 	}
 }
 
-// TestLoad_EnvOverride_HttpAddr verifies that WALERA_HTTP_ADDR overrides the
-// default ":8080".
 func TestLoad_EnvOverride_HttpAddr(t *testing.T) {
 	t.Setenv("WALERA_DATABASE_URL", "postgres://a:b@localhost/db")
 	t.Setenv("WALERA_WAL_PUBLICATION_NAME", "pub")
@@ -268,8 +234,6 @@ func TestLoad_EnvOverride_HttpAddr(t *testing.T) {
 	}
 }
 
-// TestLoad_Validate_HttpAddrEmpty verifies the validator rejects an empty
-// http.addr.
 func TestLoad_Validate_HttpAddrEmpty(t *testing.T) {
 	setPhase3RequiredEnv(t)
 	path := writeTempYAML(t, `
@@ -290,8 +254,6 @@ http:
 	}
 }
 
-// TestLoad_Validate_HttpAddrSchema — schema-layer host:port + port-range
-// validation on http.addr.
 func TestLoad_Validate_HttpAddrSchema(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -328,10 +290,6 @@ func TestLoad_Validate_HttpAddrSchema(t *testing.T) {
 	}
 }
 
-// --- Auth + HTTP wiring (formerly tracked separately) ---
-
-// setPhase2RequiredEnv sets the mandatory database URL so Load passes
-// validation for tests that focus only on Phase-3 keys.
 func setPhase2RequiredEnv(t *testing.T) {
 	t.Helper()
 	t.Setenv("WALERA_DATABASE_URL", "postgres://a:b@localhost/db")
@@ -353,8 +311,6 @@ func TestLoad_MinimalConfig(t *testing.T) {
 	}
 }
 
-// TestConfigPhase3Defaults asserts every documented default for the
-// auth, limits, and health sub-trees lands on the loaded Config.
 func TestConfigPhase3Defaults(t *testing.T) {
 	setPhase2RequiredEnv(t)
 	setPhase3RequiredEnv(t)
@@ -422,8 +378,6 @@ func TestConfigPhase3Defaults(t *testing.T) {
 	}
 }
 
-// TestConfigPhase3EnvOverrides asserts env-var overrides reach the unmarshalled
-// Config for backend_url and a representative limits int.
 func TestConfigPhase3EnvOverrides(t *testing.T) {
 	setPhase2RequiredEnv(t)
 	t.Setenv("WALERA_AUTH_BACKEND_URL", "https://auth.test")
@@ -442,8 +396,6 @@ func TestConfigPhase3EnvOverrides(t *testing.T) {
 	}
 }
 
-// TestLoad_H2CEnabledDefaultsTrue verifies that Http.H2CEnabled defaults to
-// true when neither YAML nor env overrides it.
 func TestLoad_H2CEnabledDefaultsTrue(t *testing.T) {
 	setPhase2RequiredEnv(t)
 	setPhase3RequiredEnv(t)
@@ -457,8 +409,6 @@ func TestLoad_H2CEnabledDefaultsTrue(t *testing.T) {
 	}
 }
 
-// TestLoad_H2CEnabledEnvOverride verifies that WALERA_HTTP_H2C_ENABLED=false
-// flips Http.H2CEnabled to false.
 func TestLoad_H2CEnabledEnvOverride(t *testing.T) {
 	setPhase2RequiredEnv(t)
 	setPhase3RequiredEnv(t)
@@ -473,9 +423,6 @@ func TestLoad_H2CEnabledEnvOverride(t *testing.T) {
 	}
 }
 
-// TestLoad_CORSOriginsFromSingleStringEnv locks the contract that
-// WALERA_HTTP_CORS_ORIGINS with a single value (no comma)
-// unmarshals into a one-element []string{"http://localhost:8081"} (WALERA-02).
 func TestLoad_CORSOriginsFromSingleStringEnv(t *testing.T) {
 	setPhase2RequiredEnv(t)
 	setPhase3RequiredEnv(t)
@@ -491,10 +438,6 @@ func TestLoad_CORSOriginsFromSingleStringEnv(t *testing.T) {
 	}
 }
 
-// TestLoad_CORSOriginsFromCommaSeparatedEnv verifies that
-// WALERA_HTTP_CORS_ORIGINS with comma-separated values unmarshals into a
-// multi-element []string (WALERA-02). The envTransform splits on ',' and
-// trims whitespace.
 func TestLoad_CORSOriginsFromCommaSeparatedEnv(t *testing.T) {
 	setPhase2RequiredEnv(t)
 	setPhase3RequiredEnv(t)
@@ -515,8 +458,6 @@ func TestLoad_CORSOriginsFromCommaSeparatedEnv(t *testing.T) {
 	}
 }
 
-// TestLoad_AppliesPhase4Defaults verifies every reconnect/lag/shutdown default value lands on
-// the loaded Config when no YAML or env override is present.
 func TestLoad_AppliesPhase4Defaults(t *testing.T) {
 	setPhase2RequiredEnv(t)
 	setPhase3RequiredEnv(t)
@@ -544,14 +485,6 @@ func TestLoad_AppliesPhase4Defaults(t *testing.T) {
 	}
 }
 
-// TestValidate_RejectsInvalidPhase4Values exercises the validator with several
-// invalid combinations. Each row sets one bad YAML value and asserts that
-// Load() returns a non-nil error containing the expected substring.
-//
-// Policy on drain_deadline > deadline: the validator REJECTS (error, not
-// warning) because the broadcaster.Shutdown phase MUST finish before the hard
-// cap fires; allowing drain_deadline > deadline would silently violate the
-// shutdown ordering contract.
 func TestValidate_RejectsInvalidPhase4Values(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -611,10 +544,6 @@ wal:
 	}
 }
 
-// --- SEC-03 (PG identifier validation) ---
-
-// writePhase14SEC03YAML produces a minimal valid YAML body except for the
-// publication_name and slot_name_prefix fields, which the caller overrides.
 func writePhase14SEC03YAML(t *testing.T, pubName, slotPrefix string) string {
 	t.Helper()
 	body := "database:\n" +
@@ -665,7 +594,7 @@ func TestLoad_SEC03_PgIdent_RejectsHyphen(t *testing.T) {
 
 func TestLoad_SEC03_PgIdent_RejectsInjection(t *testing.T) {
 	setPhase3RequiredEnv(t)
-	// Pass via env so we don't fight YAML quoting on the apostrophe.
+
 	t.Setenv("WALERA_DATABASE_URL", "postgres://a:b@localhost/db")
 	t.Setenv("WALERA_WAL_PUBLICATION_NAME", "pub'); DROP")
 	_, err := LoadAppConfig("")
@@ -713,13 +642,6 @@ func TestLoad_SEC03_SlotNamePrefix_RejectsHyphen(t *testing.T) {
 	}
 }
 
-// TestLoad_PublicationName_DefaultsWhenEmpty — quick task 260518-j8x.
-// Replaces the prior TestLoad_SEC03_EmptyPublicationName_Required test.
-// Before the auto-bootstrap change, an explicitly-empty
-// WALERA_WAL_PUBLICATION_NAME produced "wal.publication_name is required".
-// After the change the default "walera_pub" applies and Load succeeds:
-// koanf treats an empty env override as unset, so the default in
-// applyDefaults takes effect.
 func TestLoad_PublicationName_DefaultsWhenEmpty(t *testing.T) {
 	setPhase3RequiredEnv(t)
 	t.Setenv("WALERA_DATABASE_URL", "postgres://a:b@localhost/db")
@@ -732,8 +654,6 @@ func TestLoad_PublicationName_DefaultsWhenEmpty(t *testing.T) {
 		t.Errorf("WAL.PublicationName = %q; want %q", cfg.WAL.PublicationName, "walera_pub")
 	}
 }
-
-// --- SEC-04 (https scheme enforcement) ---
 
 func TestLoad_SEC04_HttpsAccepted(t *testing.T) {
 	setPhase2RequiredEnv(t)
@@ -794,38 +714,27 @@ func TestLoad_SEC04_MalformedURL_TreatedAsNonHttps(t *testing.T) {
 	if err == nil {
 		t.Fatal("want error for malformed URL, got nil")
 	}
-	// Schema validation now surfaces one of: missing host, bad scheme, or
-	// URL parse failure. Any of those is a valid "URL is rejected" signal.
+
 	msg := err.Error()
 	if !strings.Contains(msg, "auth.backend_url") {
 		t.Errorf("err missing 'auth.backend_url' reference: %v", err)
 	}
 }
 
-// TestLoad_SEC04_ControlCharURL_TreatedAsNonHttps —
-// control-character regression. A URL containing an ASCII control
-// character is one of the only inputs for which url.Parse returns
-// a non-nil error. The current implementation handles this via the
-// (u == nil) branch — the same "must use https" message is
-// surfaced. This test pins that behaviour so a future change
-// cannot reintroduce a separate error path that only fires for
-// control chars (the original code's dead branch).
 func TestLoad_SEC04_ControlCharURL_TreatedAsNonHttps(t *testing.T) {
 	setPhase2RequiredEnv(t)
-	// \x7f (DEL) is a control character that causes url.Parse to error.
+
 	t.Setenv("WALERA_AUTH_BACKEND_URL", "https://example.com/\x7f")
 	t.Setenv("WALERA_AUTH_ALLOW_PLAINTEXT", "")
 	_, err := LoadAppConfig("")
 	if err == nil {
 		t.Fatal("want error for control-char URL, got nil")
 	}
-	// Schema validation surfaces a URL-parse error for the control char.
+
 	if !strings.Contains(err.Error(), "auth.backend_url") {
 		t.Errorf("err missing 'auth.backend_url' reference: %v", err)
 	}
 }
-
-// --- SEC-05 (limits.trusted_proxies CIDR validation) ---
 
 func writePhase14SEC05YAML(t *testing.T, proxies []string) string {
 	t.Helper()
@@ -895,8 +804,6 @@ func TestLoad_SEC05_TrustedProxies_EmptyDefault(t *testing.T) {
 		t.Errorf("default TrustedProxies = %v; want empty", cfg.Limits.TrustedProxies)
 	}
 }
-
-// --- SEC-09 (CORS canonicalisation) ---
 
 func writePhase14SEC09YAML(t *testing.T, origins []string) string {
 	t.Helper()
@@ -981,17 +888,6 @@ func TestLoad_SEC09_CORSOrigins_Empty_Passes(t *testing.T) {
 	}
 }
 
-// --- Named regression anchors (REQUIREMENTS.md TEST-09) ---
-
-// Test_SEC03_BadPublicationName_FailsStartup — REQUIREMENTS.md TEST-09.3.
-// Canonical-name regression anchor for SEC-03 / F-P1-03. The full charset
-// of edge cases (long-over-63, starts-with-digit, control-char, empty,
-// slot-name-prefix variants) is already exercised by TestLoad_SEC03_PgIdent_*
-// above (config_test.go:653-757); this test locks the named-regression
-// invariant in CI logs so a future refactor produces an
-// instantly-diagnosable failure mapping 1-to-1 to the audit finding ID.
-//
-// No t.Parallel(): every subtest uses t.Setenv (mirrors RESEARCH §note 4).
 func Test_SEC03_BadPublicationName_FailsStartup(t *testing.T) {
 	t.Run("hyphen_rejected", func(t *testing.T) {
 		setPhase3RequiredEnv(t)
@@ -1010,9 +906,7 @@ func Test_SEC03_BadPublicationName_FailsStartup(t *testing.T) {
 
 	t.Run("quote_injection_rejected", func(t *testing.T) {
 		setPhase3RequiredEnv(t)
-		// Pass via env so we don't fight YAML quoting on the apostrophe;
-		// mirrors TestLoad_SEC03_PgIdent_RejectsInjection at
-		// config_test.go:689-702.
+
 		t.Setenv("WALERA_DATABASE_URL", "postgres://a:b@localhost/db")
 		t.Setenv("WALERA_WAL_PUBLICATION_NAME", "pub'); DROP")
 		_, err := LoadAppConfig("")
@@ -1033,20 +927,11 @@ func Test_SEC03_BadPublicationName_FailsStartup(t *testing.T) {
 	})
 }
 
-// Test_SEC04_HttpAuthBackend_FailsStartup — REQUIREMENTS.md TEST-09.4.
-// Canonical-name regression anchor for SEC-04 / F-P1-04. Edge cases
-// (malformed URL, control-char URL, exact-override-value matching) are
-// already exercised by TestLoad_SEC04_* above (config_test.go:761-850);
-// this test locks the named-regression invariant in CI logs.
-//
-// No t.Parallel(): every subtest uses t.Setenv (mirrors RESEARCH §note 4).
 func Test_SEC04_HttpAuthBackend_FailsStartup(t *testing.T) {
 	t.Run("http_rejected_without_override", func(t *testing.T) {
 		setPhase2RequiredEnv(t)
 		t.Setenv("WALERA_AUTH_BACKEND_URL", "http://auth.local")
-		// Explicit empty — clears any inherited override from the parent
-		// process env so the test is hermetic. Mirrors
-		// TestLoad_SEC04_HttpsRequired_NoOverride at config_test.go:774.
+
 		t.Setenv("WALERA_AUTH_ALLOW_PLAINTEXT", "")
 		_, err := LoadAppConfig("")
 		if err == nil {
@@ -1055,9 +940,7 @@ func Test_SEC04_HttpAuthBackend_FailsStartup(t *testing.T) {
 		if !strings.Contains(err.Error(), "auth.backend_url") {
 			t.Errorf("err = %v; want substring 'auth.backend_url'", err)
 		}
-		// The error MUST name the env-var literally so a confused
-		// operator can find the override without grepping (defence
-		// rationale at config.go:461-463).
+
 		if !strings.Contains(err.Error(), "WALERA_AUTH_ALLOW_PLAINTEXT=1") {
 			t.Errorf("err = %v; want substring 'WALERA_AUTH_ALLOW_PLAINTEXT=1'", err)
 		}
@@ -1075,8 +958,7 @@ func Test_SEC04_HttpAuthBackend_FailsStartup(t *testing.T) {
 	t.Run("https_baseline_accepted", func(t *testing.T) {
 		setPhase2RequiredEnv(t)
 		t.Setenv("WALERA_AUTH_BACKEND_URL", "https://auth.local")
-		// Even with the override unset/empty, https:// is the valid
-		// baseline.
+
 		t.Setenv("WALERA_AUTH_ALLOW_PLAINTEXT", "")
 		if _, err := LoadAppConfig(""); err != nil {
 			t.Fatalf("Load() with https baseline returned unexpected error: %v", err)
@@ -1084,14 +966,10 @@ func Test_SEC04_HttpAuthBackend_FailsStartup(t *testing.T) {
 	})
 }
 
-// --- Quick task 260518-lh1 (pprof opt-in listener) ---
-
-// TestLoad_PProfAddr_DefaultEmpty — quick task 260518-lh1. With neither YAML
-// nor env supplying http.pprof_addr the loaded Config carries "" (disabled).
 func TestLoad_PProfAddr_DefaultEmpty(t *testing.T) {
 	setPhase2RequiredEnv(t)
 	setPhase3RequiredEnv(t)
-	// Defensive: clear any inherited override so the test is hermetic.
+
 	t.Setenv("WALERA_PPROF_ALLOW_PUBLIC", "")
 
 	cfg, err := LoadAppConfig("")
@@ -1103,15 +981,12 @@ func TestLoad_PProfAddr_DefaultEmpty(t *testing.T) {
 	}
 }
 
-// TestLoad_PProfAddr_Loopback_Accepts — quick task 260518-lh1. Each of the
-// three loopback forms (127.0.0.1, ::1, localhost) is accepted by validate
-// without the WALERA_PPROF_ALLOW_PUBLIC escape hatch.
 func TestLoad_PProfAddr_Loopback_Accepts(t *testing.T) {
 	cases := []string{
 		"127.0.0.1:6060",
 		"[::1]:6060",
 		"localhost:6060",
-		"LocalHost:6060", // case-insensitive
+		"LocalHost:6060",
 	}
 	for _, addr := range cases {
 		t.Run(addr, func(t *testing.T) {
@@ -1131,10 +1006,6 @@ func TestLoad_PProfAddr_Loopback_Accepts(t *testing.T) {
 	}
 }
 
-// TestLoad_PProfAddr_NonLoopback_RejectedWithoutOverride — quick task
-// 260518-lh1 / T-LH1-01. A non-loopback bind without
-// WALERA_PPROF_ALLOW_PUBLIC=1 is rejected at validate() with an error that
-// names the env var literally so a confused operator can grep for it.
 func TestLoad_PProfAddr_NonLoopback_RejectedWithoutOverride(t *testing.T) {
 	setPhase2RequiredEnv(t)
 	setPhase3RequiredEnv(t)
@@ -1153,8 +1024,6 @@ func TestLoad_PProfAddr_NonLoopback_RejectedWithoutOverride(t *testing.T) {
 	}
 }
 
-// TestLoad_PProfAddr_NonLoopback_AcceptedWithOverride — quick task 260518-lh1.
-// Setting WALERA_PPROF_ALLOW_PUBLIC="1" unlocks the non-loopback bind.
 func TestLoad_PProfAddr_NonLoopback_AcceptedWithOverride(t *testing.T) {
 	setPhase2RequiredEnv(t)
 	setPhase3RequiredEnv(t)
@@ -1170,8 +1039,6 @@ func TestLoad_PProfAddr_NonLoopback_AcceptedWithOverride(t *testing.T) {
 	}
 }
 
-// TestLoad_PProfAddr_MalformedRejected — quick task 260518-lh1. A value that
-// cannot be split by net.SplitHostPort produces a validation error.
 func TestLoad_PProfAddr_MalformedRejected(t *testing.T) {
 	setPhase2RequiredEnv(t)
 	setPhase3RequiredEnv(t)
@@ -1187,17 +1054,6 @@ func TestLoad_PProfAddr_MalformedRejected(t *testing.T) {
 	}
 }
 
-// --- Quick task 260518-j8x (auto-bootstrap publication) ---
-
-// TestLoad_BootstrapAndPublicationDefaults verifies the two new defaults land
-// on the loaded Config when neither YAML nor env supplies a value:
-//
-//   - cfg.WAL.PublicationName defaults to "walera_pub"
-//   - cfg.WAL.Bootstrap.Mode defaults to "auto"
-//
-// To exercise the publication_name default we deliberately skip
-// setPhase2RequiredEnv (which sets WALERA_WAL_PUBLICATION_NAME=pub) and set
-// only the DSN env vars explicitly so the default applies.
 func TestLoad_BootstrapAndPublicationDefaults(t *testing.T) {
 	t.Setenv("WALERA_DATABASE_URL", "postgres://a:b@localhost/db")
 	setPhase3RequiredEnv(t)
@@ -1214,8 +1070,6 @@ func TestLoad_BootstrapAndPublicationDefaults(t *testing.T) {
 	}
 }
 
-// TestLoad_BootstrapModeFromYAML — table test verifying each allowed mode
-// round-trips from a YAML file to cfg.WAL.Bootstrap.Mode.
 func TestLoad_BootstrapModeFromYAML(t *testing.T) {
 	tests := []struct {
 		name string
@@ -1246,8 +1100,6 @@ func TestLoad_BootstrapModeFromYAML(t *testing.T) {
 	}
 }
 
-// TestLoad_BootstrapModeFromEnv — single-value env override (no commas, uses
-// the standard koanf transform path) lands on cfg.WAL.Bootstrap.Mode.
 func TestLoad_BootstrapModeFromEnv(t *testing.T) {
 	setPhase2RequiredEnv(t)
 	setPhase3RequiredEnv(t)
@@ -1262,9 +1114,6 @@ func TestLoad_BootstrapModeFromEnv(t *testing.T) {
 	}
 }
 
-// TestLoad_Validate_BootstrapModeInvalid — unknown modes are rejected at
-// Load time with a clear error naming the offending value and the allowed
-// set.
 func TestLoad_Validate_BootstrapModeInvalid(t *testing.T) {
 	setPhase3RequiredEnv(t)
 	path := writeTempYAML(t, `
@@ -1284,11 +1133,6 @@ wal:
 	}
 }
 
-// --- bootstrap-v2: tables list + create_roles knobs ---
-
-// TestLoad_BootstrapV2_Defaults — the new knobs default to an empty table
-// list and create_roles=false so legacy FOR-ALL-TABLES auto behaviour is
-// preserved when neither YAML nor env supplies a value.
 func TestLoad_BootstrapV2_Defaults(t *testing.T) {
 	setPhase2RequiredEnv(t)
 	setPhase3RequiredEnv(t)
@@ -1305,8 +1149,6 @@ func TestLoad_BootstrapV2_Defaults(t *testing.T) {
 	}
 }
 
-// TestLoad_BootstrapV2_TablesFromYAML — explicit schema-qualified entries
-// in YAML land on cfg.WAL.Bootstrap.Tables in order.
 func TestLoad_BootstrapV2_TablesFromYAML(t *testing.T) {
 	setPhase3RequiredEnv(t)
 	path := writeTempYAML(t, `
@@ -1339,8 +1181,6 @@ wal:
 	}
 }
 
-// TestLoad_BootstrapV2_TablesFromEnv — comma-separated env override is split
-// into a string slice (mirrors the cors_origins WALERA-02 pattern).
 func TestLoad_BootstrapV2_TablesFromEnv(t *testing.T) {
 	setPhase2RequiredEnv(t)
 	setPhase3RequiredEnv(t)
@@ -1365,9 +1205,6 @@ func TestLoad_BootstrapV2_TablesFromEnv(t *testing.T) {
 	}
 }
 
-// TestLoad_BootstrapV2_TableValidation — entries that lack a schema prefix
-// (or whose schema/table segment is not a valid PG identifier) are rejected
-// at Load with a message naming the offending index and value.
 func TestLoad_BootstrapV2_TableValidation(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -1403,24 +1240,6 @@ wal:
 	}
 }
 
-// --- SSE writer-pool config knobs ---
-//
-// Coverage requirements:
-//   - Default-value test for each of the 6 knobs.
-//   - Env-override happy-path test for each knob (BatchingDisabled tested
-//     with both true and false).
-//   - Invalid-value test for each of the 5 numeric range-checked knobs,
-//     asserting Load errors AND the error message names the koanf key.
-//   - Explicit sanity test that max_wait_ms=0 is ACCEPTED (the lower bound
-//     is `>= 0`, not `>= 1`; zero is the tightest possible lag ceiling).
-//
-// Tests use the existing setPhase2RequiredEnv + setPhase3RequiredEnv helpers
-// instead of introducing a new mustLoadMinimal helper, mirroring the pattern
-// established by the SEC-01 / SEC-04 tests above.
-
-// TestLoad_HttpPoolKnobs_Defaults asserts every pool-tuning default value
-// lands on the loaded Config when neither YAML nor env overrides it
-// (CONTEXT.md §"Config knobs").
 func TestLoad_HttpPoolKnobs_Defaults(t *testing.T) {
 	setPhase2RequiredEnv(t)
 	setPhase3RequiredEnv(t)
@@ -1450,8 +1269,6 @@ func TestLoad_HttpPoolKnobs_Defaults(t *testing.T) {
 	}
 }
 
-// TestLoad_HttpPoolKnobs_EnvOverride_pool_factor asserts
-// WALERA_HTTP_POOL_FACTOR overrides the default.
 func TestLoad_HttpPoolKnobs_EnvOverride_pool_factor(t *testing.T) {
 	setPhase2RequiredEnv(t)
 	setPhase3RequiredEnv(t)
@@ -1466,8 +1283,6 @@ func TestLoad_HttpPoolKnobs_EnvOverride_pool_factor(t *testing.T) {
 	}
 }
 
-// TestLoad_HttpPoolKnobs_EnvOverride_sub_queue_size asserts
-// WALERA_HTTP_SUB_QUEUE_SIZE overrides the default.
 func TestLoad_HttpPoolKnobs_EnvOverride_sub_queue_size(t *testing.T) {
 	setPhase2RequiredEnv(t)
 	setPhase3RequiredEnv(t)
@@ -1482,8 +1297,6 @@ func TestLoad_HttpPoolKnobs_EnvOverride_sub_queue_size(t *testing.T) {
 	}
 }
 
-// TestLoad_HttpPoolKnobs_EnvOverride_max_wait_ms asserts
-// WALERA_HTTP_MAX_WAIT_MS overrides the default.
 func TestLoad_HttpPoolKnobs_EnvOverride_max_wait_ms(t *testing.T) {
 	setPhase2RequiredEnv(t)
 	setPhase3RequiredEnv(t)
@@ -1498,9 +1311,6 @@ func TestLoad_HttpPoolKnobs_EnvOverride_max_wait_ms(t *testing.T) {
 	}
 }
 
-// TestLoad_HttpPoolKnobs_max_wait_ms_zero_accepted locks the lower-bound
-// invariant: max_wait_ms=0 IS valid (tightest lag ceiling), distinct from
-// batching_disabled=true (which disables batching entirely).
 func TestLoad_HttpPoolKnobs_max_wait_ms_zero_accepted(t *testing.T) {
 	setPhase2RequiredEnv(t)
 	setPhase3RequiredEnv(t)
@@ -1515,8 +1325,6 @@ func TestLoad_HttpPoolKnobs_max_wait_ms_zero_accepted(t *testing.T) {
 	}
 }
 
-// TestLoad_HttpPoolKnobs_EnvOverride_drain_threshold_subs asserts
-// WALERA_HTTP_DRAIN_THRESHOLD_SUBS overrides the default.
 func TestLoad_HttpPoolKnobs_EnvOverride_drain_threshold_subs(t *testing.T) {
 	setPhase2RequiredEnv(t)
 	setPhase3RequiredEnv(t)
@@ -1531,8 +1339,6 @@ func TestLoad_HttpPoolKnobs_EnvOverride_drain_threshold_subs(t *testing.T) {
 	}
 }
 
-// TestLoad_HttpPoolKnobs_EnvOverride_max_batch_bytes_per_sub asserts
-// WALERA_HTTP_MAX_BATCH_BYTES_PER_SUB overrides the default.
 func TestLoad_HttpPoolKnobs_EnvOverride_max_batch_bytes_per_sub(t *testing.T) {
 	setPhase2RequiredEnv(t)
 	setPhase3RequiredEnv(t)
@@ -1547,8 +1353,6 @@ func TestLoad_HttpPoolKnobs_EnvOverride_max_batch_bytes_per_sub(t *testing.T) {
 	}
 }
 
-// TestLoad_HttpPoolKnobs_EnvOverride_batching_disabled covers both true and
-// false env values.
 func TestLoad_HttpPoolKnobs_EnvOverride_batching_disabled(t *testing.T) {
 	t.Run("true", func(t *testing.T) {
 		setPhase2RequiredEnv(t)
@@ -1579,15 +1383,12 @@ func TestLoad_HttpPoolKnobs_EnvOverride_batching_disabled(t *testing.T) {
 	})
 }
 
-// TestLoad_HttpPoolKnobs_Invalid asserts each numeric range-checked knob
-// rejects an out-of-range value AND the error names the koanf key
-// (operators must be able to grep for the offending key).
 func TestLoad_HttpPoolKnobs_Invalid(t *testing.T) {
 	tests := []struct {
 		name    string
 		envKey  string
 		envVal  string
-		wantKey string // koanf key the error message MUST contain
+		wantKey string
 	}{
 		{"pool_factor zero rejected", "WALERA_HTTP_POOL_FACTOR", "0", "http.pool_factor"},
 		{"pool_factor negative rejected", "WALERA_HTTP_POOL_FACTOR", "-1", "http.pool_factor"},
@@ -1612,8 +1413,7 @@ func TestLoad_HttpPoolKnobs_Invalid(t *testing.T) {
 			if !strings.Contains(err.Error(), tc.wantKey) {
 				t.Errorf("err = %v; want substring %q (key name required for grep)", err, tc.wantKey)
 			}
-			// Sanity: the precedent error format embeds "must be" — assert
-			// that the format precedent is preserved.
+
 			if !strings.Contains(err.Error(), "must be") {
 				t.Errorf("err = %v; want substring 'must be' (matches existing 'must be >= N (got M)' precedent)", err)
 			}

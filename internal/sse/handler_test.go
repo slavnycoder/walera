@@ -1,14 +1,3 @@
-// Package sse — handler_test.go covers the four SSE routes end-to-end via
-// httptest.NewServer.
-// httptest.NewServer + a real *http.Client is preferred over
-// httptest.ResponseRecorder because the recorder does NOT honour Flush
-// semantics nor support reading partial streaming body bytes — both
-// requirements for SSE-style tests (note 4).
-// This suite covers the handshake sequence tests end-to-end. Each test
-// stands up a small fake auth backend via
-// httptest and threads its URL into a real *auth.Client, then constructs the
-// Handler with real *limits.Limits / *auth.Subscribers / *auth.Breaker — the
-// integration shape matches production.
 package sse
 
 import (
@@ -38,21 +27,10 @@ import (
 	"github.com/walera/walera/internal/wal"
 )
 
-// sseTestProber is a file-local adapter that wraps a func(ctx) error closure
-// to satisfy the auth.Prober interface required by auth.BreakerDeps.Prober.
-// Per RESEARCH.md §"Decision on cross-package test adapter", auth does not
-// export a ProberFunc adapter; each cross-package test that needs the
-// adapter declares its own. Shared between handler_test.go and
-// handler_panic_test.go (both files are in `package sse`).
 type sseTestProber func(ctx context.Context) error
 
-// CheckAuth satisfies the auth.Prober interface by invoking the wrapped
-// closure.
 func (f sseTestProber) CheckAuth(ctx context.Context) error { return f(ctx) }
 
-// fakeBroadcaster is a test-only stub satisfying the package-local
-// broadcaster interface. It captures registered subscribers for later
-// inspection by the test.
 type fakeBroadcaster struct {
 	mu             sync.Mutex
 	subs           []*router.Subscriber
@@ -89,10 +67,6 @@ func (f *fakeBroadcaster) firstSub(t *testing.T) *router.Subscriber {
 	}
 }
 
-// fakeAuthBackend is a tiny httptest-backed auth backend. Each test installs
-// its own response function via SetResp; nextResp is invoked on every
-// request so a test can return a Whitelist first and then *ErrUnauthorized on
-// subsequent calls (auth-revoked mid-stream).
 type fakeAuthBackend struct {
 	srv    *httptest.Server
 	hits   atomic.Int64
@@ -126,8 +100,6 @@ func (b *fakeAuthBackend) SetResp(fn func(w http.ResponseWriter, r *http.Request
 	b.respFn = fn
 }
 
-// permMapJSON serialises a Whitelist-shaped JSON body for the fake backend's 200
-// response.
 func permMapJSON(userID string, tables map[string][]string, ttl int) []byte {
 	body := map[string]any{
 		"user_id":     userID,
@@ -138,7 +110,6 @@ func permMapJSON(userID string, tables map[string][]string, ttl int) []byte {
 	return out
 }
 
-// testHandlerKit bundles everything a test needs.
 type testHandlerKit struct {
 	h          *Handler
 	bc         *fakeBroadcaster
@@ -150,9 +121,6 @@ type testHandlerKit struct {
 	pool       *WriterPool
 }
 
-// newTestHandler builds a Handler with real Phase-3 dependencies pointed at
-// a fake auth backend. cors is the allowed-origin list; lim allows tests to
-// override the limits.Config (pass nil for defaults).
 func newTestHandler(t *testing.T, cors []string, lcfg *limits.Config) *testHandlerKit {
 	t.Helper()
 	backend := newFakeAuthBackend()
@@ -170,8 +138,7 @@ func newTestHandler(t *testing.T, cors []string, lcfg *limits.Config) *testHandl
 		CORSOrigins:       cors,
 		HeartbeatInterval: 200 * time.Millisecond,
 		MaxPayloadBytes:   10 * 1024 * 1024,
-		// SEC-01: a sane WriteTimeout so the per-frame
-		// deadline path does not fire on the test scaffold.
+
 		WriteTimeout: 5 * time.Second,
 	}
 	logger := zerolog.Nop()
@@ -219,27 +186,15 @@ func newTestHandler(t *testing.T, cors []string, lcfg *limits.Config) *testHandl
 		Metrics: m,
 	})
 
-	// Every Handler test gets a real *WriterPool. A small
-	// config keeps the worker count low (factor 1; on a 4-core machine
-	// that's 4 workers per test). The test pool uses NewEncoder(maxPayload)
-	// for parity with production and fakeMetrics from pool_test.go to
-	// avoid registering Prometheus collectors twice across tests. Pool is
-	// shut down on test cleanup so worker goroutines do not outlive the
-	// test (race-detector would flag otherwise).
 	enc := NewEncoder(cfg.MaxPayloadBytes)
 	pool := NewPool(PoolConfig{
 		PoolFactor:   1,
 		SubQueueSize: 8,
 		MaxWaitMs:    2,
 		WriteTimeout: cfg.WriteTimeout,
-		// HeartbeatInterval inherited from cfg.HeartbeatInterval
-		// (~200ms in tests) so the per-worker
-		// heartbeat ticker emits `:\n\n` frames within the test's
-		// 1.5s window. The worker-driven sweep is the production
-		// heartbeat path; this test scaffolding exercises it
-		// end-to-end (TestHandler_HeartbeatArrivesWithinHeartbeatInterval).
+
 		HeartbeatInterval:  cfg.HeartbeatInterval,
-		DrainThresholdSubs: 1, // drain the heartbeat frame immediately
+		DrainThresholdSubs: 1,
 	}, PoolDeps{
 		Encoder: enc,
 		Metrics: newFakeMetrics(),
@@ -247,8 +202,6 @@ func newTestHandler(t *testing.T, cors []string, lcfg *limits.Config) *testHandl
 	})
 	t.Cleanup(func() { _ = pool.Shutdown(context.Background()) })
 
-	// Handler Config embeds the router and auth configs so NewHandler
-	// takes a single Config bag.
 	cfg.Router = rcfg
 	cfg.Auth = authCfg
 	h := NewHandler(cfg, Deps{
@@ -275,8 +228,6 @@ func newTestHandler(t *testing.T, cors []string, lcfg *limits.Config) *testHandl
 	}
 }
 
-// newTestServer builds an httptest.NewServer with the handler's routes
-// registered. Returns the server URL and a teardown.
 func newTestServer(t *testing.T, h *Handler) *httptest.Server {
 	t.Helper()
 	mux := http.NewServeMux()
@@ -286,8 +237,6 @@ func newTestServer(t *testing.T, h *Handler) *httptest.Server {
 	return srv
 }
 
-// validMapBackend installs a fake-backend response that always returns 200
-// with a Whitelist for users:* having tables=users[id,name].
 func validMapBackend(b *fakeAuthBackend) {
 	b.SetResp(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -295,7 +244,6 @@ func validMapBackend(b *fakeAuthBackend) {
 	})
 }
 
-// validRequest builds a GET request with a valid bearer token attached.
 func validRequest(t *testing.T, url string) *http.Request {
 	t.Helper()
 	req, err := http.NewRequest(http.MethodGet, url, nil)
@@ -306,11 +254,6 @@ func validRequest(t *testing.T, url string) *http.Request {
 	return req
 }
 
-// readUntil reads from r until it has read at least n bytes OR the deadline
-// expires. Returns whatever was accumulated.
-// Uses a shared []byte protected by a mutex so the caller sees the partial
-// accumulator on timeout, not just the final assignment after the goroutine
-// completes.
 func readUntil(t *testing.T, r io.Reader, n int, deadline time.Duration) []byte {
 	t.Helper()
 	var mu sync.Mutex
@@ -349,8 +292,6 @@ func readUntil(t *testing.T, r io.Reader, n int, deadline time.Duration) []byte 
 	return out
 }
 
-// --- Phase-2 invariant regression tests (kept unchanged in spirit) ---
-
 func TestHandler_ExactRoute_Headers(t *testing.T) {
 	t.Parallel()
 
@@ -379,13 +320,7 @@ func TestHandler_ExactRoute_Headers(t *testing.T) {
 	if got := hdr.Get("Cache-Control"); got != "no-cache" {
 		t.Errorf("Cache-Control = %q; want %q", got, "no-cache")
 	}
-	// writeSSEHeaders sets `Transfer-Encoding: identity` so
-	// net/http suppresses its auto-chunked encoder and emits
-	// `Connection: close` framing instead. The handler-set
-	// `Connection: keep-alive` is overridden by net/http when the
-	// response is identity-encoded — accept either to remain robust
-	// across Go versions, but assert NO Transfer-Encoding: chunked
-	// on the wire.
+
 	if got := hdr.Get("X-Accel-Buffering"); got != "no" {
 		t.Errorf("X-Accel-Buffering = %q; want %q", got, "no")
 	}
@@ -398,7 +333,6 @@ func TestHandler_ExactRoute_Headers(t *testing.T) {
 		t.Errorf("Vary headers = %v; want one to include %q", hdr.Values("Vary"), "Origin")
 	}
 
-	// Now artificially close the subscriber and assert the response closes.
 	sub := kit.bc.firstSub(t)
 	if sub.Kind() != router.KindExact {
 		t.Errorf("sub.Kind = %q; want %q", sub.Kind(), router.KindExact)
@@ -618,10 +552,6 @@ func TestHandler_OptionsPreflight_204(t *testing.T) {
 	}
 }
 
-// TestServePreflight_ReflectsAllowedOrigin locks the full CORS preflight
-// wire contract: an OPTIONS request from an Origin in cors_origins receives
-// 204 + ACAO + Vary: Origin + Allow-Methods (GET, OPTIONS) +
-// Allow-Headers including Authorization.
 func TestServePreflight_ReflectsAllowedOrigin(t *testing.T) {
 	t.Parallel()
 
@@ -656,10 +586,6 @@ func TestServePreflight_ReflectsAllowedOrigin(t *testing.T) {
 	}
 }
 
-// TestServeExact_ReflectsAllowedOriginOnSSEResponse locks the SSE-response
-// side of the same wire contract: a cross-origin GET from an Origin in
-// cors_origins receives Access-Control-Allow-Origin and Vary: Origin on
-// the streaming response.
 func TestServeExact_ReflectsAllowedOriginOnSSEResponse(t *testing.T) {
 	t.Parallel()
 
@@ -690,20 +616,10 @@ func TestServeExact_ReflectsAllowedOriginOnSSEResponse(t *testing.T) {
 		t.Errorf("Vary headers = %v; want one to include %q", resp.Header.Values("Vary"), "Origin")
 	}
 
-	// Close the subscriber cleanly to release goroutines.
 	kit.bc.firstSub(t).Drop("test")
 	_, _ = io.Copy(io.Discard, resp.Body)
 }
 
-// TestHandler_HeartbeatArrivesWithinHeartbeatInterval verifies the
-// heartbeat contract end-to-end through the handler: a sub that sends
-// zero data frames observes a `:\n\n` heartbeat within
-// HeartbeatInterval. The worker-driven sweep is wired in production;
-// this test restores the byte-level heartbeat assertion that had
-// dropped earlier.
-// The handler is constructed with HeartbeatInterval inherited from
-// cfg.HeartbeatInterval — newTestHandler sets that to a small value
-// (~200ms) so the test window is tight without being flaky.
 func TestHandler_HeartbeatArrivesWithinHeartbeatInterval(t *testing.T) {
 	t.Parallel()
 
@@ -721,10 +637,6 @@ func TestHandler_HeartbeatArrivesWithinHeartbeatInterval(t *testing.T) {
 	}
 	defer resp.Body.Close()
 
-	// Read enough bytes to include the prelude (14 bytes) plus at
-	// least one full heartbeat (3 bytes). Allow 1.5s — handler test
-	// HeartbeatInterval is ~200ms so a heartbeat arrives well within
-	// budget.
 	const prelude = "retry: 15000\n\n"
 	const hb = ":\n\n"
 	buf := readUntil(t, resp.Body, len(prelude)+len(hb), 1500*time.Millisecond)
@@ -740,11 +652,6 @@ func TestHandler_HeartbeatArrivesWithinHeartbeatInterval(t *testing.T) {
 	_, _ = io.Copy(io.Discard, resp.Body)
 }
 
-// TestHandler_PreludeArrivesAtConnectionOpen asserts WIRE-02: the
-// `retry: 15000\n\n` prelude is the first thing on the wire after a
-// successful handshake. The prelude is emitted by pool.Attach (not
-// the deleted writer.go). The heartbeat assertion lives in
-// TestHandler_HeartbeatArrivesWithinHeartbeatInterval.
 func TestHandler_PreludeArrivesAtConnectionOpen(t *testing.T) {
 	t.Parallel()
 
@@ -762,8 +669,6 @@ func TestHandler_PreludeArrivesAtConnectionOpen(t *testing.T) {
 	}
 	defer resp.Body.Close()
 
-	// The 14-byte WALERA-01 retry prelude ("retry: 15000\n\n") is the
-	// first bytes pool.Attach writes after the handler hijacks the conn.
 	const prelude = "retry: 15000\n\n"
 	buf := readUntil(t, resp.Body, len(prelude), 1500*time.Millisecond)
 	if len(buf) < len(prelude) {
@@ -777,11 +682,6 @@ func TestHandler_PreludeArrivesAtConnectionOpen(t *testing.T) {
 	_, _ = io.Copy(io.Discard, resp.Body)
 }
 
-// TestHandler_RegistersSubscriberAndWireSendFuncIsCallable asserts that
-// after the handler completes its handshake the registered
-// router.Subscriber accepts a WireSendFunc closure call without panicking.
-// The closure is what `pool.Attach` wires for production; the wire-byte
-// parity is covered by the golden-fixture replay test.
 func TestHandler_RegistersSubscriberAndWireSendFuncIsCallable(t *testing.T) {
 	t.Parallel()
 
@@ -801,10 +701,6 @@ func TestHandler_RegistersSubscriberAndWireSendFuncIsCallable(t *testing.T) {
 
 	sub := kit.bc.firstSub(t)
 
-	// Contract: WireSendFunc accepts a closure and the
-	// subscriber's surface is non-nil. We do not exercise the unexported
-	// router.Subscriber.send() method here — the per-sub send path is
-	// covered by internal/router unit tests in the same package.
 	var recordedMu sync.Mutex
 	var recorded [][]byte
 	sub.WireSendFunc(func(frame []byte) bool {
@@ -816,10 +712,6 @@ func TestHandler_RegistersSubscriberAndWireSendFuncIsCallable(t *testing.T) {
 		return true
 	})
 
-	// Document the per-sub Event shape the router still synthesises before
-	// encoding (the values are intentionally unused — kept here so the
-	// test reviewer can see that wal.Tx / router.Event are still part of
-	// the routing pipeline post-16-01).
 	_ = wal.Tx{
 		ID:        12345,
 		CommitLSN: pglogrepl.LSN(0x100),
@@ -840,19 +732,11 @@ func TestHandler_RegistersSubscriberAndWireSendFuncIsCallable(t *testing.T) {
 	sub.Drop("test")
 	_, _ = io.Copy(io.Discard, resp.Body)
 
-	// Silence unused-variable lint for the recorder (the wire-byte
-	// assertions return in 16-04). Keeping the recorder in source proves
-	// the surface compiles + accepts the closure shape the
-	// pool wires in 16-03.
 	recordedMu.Lock()
 	_ = len(recorded)
 	recordedMu.Unlock()
 }
 
-// --- Phase-3 handshake sequence tests ---
-
-// TestHandshake_GlobalSemaphoreExhausted — gate 1 fires before gate 3 (no
-// auth call). Pre-acquire the global slot to cap = 1.
 func TestHandshake_GlobalSemaphoreExhausted(t *testing.T) {
 	t.Parallel()
 
@@ -868,7 +752,6 @@ func TestHandshake_GlobalSemaphoreExhausted(t *testing.T) {
 	validMapBackend(kit.backend)
 	srv := newTestServer(t, kit.h)
 
-	// Saturate the global semaphore from outside the handler.
 	if !kit.limits.AcquireGlobal() {
 		t.Fatal("pre-acquire failed; cap may be wrong")
 	}
@@ -897,8 +780,6 @@ func TestHandshake_GlobalSemaphoreExhausted(t *testing.T) {
 	}
 }
 
-// TestHandshake_PreAuthRateExceeded — gate 2 fires after exhausting the
-// per-IP token bucket.
 func TestHandshake_PreAuthRateExceeded(t *testing.T) {
 	t.Parallel()
 
@@ -906,7 +787,7 @@ func TestHandshake_PreAuthRateExceeded(t *testing.T) {
 		GlobalConcurrent:     1024,
 		PerUserConcurrentMax: 10,
 		PerUserRatePerSecond: 100, PerUserBurst: 100,
-		PreAuthRatePerSecond: 0.0001, PreAuthBurst: 1, // effectively single-use
+		PreAuthRatePerSecond: 0.0001, PreAuthBurst: 1,
 		SweepInterval:      60 * time.Second,
 		SweepIdleThreshold: 5 * time.Minute,
 	}
@@ -914,8 +795,6 @@ func TestHandshake_PreAuthRateExceeded(t *testing.T) {
 	validMapBackend(kit.backend)
 	srv := newTestServer(t, kit.h)
 
-	// Drain the bucket from outside the handler. The fake-httptest client's
-	// IP is 127.0.0.1, the same key the handler will use.
 	for i := 0; i < 5; i++ {
 		_ = kit.limits.AllowPreAuthRate("127.0.0.1")
 	}
@@ -938,8 +817,6 @@ func TestHandshake_PreAuthRateExceeded(t *testing.T) {
 	}
 }
 
-// TestHandshake_MissingBearerReturns401 — handler-internal 401 before any
-// auth call (the auth client is never invoked without a token).
 func TestHandshake_MissingBearerReturns401(t *testing.T) {
 	t.Parallel()
 
@@ -948,7 +825,7 @@ func TestHandshake_MissingBearerReturns401(t *testing.T) {
 	srv := newTestServer(t, kit.h)
 
 	hits0 := kit.backend.hits.Load()
-	resp, err := http.Get(srv.URL + "/sse/v1/users/42") // no Authorization header
+	resp, err := http.Get(srv.URL + "/sse/v1/users/42")
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
@@ -961,8 +838,6 @@ func TestHandshake_MissingBearerReturns401(t *testing.T) {
 	}
 }
 
-// TestHandshake_AuthBackend401Forwarded: the auth backend's 401 body
-// must be forwarded verbatim.
 func TestHandshake_AuthBackend401Forwarded(t *testing.T) {
 	t.Parallel()
 
@@ -989,8 +864,6 @@ func TestHandshake_AuthBackend401Forwarded(t *testing.T) {
 		t.Errorf("Content-Type = %q; want %q", got, "application/json")
 	}
 
-	// AcquireGlobal must have been released on the error path — pre-acquire
-	// up to cap and confirm none of the slots are still pinned.
 	if !kit.limits.AcquireGlobal() {
 		t.Error("global semaphore not released on 401 path")
 	}
@@ -1057,8 +930,6 @@ func TestHandshake_AuthBackend5xxReturns503(t *testing.T) {
 	}
 }
 
-// TestHandshake_PerUserConcurrentExceeded — gate 4. Pre-load the per-user
-// counter to cap; the next handshake gets 429.
 func TestHandshake_PerUserConcurrentExceeded(t *testing.T) {
 	t.Parallel()
 	lcfg := &limits.Config{
@@ -1088,14 +959,12 @@ func TestHandshake_PerUserConcurrentExceeded(t *testing.T) {
 	}
 }
 
-// TestHandshake_PerUserRateExceeded — after auth identifies user_id, the
-// post-auth token bucket rejects reconnect spam even below the concurrency cap.
 func TestHandshake_PerUserRateExceeded(t *testing.T) {
 	t.Parallel()
 	lcfg := &limits.Config{
 		GlobalConcurrent:     1024,
 		PerUserConcurrentMax: 10,
-		PerUserRatePerSecond: 0.0001, PerUserBurst: 1, // effectively single-use
+		PerUserRatePerSecond: 0.0001, PerUserBurst: 1,
 		PreAuthRatePerSecond: 100, PreAuthBurst: 100,
 		SweepInterval:      60 * time.Second,
 		SweepIdleThreshold: 5 * time.Minute,
@@ -1134,10 +1003,6 @@ func TestHandshake_PerUserRateExceeded(t *testing.T) {
 	}
 }
 
-// TestHandshake_LegacyRootsIgnored — a backend that still emits the legacy
-// `roots` field (whose value is unrelated to Tables) must not affect the
-// authorization decision. The requested table comes from the URL/channel and
-// is authorized solely by its presence in Tables.
 func TestHandshake_LegacyRootsIgnored(t *testing.T) {
 	t.Parallel()
 	kit := newTestHandler(t, nil, nil)
@@ -1159,8 +1024,6 @@ func TestHandshake_LegacyRootsIgnored(t *testing.T) {
 	_, _ = io.Copy(io.Discard, resp.Body)
 }
 
-// TestHandshake_TableNotInWhitelistReturns403 — requested table must be in
-// Tables. roots is ignored.
 func TestHandshake_TableNotInWhitelistReturns403(t *testing.T) {
 	t.Parallel()
 	kit := newTestHandler(t, nil, nil)
@@ -1184,8 +1047,6 @@ func TestHandshake_TableNotInWhitelistReturns403(t *testing.T) {
 	}
 }
 
-// TestHandshake_HappyPath_RegistersSubscriberWithFilter — full happy-path
-// shape: 200 SSE, sub.Filter non-nil, auth.Subscribers contains one entry.
 func TestHandshake_HappyPath_RegistersSubscriberWithFilter(t *testing.T) {
 	t.Parallel()
 	kit := newTestHandler(t, nil, nil)
@@ -1215,8 +1076,6 @@ func TestHandshake_HappyPath_RegistersSubscriberWithFilter(t *testing.T) {
 	sub.Drop("test")
 	_, _ = io.Copy(io.Discard, resp.Body)
 
-	// After the writer exits and the deferred Remove fires, the registry
-	// should drain back to zero.
 	deadline := time.Now().Add(1500 * time.Millisecond)
 	for time.Now().Before(deadline) {
 		if kit.authReg.Len() == 0 {
@@ -1227,8 +1086,6 @@ func TestHandshake_HappyPath_RegistersSubscriberWithFilter(t *testing.T) {
 	t.Errorf("auth.Subscribers.Len() did not drain to 0; still %d", kit.authReg.Len())
 }
 
-// TestHandshake_HappyPathReleasesLimitsOnExit — after the connection closes,
-// the per-user counter and the global slot are released.
 func TestHandshake_HappyPathReleasesLimitsOnExit(t *testing.T) {
 	t.Parallel()
 	lcfg := &limits.Config{
@@ -1260,7 +1117,6 @@ func TestHandshake_HappyPathReleasesLimitsOnExit(t *testing.T) {
 	_, _ = io.Copy(io.Discard, resp.Body)
 	resp.Body.Close()
 
-	// Wait briefly for the writer goroutine to unwind the defer chain.
 	deadline := time.Now().Add(1 * time.Second)
 	for time.Now().Before(deadline) {
 		if kit.limits.AcquireGlobal() {
@@ -1282,24 +1138,17 @@ func TestHandshake_HappyPathReleasesLimitsOnExit(t *testing.T) {
 	}
 }
 
-// TestHandshake_AuthRevokedMidStream: backend returns a valid
-// Whitelist first, then 401 on every subsequent call. With a short TTL the
-// refresh ticker eventually drops the subscriber with reason=auth_revoked
-// and the client receives the event:error frame.
 func TestHandshake_AuthRevokedMidStream(t *testing.T) {
 	t.Parallel()
 
 	kit := newTestHandler(t, nil, nil)
 	srv := newTestServer(t, kit.h)
 
-	// Override auth.Config to use a fast refresh interval so the test
-	// doesn't wait 60s for the first refresh tick.
-	// Build a fresh kit with shorter TTL.
 	backend := kit.backend
 	first := atomic.Bool{}
 	backend.SetResp(func(w http.ResponseWriter, _ *http.Request) {
 		if !first.Swap(true) {
-			// First call → valid Whitelist with TTL = 1s for fast refresh.
+
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write(permMapJSON("u1", map[string][]string{"users": {"id", "name"}}, 1))
 			return
@@ -1318,9 +1167,6 @@ func TestHandshake_AuthRevokedMidStream(t *testing.T) {
 	}
 	defer resp.Body.Close()
 
-	// Read body bytes until we see event: error (with reason=auth_revoked)
-	// or hit the deadline. With initial jitter [0, 500ms) and a 1s
-	// ticker, the second auth call should land within ~1.5s.
 	buf := readUntil(t, resp.Body, 1024, 4*time.Second)
 	body := string(buf)
 	if !strings.Contains(body, "event: error") {
@@ -1331,19 +1177,9 @@ func TestHandshake_AuthRevokedMidStream(t *testing.T) {
 	}
 }
 
-// TestResponses_NoSniffHeaderEverywhere closure: every
-// response written by the SSE handler — SSE 200 stream, JSON error bodies
-// (invalid_channel, invalid_since_lsn), JSON reason bodies (not_allowed),
-// preflight 204, and 401 status-only — must carry
-// X-Content-Type-Options: nosniff. The header is injected by the single
-// writeNoSniff(w) helper at every response surface in internal/sse.
 func TestResponses_NoSniffHeaderEverywhere(t *testing.T) {
 	t.Parallel()
 
-	// Helper: build a kit configured for each sub-case. The 200 SSE path
-	// needs a valid backend Whitelist; the 401 path uses no Authorization header
-	// (so the handler short-circuits before hitting the backend); the
-	// not_allowed case installs a Whitelist without "users" in Tables.
 	type setup struct {
 		name       string
 		backendFn  func(*fakeAuthBackend)
@@ -1351,8 +1187,7 @@ func TestResponses_NoSniffHeaderEverywhere(t *testing.T) {
 		path       string
 		setHeaders func(req *http.Request)
 		wantStatus int
-		// closeBody: for SSE 200 the test must Drop the subscriber after
-		// reading headers so the writer returns and the body closes.
+
 		isSSE bool
 	}
 
@@ -1361,7 +1196,7 @@ func TestResponses_NoSniffHeaderEverywhere(t *testing.T) {
 			name:       "invalid_channel_400",
 			backendFn:  validMapBackend,
 			method:     http.MethodGet,
-			path:       "/sse/v1/USERS/42", // uppercase table -> invalid
+			path:       "/sse/v1/USERS/42",
 			setHeaders: nil,
 			wantStatus: http.StatusBadRequest,
 		},
@@ -1404,7 +1239,7 @@ func TestResponses_NoSniffHeaderEverywhere(t *testing.T) {
 			backendFn:  validMapBackend,
 			method:     http.MethodGet,
 			path:       "/sse/v1/users/42",
-			setHeaders: nil, // no Authorization header -> 401 status-only
+			setHeaders: nil,
 			wantStatus: http.StatusUnauthorized,
 		},
 		{
@@ -1452,8 +1287,7 @@ func TestResponses_NoSniffHeaderEverywhere(t *testing.T) {
 			}
 
 			if tc.isSSE {
-				// Close the writer loop so the test does not hang on the
-				// 200-stream case.
+
 				sub := kit.bc.firstSub(t)
 				sub.Drop("test")
 				_, _ = io.Copy(io.Discard, resp.Body)
@@ -1462,11 +1296,6 @@ func TestResponses_NoSniffHeaderEverywhere(t *testing.T) {
 	}
 }
 
-// TestHandshake_InvalidRequestID_400 closure: when a
-// client sends a malformed X-Request-ID (too long, contains spaces, or
-// contains characters outside ^[A-Za-z0-9._-]+$) the handler rejects with
-// 400 invalid_request_id BEFORE any auth-backend call. The auth backend
-// hit counter MUST be 0 for the rejected handshake.
 func TestHandshake_InvalidRequestID_400(t *testing.T) {
 	t.Parallel()
 
@@ -1513,10 +1342,6 @@ func TestHandshake_InvalidRequestID_400(t *testing.T) {
 	}
 }
 
-// TestHandshake_ValidRequestID_PassedThrough happy path: a
-// client-supplied X-Request-ID matching the full charset spectrum is
-// forwarded verbatim to the auth backend, and an empty X-Request-ID is
-// replaced by a generated 32-char hex ID.
 func TestHandshake_ValidRequestID_PassedThrough(t *testing.T) {
 	t.Parallel()
 
@@ -1580,7 +1405,7 @@ func TestHandshake_ValidRequestID_PassedThrough(t *testing.T) {
 		defer cancel()
 		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/sse/v1/users/42", nil)
 		req.Header.Set("Authorization", "Bearer valid")
-		// No X-Request-ID header.
+
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
 			t.Fatalf("Do: %v", err)
@@ -1603,13 +1428,6 @@ func TestHandshake_ValidRequestID_PassedThrough(t *testing.T) {
 	})
 }
 
-// TestWriteJSONReason_EscapesCallerString closure:
-// writeJSONReason must produce strictly-valid JSON for arbitrary caller-
-// supplied reason strings, including byte sequences that the prior
-// byte-string concatenation implementation would have corrupted (e.g.,
-// `"; alert(1); //`). Round-tripping through json.Unmarshal proves both
-// validity and exact-string preservation. The trailing newline is the
-// documented, intentional wire-format change (Encoder semantics).
 func TestWriteJSONReason_EscapesCallerString(t *testing.T) {
 	t.Parallel()
 	cases := []string{
@@ -1643,8 +1461,6 @@ func TestWriteJSONReason_EscapesCallerString(t *testing.T) {
 	}
 }
 
-// -- (clientIP + trusted-proxy XFF parsing) ---
-
 func mkClientIPHandler(t *testing.T, proxies []string) *Handler {
 	t.Helper()
 	lcfg := &limits.Config{
@@ -1667,7 +1483,7 @@ func TestClientIP_EmptyAllowlist_ReturnsPeer(t *testing.T) {
 	h := mkClientIPHandler(t, nil)
 	r := httptest.NewRequest(http.MethodGet, "/sse/v1/users/42", nil)
 	r.RemoteAddr = "192.0.2.1:1234"
-	r.Header.Set("X-Forwarded-For", "8.8.8.8") // ignored because allowlist empty
+	r.Header.Set("X-Forwarded-For", "8.8.8.8")
 	if got := h.clientIP(r); got != "192.0.2.1" {
 		t.Errorf("clientIP = %q; want %q", got, "192.0.2.1")
 	}
@@ -1711,7 +1527,7 @@ func TestClientIP_PeerTrusted_ChainAllTrusted(t *testing.T) {
 	r := httptest.NewRequest(http.MethodGet, "/sse/v1/users/42", nil)
 	r.RemoteAddr = "10.0.0.1:1234"
 	r.Header.Set("X-Forwarded-For", "10.1.0.1, 10.2.0.1")
-	// Entire chain trusted → fallback to leftmost (claimed client).
+
 	if got := h.clientIP(r); got != "10.1.0.1" {
 		t.Errorf("clientIP = %q; want %q", got, "10.1.0.1")
 	}
@@ -1723,7 +1539,7 @@ func TestClientIP_PeerTrusted_TwoHops_RightToLeft(t *testing.T) {
 	r := httptest.NewRequest(http.MethodGet, "/sse/v1/users/42", nil)
 	r.RemoteAddr = "10.0.0.1:1234"
 	r.Header.Set("X-Forwarded-For", "203.0.113.5, 10.2.0.1")
-	// Right-to-left: skip 10.2.0.1 trusted, take 203.0.113.5 untrusted.
+
 	if got := h.clientIP(r); got != "203.0.113.5" {
 		t.Errorf("clientIP = %q; want %q", got, "203.0.113.5")
 	}
@@ -1731,11 +1547,7 @@ func TestClientIP_PeerTrusted_TwoHops_RightToLeft(t *testing.T) {
 
 func TestClientIP_IPv6Peer(t *testing.T) {
 	t.Parallel()
-	// IN-02: fc00::/7 is the canonical IPv6 ULA range (covers fc00::/8
-	// and fd00::/8). The earlier fd00::/8 fixture worked because fd00::1
-	// is inside it, but a copy-paste of that prefix into a production
-	// configmap would silently trust four times the IPv6 space (the
-	// entire f000::/8 block).
+
 	h := mkClientIPHandler(t, []string{"fc00::/7"})
 	r := httptest.NewRequest(http.MethodGet, "/sse/v1/users/42", nil)
 	r.RemoteAddr = "[fd00::1]:1234"
@@ -1751,18 +1563,12 @@ func TestClientIP_MalformedXFFEntry(t *testing.T) {
 	r := httptest.NewRequest(http.MethodGet, "/sse/v1/users/42", nil)
 	r.RemoteAddr = "10.0.0.1:1234"
 	r.Header.Set("X-Forwarded-For", "not-an-ip, 10.2.0.1")
-	// Malformed entry must NOT be returned verbatim. Fall back to
-	// the peer host (trusted, bounded) so attacker-controlled garbage
-	// cannot poison the per-IP rate-limit map.
+
 	if got := h.clientIP(r); got != "10.0.0.1" {
 		t.Errorf("clientIP = %q; want %q (peer host fallback)", got, "10.0.0.1")
 	}
 }
 
-// TestClientIP_MalformedXFFEntry_RotatingTailsCollapse asserts that
-// two distinct attacker-controlled malformed tails collapse onto a
-// single rate-limit key (the peer host), defeating the cache-busting
-// attack against the per-IP rate-limit map.
 func TestClientIP_MalformedXFFEntry_RotatingTailsCollapse(t *testing.T) {
 	t.Parallel()
 	h := mkClientIPHandler(t, []string{"10.0.0.0/8"})
@@ -1781,9 +1587,6 @@ func TestClientIP_MalformedXFFEntry_RotatingTailsCollapse(t *testing.T) {
 	}
 }
 
-// TestClientIP_IPv6XFFEntry_BracketsStripped verifies bracket-wrapped
-// IPv6 entries in XFF are accepted and returned in canonical
-// net.IP.String() form.
 func TestClientIP_IPv6XFFEntry_BracketsStripped(t *testing.T) {
 	t.Parallel()
 	h := mkClientIPHandler(t, []string{"10.0.0.0/8"})
@@ -1795,25 +1598,18 @@ func TestClientIP_IPv6XFFEntry_BracketsStripped(t *testing.T) {
 	}
 }
 
-// TestClientIP_MixedValidInvalidXFF exercises a mixed XFF chain with
-// one malformed entry. The right-to-left scan hits
-// the malformed entry before reaching the untrusted hop, so the peer
-// host fallback engages.
 func TestClientIP_MixedValidInvalidXFF(t *testing.T) {
 	t.Parallel()
 	h := mkClientIPHandler(t, []string{"10.0.0.0/8"})
 	r := httptest.NewRequest(http.MethodGet, "/sse/v1/users/42", nil)
 	r.RemoteAddr = "10.0.0.1:1234"
 	r.Header.Set("X-Forwarded-For", "203.0.113.5, garbage, 10.2.0.1")
-	// Right-to-left: 10.2.0.1 trusted (skip), "garbage" malformed → fall
-	// back to peer host.
+
 	if got := h.clientIP(r); got != "10.0.0.1" {
 		t.Errorf("clientIP = %q; want %q (peer host fallback on malformed)", got, "10.0.0.1")
 	}
 }
 
-// TestClientIP_SingleEntryXFF: a single untrusted entry is returned
-// in canonical form.
 func TestClientIP_SingleEntryXFF(t *testing.T) {
 	t.Parallel()
 	h := mkClientIPHandler(t, []string{"10.0.0.0/8"})
@@ -1825,8 +1621,6 @@ func TestClientIP_SingleEntryXFF(t *testing.T) {
 	}
 }
 
-// TestClientIP_EmptyXFFHeader: an empty XFF header value (header
-// present but empty string) falls back to peer host.
 func TestClientIP_EmptyXFFHeader(t *testing.T) {
 	t.Parallel()
 	h := mkClientIPHandler(t, []string{"10.0.0.0/8"})
@@ -1838,28 +1632,20 @@ func TestClientIP_EmptyXFFHeader(t *testing.T) {
 	}
 }
 
-// TestClientIP_MultipleXFFHeaders.
-// RFC 7230 §3.2.2 permits the same header multiple times. r.Header.Get
-// returns only the first, silently dropping subsequent entries. Verify
-// the implementation gathers ALL values via r.Header.Values and joins
-// them so the right-to-left scan walks the full chain.
 func TestClientIP_MultipleXFFHeaders(t *testing.T) {
 	t.Parallel()
 	h := mkClientIPHandler(t, []string{"10.0.0.0/8"})
 	r := httptest.NewRequest(http.MethodGet, "/sse/v1/users/42", nil)
 	r.RemoteAddr = "10.0.0.1:1234"
-	// Two separate XFF header instances — note Add not Set.
+
 	r.Header.Add("X-Forwarded-For", "203.0.113.5")
 	r.Header.Add("X-Forwarded-For", "10.2.0.1")
-	// After Values+Join the chain is "203.0.113.5,10.2.0.1". Right-to-left:
-	// 10.2.0.1 trusted (skip), 203.0.113.5 untrusted → return it.
+
 	if got := h.clientIP(r); got != "203.0.113.5" {
 		t.Errorf("clientIP = %q; want %q (must walk BOTH XFF headers)", got, "203.0.113.5")
 	}
 }
 
-// TestClientIP_AllMalformedEntries: an XFF chain entirely composed of
-// malformed entries falls back to peer host (never returns garbage).
 func TestClientIP_AllMalformedEntries(t *testing.T) {
 	t.Parallel()
 	h := mkClientIPHandler(t, []string{"10.0.0.0/8"})
@@ -1881,8 +1667,6 @@ func TestClientIP_XFFWhitespace(t *testing.T) {
 		t.Errorf("clientIP = %q; want %q", got, "203.0.113.5")
 	}
 }
-
-// -- (CORS canonicalisation handlers) ---
 
 func TestCORS_CaseInsensitiveOriginMatch(t *testing.T) {
 	t.Parallel()
@@ -1954,9 +1738,6 @@ func TestCORS_MalformedOrigin_NoMatch(t *testing.T) {
 	}
 }
 
-// containsCSV reports whether any of vals contains target (after
-// comma-splitting and trimming). net/http represents multi-Vary either as
-// multiple header lines or a single comma-joined line; we accept either.
 func containsCSV(vals []string, target string) bool {
 	for _, v := range vals {
 		for _, p := range strings.Split(v, ",") {
@@ -1968,24 +1749,6 @@ func containsCSV(vals []string, target string) bool {
 	return false
 }
 
-// TestHandler_HijackedTCPConn_WireBytes is the integration-level
-// proof that the real *net.TCPConn hijack path produces a valid HTTP/1.1
-// SSE response. Connects raw net.Dial to an httptest.NewServer (loopback
-// TCP, hijack-capable), drives a minimal SSE GET handshake, parses the
-// response off the wire, and asserts:
-//   - Status line `HTTP/1.1 200 OK`.
-//   - `Content-Type: text/event-stream` present.
-//   - `Transfer-Encoding: chunked` ABSENT (the 16-03 hazard — the whole
-//     point of wire-correctness).
-//   - First 14 body bytes after the header terminator (CRLF CRLF) are
-//     exactly `retry: 15000\n\n` (WALERA-01 prelude, emitted by
-//     pool.Attach on the hijacked conn).
-//
-// httptest.ResponseRecorder does NOT support Hijack — every other handler
-// test that uses http.DefaultClient + httptest.NewServer exercises the
-// hijack path too (because httptest.NewServer is a real TCP listener); this
-// test additionally inspects the raw wire bytes so the chunked-encoding
-// invariant is asserted directly.  / WIRE-02.
 func TestHandler_HijackedTCPConn_WireBytes(t *testing.T) {
 	t.Parallel()
 
@@ -1999,10 +1762,6 @@ func TestHandler_HijackedTCPConn_WireBytes(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = conn.Close() })
 
-	// 2s deadline covers the full handshake (auth backend, limits gates,
-	// pool.Attach prelude write). On expiry the read returns whatever
-	// was accumulated so the test fails with a useful message instead
-	// of hanging.
 	if err := conn.SetDeadline(time.Now().Add(2 * time.Second)); err != nil {
 		t.Fatalf("SetDeadline: %v", err)
 	}
@@ -2016,10 +1775,6 @@ func TestHandler_HijackedTCPConn_WireBytes(t *testing.T) {
 		t.Fatalf("write request: %v", err)
 	}
 
-	// Parse status line + headers off the raw wire. Cannot use
-	// http.ReadResponse here because Go's response parser would consume
-	// the body bytes through its Transfer-Encoding decoder; we want the
-	// raw post-header bytes.
 	br := bufio.NewReader(conn)
 	statusLine, err := br.ReadString('\n')
 	if err != nil {
@@ -2042,7 +1797,7 @@ func TestHandler_HijackedTCPConn_WireBytes(t *testing.T) {
 		}
 		line = strings.TrimRight(line, "\r\n")
 		if line == "" {
-			break // header terminator
+			break
 		}
 		colon := strings.IndexByte(line, ':')
 		if colon <= 0 {
@@ -2069,7 +1824,6 @@ func TestHandler_HijackedTCPConn_WireBytes(t *testing.T) {
 		t.Errorf("Transfer-Encoding contains chunked; want absent ( / WIRE-02)")
 	}
 
-	// First 14 bytes after header terminator must be the WALERA-01 prelude.
 	const prelude = "retry: 15000\n\n"
 	buf := make([]byte, len(prelude))
 	if _, err := io.ReadFull(br, buf); err != nil {
@@ -2079,11 +1833,8 @@ func TestHandler_HijackedTCPConn_WireBytes(t *testing.T) {
 		t.Errorf("prelude = %q; want %q", buf, prelude)
 	}
 
-	// Drop the subscriber so the handler returns and the deferred
-	// tcpConn.Close + Drop fire cleanly. Closing the client side here
-	// races the handler; cleaner to ask the broadcaster to Drop.
 	kit.bc.firstSub(t).Drop("test")
 	_ = conn.SetDeadline(time.Now().Add(2 * time.Second))
-	// Drain any final frames (e.g. event: error) and EOF.
+
 	_, _ = io.Copy(io.Discard, br)
 }

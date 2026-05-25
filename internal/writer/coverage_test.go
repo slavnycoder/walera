@@ -13,9 +13,6 @@ import (
 	"golang.org/x/time/rate"
 )
 
-// TestSoak_Tick_Constant exercises the soak scenario's Tick (held out of the
-// main test file because its semantics are intentionally identical to steady;
-// the separate test pins coverage and prevents accidental divergence).
 func TestSoak_Tick_Constant(t *testing.T) {
 	s := newSoakScenario(50.0, 2)
 	for _, d := range []time.Duration{0, time.Hour, 24 * time.Hour} {
@@ -26,18 +23,15 @@ func TestSoak_Tick_Constant(t *testing.T) {
 	}
 }
 
-// TestStress_Tick_Cap covers the doubling-cap branch (≥30 doublings flattens
-// to the math.MaxInt32 ceiling).
 func TestStress_Tick_Cap(t *testing.T) {
 	s := newStressScenario(200.0, 1)
-	r, _ := s.Tick(3600 * time.Hour) // way past 30 doublings
-	// At cap the result is clamped to math.MaxInt32.
+	r, _ := s.Tick(3600 * time.Hour)
+
 	if r <= 0 {
 		t.Errorf("stress at cap returned non-positive rate %v", r)
 	}
 }
 
-// TestSpike_Tick_DegeneratePeriod exercises the period<=0 guard.
 func TestSpike_Tick_DegeneratePeriod(t *testing.T) {
 	s := &spikeScenario{
 		baseline:      10.0,
@@ -52,7 +46,6 @@ func TestSpike_Tick_DegeneratePeriod(t *testing.T) {
 	}
 }
 
-// TestRampUp_DegenerateDuration exercises the rampDur<=0 fast path.
 func TestRampUp_DegenerateDuration(t *testing.T) {
 	s := newRampUpScenario(100.0, 1, 0)
 	r, _ := s.Tick(time.Second)
@@ -61,7 +54,6 @@ func TestRampUp_DegenerateDuration(t *testing.T) {
 	}
 }
 
-// TestLoad_FlagOverridesScenarioName covers applyFlagOverrides via flag.Visit.
 func TestLoad_FlagOverridesScenarioName(t *testing.T) {
 	defer resetEnv(t)()
 	t.Setenv("WRITER_PG_DSN", "postgres://u:p@h/db")
@@ -143,7 +135,6 @@ func TestLoad_FlagOverridesScenarioName(t *testing.T) {
 	}
 }
 
-// TestLoad_YAML exercises the YAML-file layer (writes a temp file).
 func TestLoad_YAML(t *testing.T) {
 	defer resetEnv(t)()
 	dir := t.TempDir()
@@ -172,7 +163,6 @@ scenario:
 	}
 }
 
-// TestLoad_YAML_InvalidFile returns a structured error.
 func TestLoad_YAML_InvalidFile(t *testing.T) {
 	defer resetEnv(t)()
 	dir := t.TempDir()
@@ -189,7 +179,6 @@ func TestLoad_YAML_InvalidFile(t *testing.T) {
 	}
 }
 
-// TestValidate_MultipleFailures exercises the multi-error path.
 func TestValidate_MultipleFailures(t *testing.T) {
 	cfg := &WriterConfig{
 		PG:       WriterPGConfig{DSN: ""},
@@ -216,14 +205,12 @@ func TestValidate_MultipleFailures(t *testing.T) {
 	}
 }
 
-// TestWaitArrival_Poisson_DegenerateLambda hits the lambda<=0 branch.
 func TestWaitArrival_Poisson_DegenerateLambda(t *testing.T) {
 	lim := rate.NewLimiter(rate.Limit(0), 1)
 	rng := mathrand.New(mathrand.NewPCG(1, 1))
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Burn the initial burst.
 	if err := waitArrival(ctx, lim, DistPoisson, rng); err != nil {
 		t.Fatalf("first wait: %v", err)
 	}
@@ -242,10 +229,8 @@ func TestWaitArrival_Poisson_DegenerateLambda(t *testing.T) {
 	}
 }
 
-// TestWaitArrival_Poisson_CancelDuringSleep covers the ctx.Done branch in the
-// timer select.
 func TestWaitArrival_Poisson_CancelDuringSleep(t *testing.T) {
-	// Very low rate so Exp(1)/λ is huge — guarantees we sit in the timer.
+
 	lim := rate.NewLimiter(rate.Limit(0.001), 1)
 	rng := mathrand.New(mathrand.NewPCG(7, 7))
 	ctx, cancel := context.WithCancel(context.Background())

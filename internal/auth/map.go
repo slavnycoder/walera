@@ -1,7 +1,3 @@
-// Package auth — map.go: per-user permission Whitelist + Filter callback.
-// See INVARIANTS.md Security/PII §5 (PK always preserved). Filter rule set:
-// (1) non-whitelisted table → silent drop, (2) PK column always copied,
-// (3) UPDATE with no non-PK whitelisted column → silent drop.
 package auth
 
 import (
@@ -13,25 +9,16 @@ import (
 	"github.com/walera/walera/internal/wal"
 )
 
-// Whitelist is the immutable per-user permission snapshot consumed by Filter.
-// Constructed via ParseWhitelist; published via atomic.Pointer[Whitelist] swap.
 type Whitelist struct {
-	// UserID is the authenticated user identifier (opaque to Walera).
 	UserID string
 
-	// Tables is the per-table set of allowed readable columns. Absence of the
-	// table key denotes a NON-allowed table. Empty set means PK-only.
 	Tables map[string]map[string]struct{}
 
-	// TTLSeconds is the snapshot's lifetime; refresh interval for auth.Subscriber.
 	TTLSeconds int
 
-	// RefreshLSN is the WAL LSN at which this snapshot becomes effective;
-	// stamped by auth.Subscriber.swapMap.
 	RefreshLSN pglogrepl.LSN
 }
 
-// Allowed reports whether column is in the readable-column set for table.
 func (m *Whitelist) Allowed(table, column string) bool {
 	if m == nil {
 		return false
@@ -44,7 +31,6 @@ func (m *Whitelist) Allowed(table, column string) bool {
 	return ok
 }
 
-// Filter is the per-change authorization callback. See package doc for rules.
 func (m *Whitelist) Filter(c wal.Change) (wal.Change, bool) {
 	if m == nil {
 		return c, true
@@ -86,7 +72,7 @@ func (m *Whitelist) Filter(c wal.Change) (wal.Change, bool) {
 			}
 		}
 		if !keptNonPK {
-			// Rule 3: no non-PK whitelisted column survived → silent drop.
+
 			return c, true
 		}
 		return out, false
@@ -99,17 +85,12 @@ func (m *Whitelist) Filter(c wal.Change) (wal.Change, bool) {
 	}
 }
 
-// wireMap is the JSON wire shape returned by /auth/permissions. Unknown
-// fields are silently ignored by encoding/json.
 type wireMap struct {
 	UserID     string              `json:"user_id"`
 	Tables     map[string][]string `json:"tables"`
 	TTLSeconds int                 `json:"ttl_seconds"`
 }
 
-// ParseWhitelist decodes the auth-backend response body and validates the
-// user_id-non-empty invariant. RefreshLSN is left at zero; auth.Subscriber
-// stamps it at the atomic-swap moment.
 func ParseWhitelist(body []byte) (*Whitelist, error) {
 	var w wireMap
 	if err := json.Unmarshal(body, &w); err != nil {

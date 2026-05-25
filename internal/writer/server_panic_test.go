@@ -1,6 +1,3 @@
-// Package writer — server_panic_test.go covers the writer.NewServer
-// construction gate: every required Deps field panics with the exact
-// message "writer.NewServer: Deps.<Field> is required" when nil.
 package writer
 
 import (
@@ -12,8 +9,6 @@ import (
 	"golang.org/x/time/rate"
 )
 
-// validServerDeps returns a fully-populated ServerDeps so each per-field
-// test only nils one field.
 func validServerDeps() ServerDeps {
 	reg := NewRegistry()
 	lim := rate.NewLimiter(rate.Limit(1), 1)
@@ -63,9 +58,6 @@ func TestNewServer_PanicsOnNilDeps(t *testing.T) {
 	}
 }
 
-// assertWriterPanicsWithValue runs fn and asserts that it panicked with a
-// value equal to want. Mirrors testify's require.PanicsWithValue without
-// taking on the testify dep.
 func assertWriterPanicsWithValue(t *testing.T, want any, fn func()) {
 	t.Helper()
 	defer func() {

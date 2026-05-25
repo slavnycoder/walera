@@ -1,4 +1,3 @@
-// Package router — index.go: 8-shard exact-subscription index. See doc.go invariants 2 + 4.
 package router
 
 import (

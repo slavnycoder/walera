@@ -1,7 +1,3 @@
-// Package writer — loop.go drives the single commit goroutine: read the
-// active scenarioPtr, block in waitArrival, round-robin a target, call
-// commitOnce, dispatch via onCommit / onError. See INVARIANTS.md
-// (PII discipline, error classification, ctx-cancel contract).
 package writer
 
 import (
@@ -21,27 +17,16 @@ import (
 	"golang.org/x/time/rate"
 )
 
-// commitOncePool is the BeginTx seam commitOnce needs. The test-only
-// fakePool in commitonce_test.go is the second implementation. See
-// INVARIANTS.md.
 type commitOncePool interface {
 	BeginTx(ctx context.Context, txOptions pgx.TxOptions) (pgx.Tx, error)
 }
 
-// commitOnceFn is the indirection through which RunCommitLoop calls
-// commitOnce. Tests overwrite this variable to inject deterministic
-// success/failure without touching Postgres.
 var commitOnceFn = realCommitOnce
 
-// realCommitOnce is the production commitOnce that satisfies the indirection.
 func realCommitOnce(ctx context.Context, pool commitOncePool, target string, rowsPerTx int, rng *mathrand.Rand, cfg WriterPGConfig) error {
 	return commitOnceImpl(ctx, pool, target, rowsPerTx, rng, cfg)
 }
 
-// commitOnce is the public entry used by RunCommitLoop (via the indirection
-// above) and by integration tests. It opens a tx, inserts rowsPerTx rows
-// into target (with line_items siblings when target=="orders"), then
-// commits.
 func commitOnce(ctx context.Context, pool *pgxpool.Pool, target string, rowsPerTx int, rng *mathrand.Rand, cfg WriterPGConfig) error {
 	return commitOnceImpl(ctx, pool, target, rowsPerTx, rng, cfg)
 }
@@ -49,7 +34,7 @@ func commitOnce(ctx context.Context, pool *pgxpool.Pool, target string, rowsPerT
 func commitOnceImpl(ctx context.Context, pool commitOncePool, target string, rowsPerTx int, rng *mathrand.Rand, cfg WriterPGConfig) error {
 	timeout := cfg.TxTimeout
 	if timeout <= 0 {
-		timeout = 5e9 // 5s safety fallback (defensive — Load should enforce >0)
+		timeout = 5e9
 	}
 	txCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -58,7 +43,7 @@ func commitOnceImpl(ctx context.Context, pool commitOncePool, target string, row
 	if err != nil {
 		return fmt.Errorf("writer commit: begin: %w", err)
 	}
-	// rollback is a no-op after a successful commit; ignore the error.
+
 	defer func() { _ = tx.Rollback(txCtx) }()
 
 	for i := 0; i < rowsPerTx; i++ {
@@ -73,9 +58,6 @@ func commitOnceImpl(ctx context.Context, pool commitOncePool, target string, row
 	return nil
 }
 
-// insertOne executes the INSERT for a single row into target. For "orders"
-// it also inserts a line_items row referencing the freshly-inserted parent
-// (exercises the root-bump trigger). devices/articles are simple inserts.
 func insertOne(ctx context.Context, tx pgx.Tx, target string, rng *mathrand.Rand) error {
 	switch target {
 	case "orders":
@@ -118,9 +100,6 @@ func insertOne(ctx context.Context, tx pgx.Tx, target string, rng *mathrand.Rand
 	}
 }
 
-// classify maps an error to a writer_errors_total{reason} label:
-// "" for nil, "pg_constraint" for SQLSTATE 23xxx, "pg_conn" for
-// net/syscall/io.EOF/ECONNRESET, "pg_other" for everything else.
 func classify(err error) string {
 	if err == nil {
 		return ""
@@ -142,11 +121,6 @@ func classify(err error) string {
 	return "pg_other"
 }
 
-// RunCommitLoop is the writer's single dedicated commit goroutine. It
-// blocks in waitArrival, atomically reads the active scenarioState on
-// every iteration, calls commitOnce, and dispatches the result via the
-// nil-safe onCommit / onError callbacks. Returns ctx.Err() on
-// cancellation; never returns nil.
 func RunCommitLoop(
 	ctx context.Context,
 	pool *pgxpool.Pool,
@@ -159,8 +133,7 @@ func RunCommitLoop(
 	onCommit func(scenario, target string, rows int),
 	onError func(reason string),
 ) error {
-	// poolAdapter lets the indirection accept the real *pgxpool.Pool or
-	// nil (unit-test path where commitOnceFn is stubbed).
+
 	var poolAdapter commitOncePool
 	if pool != nil {
 		poolAdapter = pool
@@ -177,12 +150,12 @@ func RunCommitLoop(
 
 		st := scenarioPtr.Load()
 		if st == nil {
-			// No active scenario — yield back to ctx loop.
+
 			continue
 		}
 		target := st.NextTarget()
 		if target == "" {
-			// Misconfiguration; log once-ish and continue.
+
 			logger.Warn().Str("scenario", st.Scenario.Name()).Msg("writer commit loop: empty target list")
 			continue
 		}

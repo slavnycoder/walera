@@ -6,7 +6,6 @@ import (
 	"github.com/walera/walera/internal/wal"
 )
 
-// mkMap builds a *Whitelist literal with the given allowed-column sets.
 func mkMap(userID string, tables map[string][]string) *Whitelist {
 	m := &Whitelist{
 		UserID: userID,
@@ -24,10 +23,7 @@ func mkMap(userID string, tables map[string][]string) *Whitelist {
 
 func TestMapFilter_PreservesPK(t *testing.T) {
 	t.Parallel()
-	// Whitelist includes both `id` (PK) and `name` so that the UPDATE has at
-	// least one non-PK whitelisted column survive — the silent-drop predicate
-	// fires when an UPDATE yields only the PK after filtering. The assertion
-	// intent here is PK preservation alongside a surviving non-PK column.
+
 	m := mkMap("u1", map[string][]string{"users": {"id", "name"}})
 	c := wal.Change{
 		Schema: "public", Table: "users", Op: wal.OpUpdate,
@@ -48,7 +44,7 @@ func TestMapFilter_PreservesPK(t *testing.T) {
 
 func TestMapFilter_PKAlwaysIncludedEvenIfNotInWhitelist(t *testing.T) {
 	t.Parallel()
-	// Empty allowed-column set — PK must still survive.
+
 	m := mkMap("u1", map[string][]string{"users": {}})
 	c := wal.Change{
 		Schema: "public", Table: "users", Op: wal.OpInsert,
@@ -73,7 +69,7 @@ func TestMapFilter_AllChangedColumnsHiddenIsSilentDrop(t *testing.T) {
 	c := wal.Change{
 		Schema: "public", Table: "users", Op: wal.OpUpdate,
 		PK: "42", PKCol: "id",
-		Changed: map[string]any{"name": "Alice"}, // PK NOT in Changed; name not allowed
+		Changed: map[string]any{"name": "Alice"},
 	}
 	_, drop := m.Filter(c)
 	if !drop {
@@ -83,12 +79,7 @@ func TestMapFilter_AllChangedColumnsHiddenIsSilentDrop(t *testing.T) {
 
 func TestMapFilter_PKAloneInChangedIsSilentDrop(t *testing.T) {
 	t.Parallel()
-	// Silent-drop predicate: an UPDATE whose filtered Changed map contains
-	// ONLY the PK is silently dropped — the row identifier is already known
-	// by the subscription channel, so PK-alone carries no new information
-	// for a subscriber.
-	//   silent-drop fires when len(filtered) == 0 ||
-	//   (len(filtered) == 1 && filtered contains only PK without data/changed).
+
 	m := mkMap("u1", map[string][]string{"users": {"id"}})
 	c := wal.Change{
 		Schema: "public", Table: "users", Op: wal.OpUpdate,
@@ -103,11 +94,7 @@ func TestMapFilter_PKAloneInChangedIsSilentDrop(t *testing.T) {
 
 func TestMapFilter_PGEmitsAllColumnsHiddenUpdateIsSilentDrop(t *testing.T) {
 	t.Parallel()
-	// Models PG REPLICA IDENTITY DEFAULT NewTuple where unchanged columns are
-	// included in the WAL payload (assembly.buildChangedMap lifts them all).
-	// Integration test Test03/HiddenUpdateOnly_SilentDrop covers the wire path
-	// for the same scenario. With a PK-only whitelist, every non-PK column is
-	// filtered out, leaving the PK alone — must drop.
+
 	m := mkMap("u1", map[string][]string{"users": {"id"}})
 	c := wal.Change{
 		Schema: "public", Table: "users", Op: wal.OpUpdate,
@@ -123,7 +110,7 @@ func TestMapFilter_PGEmitsAllColumnsHiddenUpdateIsSilentDrop(t *testing.T) {
 func TestMapFilter_DeleteUntouched(t *testing.T) {
 	t.Parallel()
 	m := mkMap("u1", map[string][]string{"users": {"id"}})
-	// Phase-1 DELETE has no Data/Changed (per wal.types invariants).
+
 	c := wal.Change{
 		Schema: "public", Table: "users", Op: wal.OpDelete,
 		PK: "42", PKCol: "id",
@@ -186,9 +173,6 @@ func TestParseMap_RejectsEmptyUserID(t *testing.T) {
 	}
 }
 
-// TestParseMap_IgnoresLegacyRootsField — a backend that still emits the old
-// `roots` array must continue to parse cleanly. encoding/json silently drops
-// unknown fields, so no special handling is required in ParseWhitelist.
 func TestParseMap_IgnoresLegacyRootsField(t *testing.T) {
 	t.Parallel()
 	body := []byte(`{"user_id":"u1","roots":["users"],"tables":{"users":["id"]}}`)

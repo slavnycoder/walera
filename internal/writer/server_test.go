@@ -1,6 +1,3 @@
-// Package writer — server_test.go covers the /healthz, /metrics, /control
-// HTTP routes. Tests use httptest.NewRecorder or ServeHTTP directly against
-// the *http.Server's Handler so no listener is bound.
 package writer
 
 import (
@@ -17,8 +14,6 @@ import (
 	"golang.org/x/time/rate"
 )
 
-// helperDeps builds a ServerDeps for tests. Initial scenario is "smoke" at
-// 5 tx/s, 1 row/tx, targets={orders,devices,articles}.
 func helperDeps(t *testing.T) ServerDeps {
 	t.Helper()
 	reg := NewRegistry()
@@ -39,8 +34,6 @@ func helperDeps(t *testing.T) ServerDeps {
 	}
 }
 
-// helperServe builds an *http.Server and serves the supplied request
-// against its handler in-process. Returns the response.
 func helperServe(t *testing.T, srv *http.Server, req *http.Request) *httptest.ResponseRecorder {
 	t.Helper()
 	rec := httptest.NewRecorder()
@@ -177,7 +170,7 @@ func TestControl_PartialUpdate_OnlyScenario(t *testing.T) {
 	if st.Scenario.Name() != "spike" {
 		t.Errorf("scenario = %q, want spike", st.Scenario.Name())
 	}
-	// Rate and rows preserved.
+
 	if float64(deps.Limiter.Limit()) != 5 {
 		t.Errorf("limiter changed to %v, want 5", float64(deps.Limiter.Limit()))
 	}
@@ -257,9 +250,6 @@ func TestControl_MethodNotAllowed(t *testing.T) {
 	}
 }
 
-// TestControl_EmptyJSON exercises the partial-update no-op path: a POST
-// with `{}` is a valid request that mutates nothing and returns 200 with
-// the current effective config.
 func TestControl_EmptyJSON(t *testing.T) {
 	deps := helperDeps(t)
 	srv := NewServer(ServerConfig{Addr: ":0"}, deps)
@@ -277,14 +267,10 @@ func TestControl_EmptyJSON(t *testing.T) {
 	}
 }
 
-// TestControl_BodyTooLarge exercises the MaxBytesReader guard (T-07-06).
-// A body larger than 1KB returns 400 (the JSON decoder surfaces the
-// MaxBytesReader error which we translate to invalid-json).
 func TestControl_BodyTooLarge(t *testing.T) {
 	deps := helperDeps(t)
 	srv := NewServer(ServerConfig{Addr: ":0"}, deps)
 
-	// 2KB padding inside a string field — exceeds the 1KB cap.
 	pad := strings.Repeat("x", 2048)
 	body := `{"scenario":"` + pad + `"}`
 	req := httptest.NewRequest(http.MethodPost, "/control", strings.NewReader(body))
@@ -296,22 +282,6 @@ func TestControl_BodyTooLarge(t *testing.T) {
 	}
 }
 
-// TestControl_CR01_RateOverrideSurvivesScenarioTick is the regression test
-// for the rate-override-survives-tick contract. The previous /control
-// handler built the new Scenario via Registry()[name], whose hard-coded
-// baseline rate (steady=100) then got re-asserted by the commit-loop
-// scenario evaluator goroutine ~100ms later, silently overwriting the
-// operator's commit_rate=250. The fix is to route scenario construction
-// through BuildScenario so Tick() returns the operator's rate.
-//
-// Test method: POST /control {scenario:"steady", commit_rate:250}, then
-// directly invoke the scenario's Tick() with a synthetic elapsed of 250ms
-// (the same call the cmd/writer evaluator goroutine makes on its 100ms
-// ticker). Assert Tick() returns 250 — proving the operator's rate is
-// baked into the scenario rather than discarded.
-//
-// We test Tick() directly rather than spinning up the full evaluator
-// goroutine so the assertion is deterministic (no sleep, no flake).
 func TestControl_CR01_RateOverrideSurvivesScenarioTick(t *testing.T) {
 	deps := helperDeps(t)
 	srv := NewServer(ServerConfig{Addr: ":0"}, deps)
@@ -336,30 +306,19 @@ func TestControl_CR01_RateOverrideSurvivesScenarioTick(t *testing.T) {
 		t.Errorf("scenario name = %q, want steady", st.Scenario.Name())
 	}
 
-	// The key assertion: Tick() returns the operator's rate, not the
-	// Registry baseline (100).
 	gotRate, _ := st.Scenario.Tick(250 * time.Millisecond)
 	if gotRate != 250 {
 		t.Errorf("Scenario.Tick() returned commit_rate=%v, want 250 (rate-override regression: scenario was built from Registry baseline)", gotRate)
 	}
 
-	// Limiter is also set; cmd/writer's evaluator goroutine would compare
-	// rate.Limit(gotRate) to lim.Limit(). They must match so the goroutine
-	// doesn't try to "fix" the limiter.
 	if float64(deps.Limiter.Limit()) != 250 {
 		t.Errorf("limiter = %v, want 250", float64(deps.Limiter.Limit()))
 	}
 }
 
-// TestControl_CR01_RateOverride_OnExistingScenario covers the partial-update
-// case: POST {commit_rate: 250} (no scenario) on an existing scenario must
-// also produce a scenario whose Tick() returns 250 — otherwise the next
-// evaluator tick would re-assert the OLD scenario's baseline rate.
 func TestControl_CR01_RateOverride_OnExistingScenario(t *testing.T) {
 	deps := helperDeps(t)
-	// Pre-seed to steady@100 so the prior scenario is a steady (Registry
-	// baseline rate = 100); without the fix, a partial /control commit_rate
-	// update would also be vulnerable to re-assertion on the next tick.
+
 	deps.ScenarioPtr.Store(NewScenarioState(
 		BuildScenario("steady", 100, 1, 0),
 		time.Now(), 100, 1,
@@ -382,14 +341,9 @@ func TestControl_CR01_RateOverride_OnExistingScenario(t *testing.T) {
 	}
 }
 
-// TestControl_WR01_StartedAtPreservedOnPartialUpdate ensures a partial
-// /control update (rate/rows only, no scenario field) does NOT reset
-// scenarioState.StartedAt. The ramp-up scenario depends on
-// elapsed = time.Since(StartedAt); resetting it would restart the ramp at
-// 0%, surprising operators who just bumped commit_rate on a mid-ramp loop.
 func TestControl_WR01_StartedAtPreservedOnPartialUpdate(t *testing.T) {
 	deps := helperDeps(t)
-	// Pre-seed a ramp-up scenario with a StartedAt 2s in the past.
+
 	rampStart := time.Now().Add(-2 * time.Second)
 	deps.ScenarioPtr.Store(NewScenarioState(
 		BuildScenario("ramp-up", 100, 1, 10*time.Second),
@@ -412,13 +366,9 @@ func TestControl_WR01_StartedAtPreservedOnPartialUpdate(t *testing.T) {
 	}
 }
 
-// TestControl_WR01_StartedAtResetsOnScenarioSwitch confirms the inverse:
-// when the request DOES change scenario, StartedAt resets to now() so the
-// new scenario starts fresh (ramp-up resumes from 0%, spike enters its
-// burst window at offset 0).
 func TestControl_WR01_StartedAtResetsOnScenarioSwitch(t *testing.T) {
 	deps := helperDeps(t)
-	// Pre-seed with a StartedAt 5s in the past.
+
 	oldStart := time.Now().Add(-5 * time.Second)
 	deps.ScenarioPtr.Store(NewScenarioState(
 		BuildScenario("smoke", 5, 1, 0),
@@ -443,19 +393,6 @@ func TestControl_WR01_StartedAtResetsOnScenarioSwitch(t *testing.T) {
 	}
 }
 
-// ── writer CORS tests ──────────────────────────────────────────────────
-//
-// The /control endpoint gains a withCORS middleware + an OPTIONS preflight
-// responder. Behaviour mirrors internal/sse/cors.go EXACTLY:
-//   - empty allowlist → no ACA-* headers, no Vary (CORS disabled)
-//   - non-empty allowlist + matching Origin → ACAO + ACA-Credentials +
-//     Vary: Origin reflected
-//   - non-empty allowlist + non-matching Origin → Vary: Origin only,
-//     request still served (browser blocks the JS read)
-//   - OPTIONS /control always returns 204; ACAM/ACAH/Max-Age set only on
-//     matching Origin
-
-// depsWithCORS builds a ServerDeps with the supplied allowlist.
 func depsWithCORS(t *testing.T, allowed []string) ServerDeps {
 	t.Helper()
 	d := helperDeps(t)
@@ -512,8 +449,7 @@ func TestControl_PreflightDeniesUnknownOrigin(t *testing.T) {
 	if got := hdr.Get("Access-Control-Allow-Origin"); got != "" {
 		t.Errorf("ACAO = %q, want empty (origin denied)", got)
 	}
-	// Preflight on a denied origin omits the method/header advertisement
-	// — the absent ACAO is the gate, the absent ACAM is correctness.
+
 	if got := hdr.Get("Access-Control-Allow-Methods"); got != "" {
 		t.Errorf("ACA-Methods = %q, want empty for denied origin", got)
 	}
@@ -544,8 +480,7 @@ func TestControl_POSTReflectsAllowedOrigin(t *testing.T) {
 	if got := rec.Header().Get("Vary"); got != "Origin" {
 		t.Errorf("Vary = %q, want %q", got, "Origin")
 	}
-	// Body still parsed & limiter still mutated — the middleware does not
-	// short-circuit on CORS denial; it just omits the headers.
+
 	if float64(deps.Limiter.Limit()) != 25 {
 		t.Errorf("limiter = %v, want 25 (POST processed regardless of CORS)", float64(deps.Limiter.Limit()))
 	}
@@ -570,8 +505,7 @@ func TestControl_POSTOmitsCORSForUnknownOrigin(t *testing.T) {
 	if got := rec.Header().Get("Vary"); got != "Origin" {
 		t.Errorf("Vary = %q, want %q", got, "Origin")
 	}
-	// Request body still applied — browser blocks the JS read, but the
-	// server's job is just to handle the request as normal.
+
 	if float64(deps.Limiter.Limit()) != 33 {
 		t.Errorf("limiter = %v, want 33", float64(deps.Limiter.Limit()))
 	}
@@ -581,8 +515,6 @@ func TestControl_NoCORSWhenAllowlistEmpty(t *testing.T) {
 	deps := depsWithCORS(t, nil)
 	srv := NewServer(ServerConfig{Addr: ":0"}, deps)
 
-	// POST with an Origin header but empty allowlist — must emit zero
-	// CORS headers (preserves pre-08-04 behaviour byte-for-byte).
 	body, _ := json.Marshal(controlRequest{CommitRate: floatPtr(7)})
 	req := httptest.NewRequest(http.MethodPost, "/control", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -599,9 +531,6 @@ func TestControl_NoCORSWhenAllowlistEmpty(t *testing.T) {
 		t.Errorf("Vary = %q, want empty (CORS disabled — no Vary discipline either)", got)
 	}
 
-	// OPTIONS preflight with empty allowlist: still returns 204 (the
-	// route exists thanks to OPTIONS /control registration) but emits
-	// no ACA-* headers.
 	preReq := httptest.NewRequest(http.MethodOptions, "/control", nil)
 	preReq.Header.Set("Origin", "http://localhost:8081")
 	preRec := helperServe(t, srv, preReq)
@@ -613,9 +542,6 @@ func TestControl_NoCORSWhenAllowlistEmpty(t *testing.T) {
 	}
 }
 
-// TestControl_MethodNotAllowedStillReturnsAfterMiddleware confirms the
-// withCORS wrapper does not break stdlib method-routing: a GET to
-// /control still returns 405 even with an allowed Origin header set.
 func TestControl_MethodNotAllowedStillReturnsAfterMiddleware(t *testing.T) {
 	deps := depsWithCORS(t, []string{"http://localhost:8081"})
 	srv := NewServer(ServerConfig{Addr: ":0"}, deps)
@@ -629,12 +555,10 @@ func TestControl_MethodNotAllowedStillReturnsAfterMiddleware(t *testing.T) {
 	}
 }
 
-// floatPtr / intPtr / strPtr — JSON-pointer helpers for the optional fields.
 func floatPtr(v float64) *float64 { return &v }
 func intPtr(v int) *int           { return &v }
 func strPtr(v string) *string     { return &v }
 
-// truncate returns at most n characters of s.
 func truncate(s string, n int) string {
 	if len(s) <= n {
 		return s

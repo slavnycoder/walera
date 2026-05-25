@@ -1,6 +1,3 @@
-// Package wal — reader_panic_test.go covers the wal.New construction gate.
-// Every required Deps field must panic with the exact message
-// "wal.New: Deps.<Field> is required" when nil.
 package wal
 
 import (
@@ -11,8 +8,6 @@ import (
 	"github.com/walera/walera/internal/metrics"
 )
 
-// validReaderDeps returns a fully-populated Deps so each per-field test
-// only nils one field.
 func validReaderDeps() Deps {
 	return Deps{
 		Logger:  zerolog.Nop(),
@@ -45,9 +40,6 @@ func TestNewReader_PanicsOnNilDeps(t *testing.T) {
 	}
 }
 
-// assertWalPanicsWithValue runs fn and asserts that it panicked with a
-// value equal to want. Mirrors testify's require.PanicsWithValue without
-// taking on the testify dep.
 func assertWalPanicsWithValue(t *testing.T, want any, fn func()) {
 	t.Helper()
 	defer func() {

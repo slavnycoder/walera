@@ -1,12 +1,3 @@
-// Package main — subscriber_test.go covers the Subscriber HTTP-loop using
-// httptest.Server fixtures (no live Walera dependency).
-//
-// Quick task 260518-lh1 / T-LH1-02..03 — three contract tests:
-//  1. Counts received frames via the Prometheus registry's Gatherer.
-//  2. Exercises jittered-backoff reconnect by closing the connection
-//     mid-stream and asserting the subscriber re-opens within budget.
-//  3. Locks the security posture: the literal auth token MUST NEVER appear
-//     in subscriber logs; only auth_token_len is logged.
 package main
 
 import (
@@ -25,8 +16,6 @@ import (
 	"github.com/rs/zerolog"
 )
 
-// gatherCounter extracts a single counter value from the registry by metric
-// name. Returns 0 when the metric has no samples yet.
 func gatherCounter(t *testing.T, reg *prometheus.Registry, name string) float64 {
 	t.Helper()
 	mfs, err := reg.Gather()
@@ -48,8 +37,6 @@ func gatherCounter(t *testing.T, reg *prometheus.Registry, name string) float64 
 	return 0
 }
 
-// writeFrame writes one SSE tx frame to w and flushes it so the client sees
-// it immediately. Mirrors internal/sse/encoder.go's wire shape.
 func writeFrame(w http.ResponseWriter, id, payload string) {
 	_, _ = fmt.Fprintf(w, "event: tx\nid: %s\ndata: %s\n\n", id, payload)
 	if f, ok := w.(http.Flusher); ok {
@@ -58,10 +45,7 @@ func writeFrame(w http.ResponseWriter, id, payload string) {
 }
 
 func TestSubscriber_ReceivesAndCounts(t *testing.T) {
-	// Serve the three canned frames on the FIRST connection only; reject
-	// subsequent reconnect attempts with 401 so the count stays deterministic.
-	// (The subscriber reconnects on EOF; without the gate, the same 3 frames
-	// would be re-counted on every reconnect inside the test budget.)
+
 	var calls int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if atomic.AddInt32(&calls, 1) != 1 {
@@ -106,8 +90,7 @@ func TestSubscriber_Reconnects(t *testing.T) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.WriteHeader(http.StatusOK)
 		writeFrame(w, fmt.Sprintf("0/1/%d", n), fmt.Sprintf(`{"tx_id":%d}`, n))
-		// Returning from the handler closes the connection; the subscriber
-		// observes EOF and reconnects via jittered backoff.
+
 	}))
 	defer srv.Close()
 
@@ -138,13 +121,8 @@ func TestSubscriber_Reconnects(t *testing.T) {
 	}
 }
 
-// TestSubscriber_DoesNotLogToken enforces the no-token-in-logs security
-// posture. The literal token string MUST NEVER appear in any log line;
-// the subscriber logs only the integer auth_token_len. This pins the
-// mitigation in CI so a future log-line refactor cannot silently
-// re-introduce a token leak.
 func TestSubscriber_DoesNotLogToken(t *testing.T) {
-	// Server immediately 401s so the subscriber loops once and exits early.
+
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
 	}))
@@ -177,7 +155,4 @@ func TestSubscriber_DoesNotLogToken(t *testing.T) {
 	}
 }
 
-// Compile-time sanity that the prometheus client_model dto import is wired
-// (it is referenced indirectly via Gather() result types). Without this,
-// `goimports` could drop the import on a future edit.
 var _ = (*dto.MetricFamily)(nil)

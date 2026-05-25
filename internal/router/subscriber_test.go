@@ -7,10 +7,6 @@ import (
 	"time"
 )
 
-// newTestSubscriber is a convenience constructor used across subscriber tests.
-// It builds an exact-kind subscriber with a background context — sufficient
-// for lifecycle assertions. BufferCap is now informational only; kept here
-// to mirror the call sites of production code.
 func newTestSubscriber() *Subscriber {
 	return NewSubscriber(
 		SubscriberConfig{
@@ -24,9 +20,6 @@ func newTestSubscriber() *Subscriber {
 	)
 }
 
-// TestSubscriber_DropIsIdempotent verifies that calling Drop twice with the
-// same reason leaves Reason() pointing at that reason and cancels the
-// subscriber's context exactly once (sync.Once invariant).
 func TestSubscriber_DropIsIdempotent(t *testing.T) {
 	t.Parallel()
 	sub := newTestSubscriber()
@@ -40,15 +33,12 @@ func TestSubscriber_DropIsIdempotent(t *testing.T) {
 
 	select {
 	case <-sub.Done():
-		// Context cancelled — expected.
+
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("subscriber Done channel was not closed within 100ms of Drop")
 	}
 }
 
-// TestSubscriber_DropDifferentReasonsKeepsFirst verifies that sync.Once
-// preserves the FIRST drop reason — a later Drop with a different reason
-// must not overwrite the sticky value.
 func TestSubscriber_DropDifferentReasonsKeepsFirst(t *testing.T) {
 	t.Parallel()
 	sub := newTestSubscriber()
@@ -61,8 +51,6 @@ func TestSubscriber_DropDifferentReasonsKeepsFirst(t *testing.T) {
 	}
 }
 
-// TestSubscriber_ReasonEmptyBeforeDrop asserts that Reason() returns "" on a
-// freshly-constructed subscriber.
 func TestSubscriber_ReasonEmptyBeforeDrop(t *testing.T) {
 	t.Parallel()
 	sub := newTestSubscriber()
@@ -71,8 +59,6 @@ func TestSubscriber_ReasonEmptyBeforeDrop(t *testing.T) {
 	}
 }
 
-// TestSubscriber_IDIsHex32 verifies the ID generation contract:
-// crypto/rand 16 bytes rendered as a 32-char hex string with no dashes.
 func TestSubscriber_IDIsHex32(t *testing.T) {
 	t.Parallel()
 	sub := newTestSubscriber()
@@ -85,8 +71,6 @@ func TestSubscriber_IDIsHex32(t *testing.T) {
 	}
 }
 
-// TestSubscriber_IDFromOptsIsUsed verifies that a non-empty opts.ID is used
-// verbatim (no override / re-generation).
 func TestSubscriber_IDFromOptsIsUsed(t *testing.T) {
 	t.Parallel()
 	sub := NewSubscriber(
@@ -105,7 +89,6 @@ func TestSubscriber_IDFromOptsIsUsed(t *testing.T) {
 	}
 }
 
-// TestSubscriber_AccessorsReflectOpts spot-checks each read accessor.
 func TestSubscriber_AccessorsReflectOpts(t *testing.T) {
 	t.Parallel()
 	sub := newTestSubscriber()
@@ -129,12 +112,6 @@ func TestSubscriber_AccessorsReflectOpts(t *testing.T) {
 	}
 }
 
-// TestSubscriber_SendUnwiredReturnsFalse verifies the defensive contract:
-// a Subscriber whose WireSendFunc has not yet been called returns false
-// from the unexported send() method instead of panicking.
-// Production callers ensure WireSendFunc precedes Register, but a buggy
-// call site (or a test that constructs a Subscriber directly) must not
-// crash on nil-interface assertion.
 func TestSubscriber_SendUnwiredReturnsFalse(t *testing.T) {
 	t.Parallel()
 	sub := newTestSubscriber()
@@ -143,9 +120,6 @@ func TestSubscriber_SendUnwiredReturnsFalse(t *testing.T) {
 	}
 }
 
-// TestSubscriber_WireSendFuncCapturesFrames asserts the happy path: after
-// WireSendFunc installs a closure, the unexported send() method delegates
-// to the closure and returns the closure's bool.
 func TestSubscriber_WireSendFuncCapturesFrames(t *testing.T) {
 	t.Parallel()
 	sub := newTestSubscriber()
@@ -170,17 +144,13 @@ func TestSubscriber_WireSendFuncCapturesFrames(t *testing.T) {
 	}
 }
 
-// TestSubscriber_WireSendFuncBP01 asserts the BP-01 contract: when the
-// wired closure returns false (the pool's per-sub queue is full), send()
-// also returns false. The router translates this into the slow_consumer
-// drop path.
 func TestSubscriber_WireSendFuncBP01(t *testing.T) {
 	t.Parallel()
 	sub := newTestSubscriber()
 	var calls int
 	sub.WireSendFunc(func(_ []byte) bool {
 		calls++
-		// First two succeed, third fails — simulates BufferCap=2.
+
 		return calls <= 2
 	})
 	if !sub.send([]byte("a")) {
@@ -194,10 +164,6 @@ func TestSubscriber_WireSendFuncBP01(t *testing.T) {
 	}
 }
 
-// TestSubscriber_WireSendFuncOverwrite asserts that calling WireSendFunc a
-// second time replaces the previously-wired closure atomically (the
-// atomic.Value swap path). Design intent is that pool.Attach wires the
-// closure exactly once, but the API must not race-panic if a test rewires.
 func TestSubscriber_WireSendFuncOverwrite(t *testing.T) {
 	t.Parallel()
 	sub := newTestSubscriber()

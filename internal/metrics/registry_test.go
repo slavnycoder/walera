@@ -8,23 +8,11 @@ import (
 	dto "github.com/prometheus/client_model/go"
 )
 
-// TestRegistry_GatherIncludesAllMetrics constructs a Registry, exercises every
-// typed accessor with a representative label so the WithLabelValues child is
-// materialized, then asserts that Gatherer().Gather() returns exactly the five
-// Phase-2 metric families.
-//
-// This is the unit gate that locks the metric names and the fact that they
-// are observable through the registry's Gather() pipeline (which the
-// /metrics endpoint reuses).
 func TestRegistry_GatherIncludesAllMetrics(t *testing.T) {
 	t.Parallel()
 
 	r := New()
 
-	// Force WithLabelValues registration of one child per family + a Histogram
-	// observation. Touching every accessor here is the assertion that the
-	// names compile and dispatch as advertised; the Gather() check below
-	// covers visibility.
 	r.SubscribersActive("exact").Set(1)
 	r.SubscribersActive("wildcard").Inc()
 	r.EventsSent("exact").Inc()
@@ -35,18 +23,14 @@ func TestRegistry_GatherIncludesAllMetrics(t *testing.T) {
 	r.SubscriberDisconnects("slow_consumer").Inc()
 	r.SubscriberDisconnects("client_closed").Inc()
 	r.RouteLookupDuration().Observe(0.001)
-	// Touch new CounterVec families so Gather() exposes them.
-	// Plain Gauges (state, stale subs, pg conn) and the Histogram are visible
-	// from registration without a touch; CounterVec families require at least
-	// one WithLabelValues child to appear.
+
 	r.AuthRequests("ok").Inc()
 	r.AuthRequestDuration().Observe(0.001)
 	r.AuthBreakerState().Set(0)
 	r.AuthBreakerStaleSubs().Set(0)
 	r.LimitRejected("global_concurrent").Inc()
 	r.PGConnectionStatus().Set(0)
-	// SEC-11 / F-P2-08 — touch the new no-label counter so the family
-	// surfaces in Gather() output.
+
 	r.WALStandbyACKFailures().Inc()
 
 	mfs, err := r.Gatherer().Gather()
@@ -60,8 +44,6 @@ func TestRegistry_GatherIncludesAllMetrics(t *testing.T) {
 	}
 	sort.Strings(got)
 
-	// walera_* families — these must always be present after New().
-	// Go-runtime / process collectors are asserted separately below.
 	wantWalera := []string{
 		"walera_auth_breaker_stale_subscribers",
 		"walera_auth_circuit_breaker_state",
@@ -72,11 +54,7 @@ func TestRegistry_GatherIncludesAllMetrics(t *testing.T) {
 		"walera_limit_rejected_total",
 		"walera_pg_connection_status",
 		"walera_pg_reconnects_total",
-		// Pool metric families. The two histograms surface in Gather() from
-		// registration; the GaugeVec (walera_pool_worker_dirty_subs) does
-		// NOT until a worker_id label is materialised — that pre-touch
-		// happens in sse.NewPool, not here (asserted by internal/sse tests
-		// + the dedicated registration test below).
+
 		"walera_pool_drain_batch_size",
 		"walera_pool_drain_duration_seconds",
 		"walera_route_lookup_duration_seconds",
@@ -114,16 +92,6 @@ func TestRegistry_GatherIncludesAllMetrics(t *testing.T) {
 	}
 }
 
-// TestRegistry_OBS01Inventory verifies the full observability inventory is
-// gathered, including:
-//   - all 9 walera_* WAL/routing/auth families,
-//   - at least one go_* runtime metric (proves NewGoCollector wired),
-//   - at least one process_* metric (proves NewProcessCollector wired).
-//
-// Critical invariant: NONE of the Go-runtime or process collectors leak to
-// prometheus.DefaultRegisterer — the Gatherer() under test is the PRIVATE
-// registry; the test would fail if collectors were mis-registered globally
-// because they'd be absent here.
 func TestRegistry_OBS01Inventory(t *testing.T) {
 	t.Parallel()
 
@@ -138,8 +106,6 @@ func TestRegistry_OBS01Inventory(t *testing.T) {
 		names[mf.GetName()] = true
 	}
 
-	// Every name MUST be present after New() (pre-touch in New()
-	// materialises labelled-vector children).
 	phase4Required := []string{
 		"walera_pg_reconnects_total",
 		"walera_pg_connection_status",
@@ -158,7 +124,6 @@ func TestRegistry_OBS01Inventory(t *testing.T) {
 		}
 	}
 
-	// At least one go_* runtime metric must appear (NewGoCollector wired).
 	foundGo := false
 	for n := range names {
 		if strings.HasPrefix(n, "go_") {
@@ -170,7 +135,6 @@ func TestRegistry_OBS01Inventory(t *testing.T) {
 		t.Error("no go_* metric found — collectors.NewGoCollector not registered")
 	}
 
-	// At least one process_* metric must appear (NewProcessCollector wired).
 	foundProcess := false
 	for n := range names {
 		if strings.HasPrefix(n, "process_") {
@@ -182,21 +146,15 @@ func TestRegistry_OBS01Inventory(t *testing.T) {
 		t.Error("no process_* metric found — collectors.NewProcessCollector not registered")
 	}
 
-	// Pre-touched labels must materialise their series so alert queries that
-	// filter on label values (e.g., reason="slow_consumer") have something
-	// to scrape from t=0.
 	for _, want := range []string{"exact", "wildcard"} {
-		_ = r.RoutingIndexSize(want)                     // should not panic
-		_ = r.subscriberQueueDepth.WithLabelValues(want) // should not panic
+		_ = r.RoutingIndexSize(want)
+		_ = r.subscriberQueueDepth.WithLabelValues(want)
 	}
 	for _, want := range []string{"ok", "unauthorized", "forbidden", "not_found", "unavailable"} {
 		_ = r.AuthRefresh(want)
 	}
 }
 
-// TestRegistry_WALStandbyACKFailures_Registered asserts the no-label
-// counter is reachable via WALStandbyACKFailures() and that the series
-// surfaces in Gather() output after an increment.
 func TestRegistry_WALStandbyACKFailures_Registered(t *testing.T) {
 	t.Parallel()
 	r := New()
@@ -220,24 +178,10 @@ func TestRegistry_WALStandbyACKFailures_Registered(t *testing.T) {
 	}
 }
 
-// TestRegistry_PoolMetricsRegistered asserts the pool metric families are
-// registered with the locked bucket boundaries.
-//
-//   - walera_pool_worker_dirty_subs (GaugeVec, label worker_id) — surfaces in
-//     Gather() only after a worker_id child is materialised. The test
-//     materialises one ("0") via the typed accessor before asserting; the
-//     production pre-touch lives in sse.NewPool (verified by internal/sse
-//     tests).
-//   - walera_pool_drain_batch_size (Histogram) — buckets exactly
-//     [1, 4, 16, 64, 256, 1024].
-//   - walera_pool_drain_duration_seconds (Histogram) — buckets exactly
-//     [0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0].
 func TestRegistry_PoolMetricsRegistered(t *testing.T) {
 	t.Parallel()
 	r := New()
 
-	// Materialise the GaugeVec child so it appears in Gather() (the prod
-	// pre-touch lives in sse.NewPool — out of scope for this package).
 	r.PoolWorkerDirtySubs("0").Set(0)
 
 	mfs, err := r.Gatherer().Gather()
@@ -249,7 +193,6 @@ func TestRegistry_PoolMetricsRegistered(t *testing.T) {
 		byName[mf.GetName()] = mf
 	}
 
-	// Family presence.
 	for _, name := range []string{
 		"walera_pool_worker_dirty_subs",
 		"walera_pool_drain_batch_size",
@@ -260,7 +203,6 @@ func TestRegistry_PoolMetricsRegistered(t *testing.T) {
 		}
 	}
 
-	// Bucket-list deep equality (CONTEXT-LOCKED; any drift is a regression).
 	checkBuckets := func(t *testing.T, name string, want []float64) {
 		t.Helper()
 		mf, ok := byName[name]
@@ -295,11 +237,6 @@ func TestRegistry_PoolMetricsRegistered(t *testing.T) {
 		[]float64{0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0})
 }
 
-// TestRegistry_DisconnectsShutdownLabelPreTouched verifies the B-2
-// consolidation: after metrics.New() returns, the walera_subscriber_
-// disconnects_total{reason="shutdown"} series is present in Gather() with
-// value 0. Dashboards keyed on rate(...{reason="shutdown"}[5m]) must see
-// zero (not "no data") before the first shutdown event.
 func TestRegistry_DisconnectsShutdownLabelPreTouched(t *testing.T) {
 	t.Parallel()
 	r := New()
@@ -335,7 +272,7 @@ func TestRegistry_DisconnectsShutdownLabelPreTouched(t *testing.T) {
 		break
 	}
 	if !foundShutdown {
-		// Surface every present reason for easier debugging.
+
 		var present []string
 		for _, m := range family.GetMetric() {
 			for _, l := range m.GetLabel() {
@@ -347,8 +284,6 @@ func TestRegistry_DisconnectsShutdownLabelPreTouched(t *testing.T) {
 		t.Errorf("disconnects_total{reason=shutdown} not pre-touched (present reasons: %v)", present)
 	}
 
-	// Sibling reasons should also be pre-touched (Help string documents
-	// the full set: slow_consumer|tx_too_large|client_closed|shutdown).
 	wantReasons := map[string]bool{
 		"slow_consumer": false,
 		"tx_too_large":  false,

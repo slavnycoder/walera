@@ -13,10 +13,6 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// fakeTx implements pgx.Tx for unit-testing commitOnceImpl/insertOne without
-// a live Postgres. Only Exec, QueryRow, Commit, and Rollback are exercised by
-// the writer; the rest delegate to embedded pgx.Tx (nil) so a forgotten call
-// would panic in test, making the contract explicit.
 type fakeTx struct {
 	pgx.Tx
 	queries     []string
@@ -70,7 +66,6 @@ func (r *fakeRow) Scan(dest ...any) error {
 	return nil
 }
 
-// fakePool implements commitOncePool.
 type fakePool struct {
 	tx         *fakeTx
 	beginErr   error
@@ -126,7 +121,7 @@ func TestCommitOnceImpl_OrdersInsertsLineItems(t *testing.T) {
 	if err := commitOnceImpl(context.Background(), pool, "orders", 2, newRNG(), cfg); err != nil {
 		t.Fatalf("commitOnceImpl: %v", err)
 	}
-	// 2 rows × 2 statements (orders + line_items) = 4 queries.
+
 	if len(tx.queries) != 4 {
 		t.Errorf("expected 4 queries, got %d: %v", len(tx.queries), tx.queries)
 	}
@@ -194,15 +189,12 @@ func TestCommitOnceImpl_CommitError(t *testing.T) {
 func TestCommitOnceImpl_ZeroTxTimeoutFallback(t *testing.T) {
 	tx := &fakeTx{}
 	pool := &fakePool{tx: tx}
-	// Cfg.TxTimeout = 0 triggers the defensive 5s fallback inside commitOnceImpl.
+
 	if err := commitOnceImpl(context.Background(), pool, "articles", 1, newRNG(), WriterPGConfig{}); err != nil {
 		t.Fatalf("commitOnceImpl: %v", err)
 	}
 }
 
-// Document the behavior: realCommitOnce / commitOnce wrap commitOnceImpl
-// without behavior change. These tiny tests defend against an accidental
-// refactor that breaks the indirection.
 func TestRealCommitOnce_DelegatesToImpl(t *testing.T) {
 	tx := &fakeTx{}
 	pool := &fakePool{tx: tx}
@@ -215,10 +207,7 @@ func TestRealCommitOnce_DelegatesToImpl(t *testing.T) {
 }
 
 func TestCommitOnce_AcceptsRealPool(t *testing.T) {
-	// commitOnce takes *pgxpool.Pool by signature. We can't construct one
-	// without a live DSN, so this test just confirms the package compiles
-	// and the symbol is reachable. The behavioral coverage lives in
-	// loop_integration_test.go (build-tagged).
+
 	_ = commitOnce
 	_ = fmt.Sprint
 }

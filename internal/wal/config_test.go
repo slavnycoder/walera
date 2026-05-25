@@ -9,8 +9,6 @@ import (
 	"github.com/walera/walera/internal/wal"
 )
 
-// newK builds a koanf instance with wal defaults applied. Tests then
-// override individual keys to exercise specific code paths.
 func newK(t *testing.T) *koanf.Koanf {
 	t.Helper()
 	k := koanf.New(".")
@@ -40,9 +38,6 @@ func TestLoadConfig_Defaults(t *testing.T) {
 	}
 }
 
-// TestDeriveDSNs exercises the single-URL derivation helper: the base URL is
-// the admin DSN; the replication DSN is the base with replication=database
-// added; an empty or unparseable base is rejected.
 func TestDeriveDSNs(t *testing.T) {
 	t.Run("empty rejected", func(t *testing.T) {
 		_, _, err := wal.DeriveDSNs("")
@@ -132,14 +127,12 @@ func TestLoadConfig_TablesMustBeSchemaQualified(t *testing.T) {
 	}
 }
 
-// TestLoadConfig_SchemaValidation — D-12 layer 2 schema rules in
-// table-driven form. One row per failure mode.
 func TestLoadConfig_SchemaValidation(t *testing.T) {
 	cases := []struct {
 		name        string
 		setup       func(*koanf.Koanf)
 		wantSubstrs []string
-		// noPassLeak: assert the err does not contain this literal.
+
 		noPassLeak string
 	}{
 		{
@@ -190,8 +183,6 @@ func TestLoadConfig_PublicationNameValid(t *testing.T) {
 	}
 }
 
-// TestLoadConfig_SlotPrefixCannotEqualPublication — D-12 layer 3
-// combination rule.
 func TestLoadConfig_SlotPrefixCannotEqualPublication(t *testing.T) {
 	k := newK(t)
 	_ = k.Set("wal.publication_name", "shared_name")

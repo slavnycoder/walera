@@ -1,25 +1,3 @@
-// Command loadgen drives concurrent SSE subscribers against a running
-// Walera instance for capacity / soak testing. Each subscriber holds one
-// long-lived GET /sse/v1/<channel> connection with bearer auth, records
-// per-frame counters to a Prometheus registry, and reconnects with
-// full-jitter exponential backoff.
-//
-// Security: the auth token is NEVER written to logs — only its length
-// (auth_token_len). Verified by TestSubscriber_DoesNotLogToken.
-//
-// Usage:
-//
-//	./loadgen \
-//	  --target-url http://127.0.0.1:8080 \
-//	  --concurrency 1000 \
-//	  --channels orders/all,users/all \
-//	  --duration 5m \
-//	  --ramp-up 30s \
-//	  --http-addr 127.0.0.1:9200 \
-//	  --log-level info
-//
-// The --auth-token flag is honoured but LOADGEN_AUTH_TOKEN env var is
-// preferred for CI / scripted runs (no token in shell history / ps output).
 package main
 
 import (
@@ -42,7 +20,6 @@ import (
 	"github.com/walera/walera/internal/safego"
 )
 
-// loadgenFlags bundles the flag.* pointers populated by registerFlags.
 type loadgenFlags struct {
 	targetURL   *string
 	concurrency *int
@@ -95,7 +72,7 @@ func main() {
 	defer cancelRun()
 
 	srv := startHTTPServer(*f.httpAddr, reg, logger, stop)
-	httpClient := &http.Client{Timeout: 0} // no client-side timeout for long-lived SSE
+	httpClient := &http.Client{Timeout: 0}
 
 	spawnSubscribers(runCtx, *f.concurrency, *f.rampUp, *f.targetURL, token, chans, httpClient, m, logger)
 
@@ -121,9 +98,6 @@ func setMaxprocs(logger zerolog.Logger) {
 	}
 }
 
-// resolveToken returns the bearer credential: --auth-token flag wins, env
-// var falls back. Fatals when neither is set (token leakage avoided —
-// never logged).
 func resolveToken(flagToken string, logger zerolog.Logger) string {
 	token := flagToken
 	if token == "" {
@@ -135,10 +109,6 @@ func resolveToken(flagToken string, logger zerolog.Logger) string {
 	return token
 }
 
-// boundedRunContext wraps the parent context with a --duration timeout
-// when positive. Returns the context the subscribers observe plus a cancel
-// func the caller must defer. When duration <= 0 the cancel is a no-op
-// because the parent context owns lifetime.
 func boundedRunContext(parent context.Context, duration time.Duration) (context.Context, context.CancelFunc) {
 	if duration <= 0 {
 		return parent, func() {}
@@ -146,9 +116,6 @@ func boundedRunContext(parent context.Context, duration time.Duration) (context.
 	return context.WithTimeout(parent, duration)
 }
 
-// startHTTPServer launches the tiny /metrics + /healthz listener in a
-// background goroutine and returns the *http.Server so main can Shutdown
-// it after the run completes.
 func startHTTPServer(addr string, reg *prometheus.Registry, logger zerolog.Logger, stop context.CancelFunc) *http.Server {
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.HandlerFor(reg, promhttp.HandlerOpts{}))
@@ -167,9 +134,6 @@ func startHTTPServer(addr string, reg *prometheus.Registry, logger zerolog.Logge
 	return srv
 }
 
-// spawnSubscribers walks the linear ramp-up, launching one subscriber per
-// slot. When rampUp <= 0 all subscribers spin up immediately. Each call
-// reuses one *http.Client across subscribers.
 func spawnSubscribers(
 	ctx context.Context,
 	concurrency int,
@@ -225,13 +189,6 @@ func gracefulShutdown(srv *http.Server, logger zerolog.Logger) {
 	logger.Info().Msg("loadgen exited")
 }
 
-// loadChannels resolves the --channels flag into a []string. Supported
-// forms:
-//
-//   - "orders/42,users/all"   — comma-separated literal list
-//   - "@/path/to/file"        — one channel per line ('#' comments + blanks stripped)
-//
-// Empty input returns an empty slice; the caller decides whether that's an error.
 func loadChannels(s string) ([]string, error) {
 	s = strings.TrimSpace(s)
 	if s == "" {

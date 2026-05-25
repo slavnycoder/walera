@@ -1,14 +1,3 @@
-// Package main — parser_test.go covers ParseFrame against the SSE wire
-// shapes produced by internal/sse/encoder.go (spec §3.5):
-//
-//	event: tx\nid: <tx_id>\ndata: {...}\n\n
-//	event: error\ndata: {"reason":"..."}\n\n
-//	event: shutdown\ndata: {"reason":"service_restart"}\n\n
-//	:\n\n        (heartbeat — single SSE comment line)
-//
-// Quick task 260518-lh1 / T-LH1-02 — pure-function unit tests on the
-// pre-split line slice; transport (bufio.Scanner + blank-line frame
-// terminator) is exercised in subscriber_test.go.
 package main
 
 import "testing"
@@ -49,8 +38,7 @@ func TestParseFrame_ErrorFrame(t *testing.T) {
 }
 
 func TestParseFrame_Heartbeat(t *testing.T) {
-	// A heartbeat is a single SSE comment line ":" — the SSE spec defines
-	// any line starting with ':' as a comment that MUST be ignored.
+
 	_, _, ok := ParseFrame([]string{":"})
 	if ok {
 		t.Fatal("ParseFrame ok=true for heartbeat; want false (heartbeats are not delivered events)")
@@ -75,7 +63,7 @@ func TestParseFrame_Shutdown(t *testing.T) {
 }
 
 func TestParseFrame_MalformedNoData(t *testing.T) {
-	// event: present, data: missing — incomplete frame, MUST NOT count.
+
 	_, _, ok := ParseFrame([]string{"event: tx"})
 	if ok {
 		t.Fatal("ParseFrame ok=true for event-only frame; want false")
@@ -83,8 +71,7 @@ func TestParseFrame_MalformedNoData(t *testing.T) {
 }
 
 func TestParseFrame_IgnoresIDLine(t *testing.T) {
-	// Defensive: the id: line is informational; if present without
-	// data: the frame is still incomplete.
+
 	_, _, ok := ParseFrame([]string{"event: tx", "id: 1"})
 	if ok {
 		t.Fatal("ParseFrame ok=true for event+id without data; want false")

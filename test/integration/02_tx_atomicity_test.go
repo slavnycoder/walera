@@ -1,14 +1,5 @@
 //go:build integration
 
-// Package integration — scenario 02: per-transaction atomicity.
-//
-// A multi-row INSERT inside a single COMMIT must arrive at the subscriber
-// as ONE SSEEvent with N changes — never as N separate Events. This is the
-// router's "one Event per subscriber per tx" invariant.
-//
-// To prove the assertion isn't accidentally measuring buffer accumulation,
-// the test follows the multi-row tx with a SEPARATE single-row tx and
-// confirms the subscriber sees a distinct second Event with one change.
 package integration
 
 import (
@@ -22,7 +13,6 @@ func Test02TxAtomicity(t *testing.T) {
 	t.Parallel()
 	h := NewHarness(t)
 
-	// Wildcard subscription so every users-row INSERT routes regardless of PK.
 	h.Auth.SetMap(
 		"test-token",
 		"test-user",
@@ -36,7 +26,6 @@ func Test02TxAtomicity(t *testing.T) {
 	events, errCh, closeFn := h.Client.Connect(ctx, "users/all", "test-token")
 	defer closeFn()
 
-	// First tx — three rows inside a single BEGIN/COMMIT.
 	if err := h.PG.ExecBatch(ctx,
 		[]string{
 			"INSERT INTO users (id, email, name) VALUES ($1, $2, $3)",
@@ -69,8 +58,6 @@ func Test02TxAtomicity(t *testing.T) {
 		}
 	}
 
-	// Second tx — single row. Distinct Event proves the previous Event's
-	// 3-change accumulation was NOT buffer aggregation across tx boundaries.
 	if err := h.PG.Exec(ctx,
 		"INSERT INTO users (id, email, name) VALUES ($1, $2, $3)",
 		4, "u4@x", "Dora",
@@ -86,9 +73,6 @@ func Test02TxAtomicity(t *testing.T) {
 	}
 }
 
-// txEventPayload is the decoded shape of an SSE "tx" event's data field.
-// Lives in scenario_02 so it's free to evolve as later scenarios need more
-// fields; helpers in other scenario files use scenario-local shapes.
 type txEventPayload struct {
 	TxID     uint32 `json:"tx_id"`
 	CommitTS string `json:"commit_ts"`
@@ -106,7 +90,7 @@ func readTxEvent(ctx context.Context, t *testing.T, h *Harness, events <-chan SS
 		select {
 		case ev := <-events:
 			if ev.Type == "" {
-				// Heartbeat (parsed as zero-type) — skip.
+
 				continue
 			}
 			if ev.Type != "tx" {

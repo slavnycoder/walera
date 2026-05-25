@@ -4,8 +4,6 @@ package config
 
 import "testing"
 
-// TestRefuseDevEnv_AcceptsAllPatterns_DevBuild asserts that the dev-build
-// no-op accepts every reserved pattern. Runs only under `go test -tags dev`.
 func TestRefuseDevEnv_AcceptsAllPatterns_DevBuild(t *testing.T) {
 	cases := []struct {
 		name string

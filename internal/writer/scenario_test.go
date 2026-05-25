@@ -47,17 +47,17 @@ func TestSteady_Tick(t *testing.T) {
 
 func TestRampUp_Tick(t *testing.T) {
 	s := newRampUpScenario(100.0, 1, 10*time.Second)
-	// At elapsed=1s, expect rate ≈ 10.
+
 	r1, _ := s.Tick(1 * time.Second)
 	if r1 < 9.9 || r1 > 10.1 {
 		t.Errorf("ramp-up@t=1s rate = %v, want ≈10", r1)
 	}
-	// At elapsed=10s, expect rate = 100.
+
 	r10, _ := s.Tick(10 * time.Second)
 	if r10 < 99.9 || r10 > 100.1 {
 		t.Errorf("ramp-up@t=10s rate = %v, want ≈100", r10)
 	}
-	// At elapsed=11s, expect rate clamped to 100.
+
 	r11, _ := s.Tick(11 * time.Second)
 	if r11 != 100.0 {
 		t.Errorf("ramp-up@t=11s rate = %v, want 100 (clamped)", r11)
@@ -127,7 +127,6 @@ func TestSwapScenario_Atomic(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(2)
 
-	// Reader goroutine — observes scenarioPtr.Load() under -race.
 	go func() {
 		defer wg.Done()
 		for i := 0; i < N; i++ {
@@ -136,13 +135,12 @@ func TestSwapScenario_Atomic(t *testing.T) {
 				t.Errorf("unexpected nil state")
 				return
 			}
-			// Touch the scenario to ensure no torn read.
+
 			_ = st.Scenario.Name()
 			_ = st.NextTarget()
 		}
 	}()
 
-	// Writer goroutine — swaps the scenario state in.
 	go func() {
 		defer wg.Done()
 		for i := 0; i < N; i++ {
@@ -173,8 +171,6 @@ func TestNextTarget_RoundRobin(t *testing.T) {
 	}
 }
 
-// TestNextTarget_Empty defends NextTarget against an empty Targets slice
-// (rule 2: defensive coding for a hot-path read).
 func TestNextTarget_Empty(t *testing.T) {
 	st := &scenarioState{Targets: nil}
 	if got := st.NextTarget(); got != "" {

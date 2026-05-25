@@ -21,8 +21,6 @@ func writeTempYAML(t *testing.T, content string) string {
 	return path
 }
 
-// TestLoadKoanf_YAMLAndEnvOverlay verifies the primitive's two-layer source
-// stack: YAML loaded first, then env vars overlay.
 func TestLoadKoanf_YAMLAndEnvOverlay(t *testing.T) {
 	path := writeTempYAML(t, `
 wal:
@@ -44,8 +42,6 @@ log:
 	}
 }
 
-// TestLoadKoanf_AppliesDefaults verifies the applyDefaults closure runs
-// before any source loader so defaults survive an absent YAML+env.
 func TestLoadKoanf_AppliesDefaults(t *testing.T) {
 	k, err := config.LoadKoanf("", func(k *koanf.Koanf) {
 		_ = k.Set("router.exact_buffer", 64)
@@ -58,8 +54,6 @@ func TestLoadKoanf_AppliesDefaults(t *testing.T) {
 	}
 }
 
-// TestLoadKoanf_EnvTransform_MultiLevelRemap exercises the explicit env
-// remap allow-list for documented nested config keys.
 func TestLoadKoanf_EnvTransform_MultiLevelRemap(t *testing.T) {
 	t.Setenv("WALERA_WAL_BOOTSTRAP_MODE", "verify")
 	t.Setenv("WALERA_WAL_BOOTSTRAP_CREATE_ROLES", "true")
@@ -103,8 +97,6 @@ func TestLoadKoanf_EnvTransform_MultiLevelRemap(t *testing.T) {
 	}
 }
 
-// TestLoadKoanf_EnvTransform_SliceCommaSplit verifies the comma-split path
-// for slice-valued env keys (http.cors_origins, wal.bootstrap.tables).
 func TestLoadKoanf_EnvTransform_SliceCommaSplit(t *testing.T) {
 	t.Setenv("WALERA_HTTP_CORS_ORIGINS", "http://a.com,http://b.com")
 	t.Setenv("WALERA_WAL_BOOTSTRAP_TABLES", "public.orders, public.invoices")
@@ -122,8 +114,6 @@ func TestLoadKoanf_EnvTransform_SliceCommaSplit(t *testing.T) {
 	}
 }
 
-// TestLoadKoanf_EnvTransform_EmptyValueIgnored verifies that an empty env
-// override is treated as unset so caller defaults survive.
 func TestLoadKoanf_EnvTransform_EmptyValueIgnored(t *testing.T) {
 	t.Setenv("WALERA_WAL_PUBLICATION_NAME", "")
 	k, err := config.LoadKoanf("", func(k *koanf.Koanf) {
@@ -137,7 +127,6 @@ func TestLoadKoanf_EnvTransform_EmptyValueIgnored(t *testing.T) {
 	}
 }
 
-// TestLoadKoanf_MalformedYAML drives the YAML-parse-error branch.
 func TestLoadKoanf_MalformedYAML(t *testing.T) {
 	path := writeTempYAML(t, "wal:\n  postgres_dsn: \"x\"\n  : invalid\n")
 	if _, err := config.LoadKoanf(path, nil); err == nil {
@@ -147,8 +136,6 @@ func TestLoadKoanf_MalformedYAML(t *testing.T) {
 	}
 }
 
-// TestLoadKoanf_MissingPathUsesEnvOnly verifies that an empty path or a
-// path that does not exist on disk falls back to env-only.
 func TestLoadKoanf_MissingPathUsesEnvOnly(t *testing.T) {
 	t.Setenv("WALERA_WAL_PUBLICATION_NAME", "envpub")
 

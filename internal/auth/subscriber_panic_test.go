@@ -1,5 +1,3 @@
-// Package auth — subscriber_panic_test.go covers the NewSubscriber
-// construction gate: every required Deps field panics when nil.
 package auth
 
 import (
@@ -38,8 +36,7 @@ func validSubscriberDeps(t *testing.T) SubscriberDeps {
 		},
 		router.SubscriberDeps{Parent: context.Background()},
 	)
-	// Build a Client with a syntactically valid backend URL — no
-	// network call is made on construction.
+
 	c := New(Config{
 		BackendURL:     "http://127.0.0.1:1",
 		RequestTimeout: time.Second,

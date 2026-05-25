@@ -1,8 +1,3 @@
-// Package health — server_test.go covers /healthz, /readyz, /metrics handlers
-// plus the background readyz prober. All tests use httptest.NewRecorder +
-// http.NewServeMux to exercise the registered routes end-to-end, plus stub
-// PgChecker/AuthChecker values to simulate PG/auth state transitions
-// deterministically. Stdlib testing only.
 package health
 
 import (
@@ -23,12 +18,6 @@ import (
 	"github.com/walera/walera/internal/metrics"
 )
 
-// ---------------------------------------------------------------------
-// Test stubs
-// ---------------------------------------------------------------------
-
-// stubReader satisfies the PgChecker interface defined in server.go.
-// Toggle PG state mid-flight via connected.Store(true|false).
 type stubReader struct {
 	connected atomic.Bool
 }
@@ -40,9 +29,6 @@ func (s *stubReader) CheckPG(_ context.Context) error {
 	return errors.New("pg disconnected")
 }
 
-// stubAuthClient satisfies the AuthChecker interface defined in server.go.
-// Counts CheckAuth calls (for TestHealthz_NeverCallsAuthBackend) and
-// returns a swappable error.
 type stubAuthClient struct {
 	hits atomic.Int64
 	err  atomic.Pointer[error]
@@ -64,16 +50,10 @@ func (s *stubAuthClient) setErr(e error) {
 	s.err.Store(&e)
 }
 
-// newTestServer builds a Server with the given stubs + a default 50ms probe
-// interval (callers override via the cfg argument when needed).
 func newTestServer(t *testing.T, reader PgChecker, ac AuthChecker, cfg Config) *Server {
 	t.Helper()
 	return newServerInternal(reader, ac, metrics.New(), cfg, zerolog.Nop())
 }
-
-// ---------------------------------------------------------------------
-// /healthz tests
-// ---------------------------------------------------------------------
 
 func TestHealthz_200WhenReaderConnected(t *testing.T) {
 	t.Parallel()
@@ -99,7 +79,7 @@ func TestHealthz_200WhenReaderConnected(t *testing.T) {
 
 func TestHealthz_503WhenReaderDisconnected(t *testing.T) {
 	t.Parallel()
-	r := &stubReader{} // connected=false
+	r := &stubReader{}
 	ac := &stubAuthClient{}
 	s := newTestServer(t, r, ac, Config{ReadyzProbeInterval: time.Hour})
 
@@ -121,17 +101,12 @@ func TestHealthz_503WhenReaderDisconnected(t *testing.T) {
 	}
 }
 
-// Critical invariant: /healthz NEVER touches the auth backend, even across
-// many calls. If it did, an auth outage would trigger k8s liveness failure
-// and pod restart — defeating the two-track health/readiness policy.
 func TestHealthz_NeverCallsAuthBackend(t *testing.T) {
 	t.Parallel()
 	r := &stubReader{}
 	r.connected.Store(true)
 	ac := &stubAuthClient{}
-	// Make auth "fail" so a buggy implementation that calls CheckAuth()
-	// would be tempted to flip the response — but the test asserts the call
-	// counter remains zero regardless.
+
 	ac.setErr(errors.New("auth backend on fire"))
 
 	s := newTestServer(t, r, ac, Config{ReadyzProbeInterval: time.Hour})
@@ -151,18 +126,13 @@ func TestHealthz_NeverCallsAuthBackend(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------
-// /readyz tests
-// ---------------------------------------------------------------------
-
 func TestReadyz_200WhenBothHealthy(t *testing.T) {
 	t.Parallel()
 	r := &stubReader{}
 	r.connected.Store(true)
 	ac := &stubAuthClient{}
 	s := newTestServer(t, r, ac, Config{ReadyzProbeInterval: time.Hour})
-	// Prime the cache with a healthy state so we don't depend on the
-	// background goroutine running.
+
 	s.readyCache.Store(&readyState{healthy: true, reason: "", checkedAt: time.Now()})
 
 	mux := http.NewServeMux()
@@ -258,7 +228,6 @@ func TestReadyz_503BeforeFirstProbe(t *testing.T) {
 	r.connected.Store(true)
 	ac := &stubAuthClient{}
 	s := newTestServer(t, r, ac, Config{ReadyzProbeInterval: time.Hour})
-	// Do NOT prime the cache.
 
 	mux := http.NewServeMux()
 	s.Routes(mux)
@@ -280,19 +249,13 @@ func TestReadyz_503BeforeFirstProbe(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------
-// /metrics tests
-// ---------------------------------------------------------------------
-
 func TestMetrics_200ReturnsPrometheusContentType(t *testing.T) {
 	t.Parallel()
 	r := &stubReader{}
 	r.connected.Store(true)
 	ac := &stubAuthClient{}
 	mc := metrics.New()
-	// Pre-touch a metric family so it's visible in the scrape output. The
-	// auth.Client constructor does this in production wiring; here we touch
-	// directly to keep the test self-contained.
+
 	mc.AuthRequests("ok").Add(0)
 	mc.AuthRequests("unauthorized").Add(0)
 	s := newServerInternal(r, ac, mc, Config{ReadyzProbeInterval: time.Hour}, zerolog.Nop())
@@ -323,7 +286,7 @@ func TestMetrics_ContainsPhase3Metrics(t *testing.T) {
 	r.connected.Store(true)
 	ac := &stubAuthClient{}
 	mc := metrics.New()
-	// Pre-touch counter-vector label values so they appear in Gather().
+
 	mc.AuthRequests("ok").Add(0)
 	mc.LimitRejected("global_concurrent").Add(0)
 	s := newServerInternal(r, ac, mc, Config{ReadyzProbeInterval: time.Hour}, zerolog.Nop())
@@ -359,10 +322,6 @@ func TestMetrics_ContainsPhase3Metrics(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------
-// Routes
-// ---------------------------------------------------------------------
-
 func TestRoutes_MountsAllThreeRoutes(t *testing.T) {
 	t.Parallel()
 	r := &stubReader{}
@@ -384,22 +343,17 @@ func TestRoutes_MountsAllThreeRoutes(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------
-// StartReadinessProbe tests
-// ---------------------------------------------------------------------
-
 func TestStartReadinessProbe_UpdatesCacheOverTime(t *testing.T) {
 	t.Parallel()
 	r := &stubReader{}
 	r.connected.Store(true)
-	ac := &stubAuthClient{} // CheckAuth returns nil
+	ac := &stubAuthClient{}
 	s := newTestServer(t, r, ac, Config{ReadyzProbeInterval: 10 * time.Millisecond})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	s.StartReadinessProbe(ctx)
 
-	// Wait for the initial-shot probe + at least one tick.
 	waitFor(t, 200*time.Millisecond, func() bool {
 		st := s.readyCache.Load()
 		return st != nil && st.healthy
@@ -410,12 +364,11 @@ func TestStartReadinessProbe_UpdatesCacheOverTime(t *testing.T) {
 		t.Fatalf("cache state = %+v; want healthy", st)
 	}
 
-	// Cancel and assert the goroutine stops calling CheckAuth.
 	cancel()
 	hitsAtCancel := ac.hits.Load()
 	time.Sleep(50 * time.Millisecond)
 	hitsAfter := ac.hits.Load()
-	// Allow at most one straggler call that was already in-flight.
+
 	if hitsAfter-hitsAtCancel > 1 {
 		t.Errorf("probe goroutine still running: %d additional hits after cancel", hitsAfter-hitsAtCancel)
 	}
@@ -453,7 +406,7 @@ func TestStartReadinessProbe_DetectsAuthFailure(t *testing.T) {
 
 func TestStartReadinessProbe_DetectsPGFailure(t *testing.T) {
 	t.Parallel()
-	r := &stubReader{} // connected=false
+	r := &stubReader{}
 	ac := &stubAuthClient{}
 
 	s := newTestServer(t, r, ac, Config{ReadyzProbeInterval: 10 * time.Millisecond})
@@ -479,7 +432,6 @@ func TestStartReadinessProbe_DetectsPGFailure(t *testing.T) {
 	}
 }
 
-// waitFor polls cond up to timeout; fails the test if timeout elapses.
 func waitFor(t *testing.T, timeout time.Duration, cond func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
@@ -492,37 +444,25 @@ func waitFor(t *testing.T, timeout time.Duration, cond func() bool) {
 	t.Fatalf("waitFor: condition not met within %s", timeout)
 }
 
-// ---------------------------------------------------------------------
-// Gauge mirror — probe writes pg_connection_status
-// ---------------------------------------------------------------------
-
-// TestServer_ProbeMirrorsPGConnectionStatus verifies the mirror of
-// reader.CheckPG() into the walera_pg_connection_status gauge. The
-// probe is invoked twice with the stub reader's connected state flipped
-// between calls; the gauge must read 0 then 1 from the underlying registry.
 func TestServer_ProbeMirrorsPGConnectionStatus(t *testing.T) {
 	t.Parallel()
 
-	r := &stubReader{} // connected=false initially
+	r := &stubReader{}
 	ac := &stubAuthClient{}
 	mc := metrics.New()
 	s := newServerInternal(r, ac, mc, Config{ReadyzProbeInterval: time.Hour}, zerolog.Nop())
 
-	// Pass 1: pg disconnected → gauge==0.
 	s.probe(context.Background())
 	if got := gatherGaugeValue(t, mc, "walera_pg_connection_status"); got != 0 {
 		t.Errorf("after probe with disconnected reader: gauge=%v; want 0", got)
 	}
 
-	// Pass 2: flip reader to connected → gauge==1.
 	r.connected.Store(true)
 	s.probe(context.Background())
 	if got := gatherGaugeValue(t, mc, "walera_pg_connection_status"); got != 1 {
 		t.Errorf("after probe with connected reader: gauge=%v; want 1", got)
 	}
 
-	// Pass 3: flip back to disconnected — verify the mirror is 0/1 toggle
-	// (not just a "monotonic-up" property).
 	r.connected.Store(false)
 	s.probe(context.Background())
 	if got := gatherGaugeValue(t, mc, "walera_pg_connection_status"); got != 0 {
@@ -530,8 +470,6 @@ func TestServer_ProbeMirrorsPGConnectionStatus(t *testing.T) {
 	}
 }
 
-// gatherGaugeValue scans the registry for the named gauge family and returns
-// its current value. Returns 0 if absent.
 func gatherGaugeValue(t *testing.T, m *metrics.Registry, name string) float64 {
 	t.Helper()
 	mfs, err := m.Gatherer().Gather()
@@ -551,15 +489,6 @@ func gatherGaugeValue(t *testing.T, m *metrics.Registry, name string) float64 {
 	return 0
 }
 
-// ---------------------------------------------------------------------
-// CORS / Timing-Allow-Origin
-// ---------------------------------------------------------------------
-
-// TestHealthz_CORS_TimingAllowOriginReflectedOnMatch asserts that a
-// browser-origin GET /healthz with an allowlisted Origin receives both
-// Access-Control-Allow-Origin AND Timing-Allow-Origin reflecting the request
-// Origin. TAO lets the h2c probe read
-// PerformanceResourceTiming.nextHopProtocol cross-origin.
 func TestHealthz_CORS_TimingAllowOriginReflectedOnMatch(t *testing.T) {
 	t.Parallel()
 	r := &stubReader{}
@@ -652,7 +581,6 @@ func TestHealthz_CORS_DisabledByDefault(t *testing.T) {
 	r := &stubReader{}
 	r.connected.Store(true)
 	s := newTestServer(t, r, &stubAuthClient{}, Config{ReadyzProbeInterval: time.Hour})
-	// Note: no SetCORSOrigins → empty allowlist → CORS disabled.
 
 	mux := http.NewServeMux()
 	s.Routes(mux)

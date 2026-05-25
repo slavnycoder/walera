@@ -1,6 +1,3 @@
-// Package auth — breaker_panic_test.go covers the NewBreaker construction
-// gate: every required Deps field panics with the exact message
-// "auth.NewBreaker: Deps.<Field> is required" when nil.
 package auth
 
 import (
@@ -12,8 +9,6 @@ import (
 	"github.com/walera/walera/internal/metrics"
 )
 
-// validBreakerDeps returns a fully-populated BreakerDeps so each per-field
-// test only nils one field.
 func validBreakerDeps() BreakerDeps {
 	return BreakerDeps{
 		Prober:  proberFunc(func(_ context.Context) error { return nil }),
@@ -61,9 +56,6 @@ func TestNewBreaker_PanicsOnNilDeps(t *testing.T) {
 	}
 }
 
-// assertPanicsWithValue runs fn and asserts that it panicked with a value
-// equal to want. Mirrors testify's require.PanicsWithValue without taking
-// on the testify dep — the project keeps testify as an indirect-only.
 func assertPanicsWithValue(t *testing.T, want any, fn func()) {
 	t.Helper()
 	defer func() {

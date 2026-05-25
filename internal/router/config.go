@@ -1,4 +1,3 @@
-// Package router — config.go: Config sub-struct + LoadConfig for the "router." koanf subtree.
 package router
 
 import (
@@ -9,26 +8,16 @@ import (
 	"github.com/knadh/koanf/v2"
 )
 
-// Config holds router-specific tuning knobs (koanf keys under "router.").
 type Config struct {
-	// ExactBuffer is per-subscriber buffered-channel capacity for exact
-	// subscriptions. Default: 64.
 	ExactBuffer int `koanf:"exact_buffer"`
 
-	// WildcardBuffer is per-subscriber buffered-channel capacity for
-	// wildcard subscriptions. Default: 512 (larger because one tx may carry
-	// many changes against the same table).
 	WildcardBuffer int `koanf:"wildcard_buffer"`
 
-	// MaxChangesPerTx caps matched changes per tx for ALL subscriber classes
-	// (exact and wildcard). Exceedance → tx_too_large drop. Default: 10000.
 	MaxChangesPerTx int `koanf:"max_changes_per_tx"`
 
-	// HeartbeatInterval is the SSE writer keep-alive cadence. Default: 15s.
 	HeartbeatInterval time.Duration `koanf:"heartbeat_interval"`
 }
 
-// ApplyDefaults registers the router.* defaults on the supplied koanf instance.
 func ApplyDefaults(k *koanf.Koanf) {
 	_ = k.Set("router.exact_buffer", 64)
 	_ = k.Set("router.wildcard_buffer", 512)
@@ -36,8 +25,6 @@ func ApplyDefaults(k *koanf.Koanf) {
 	_ = k.Set("router.heartbeat_interval", "15s")
 }
 
-// LoadConfig unmarshals the "router" subtree from k into a Config and runs
-// all router-specific validation.
 func LoadConfig(k *koanf.Koanf) (Config, error) {
 	var cfg Config
 	if err := k.UnmarshalWithConf("router", &cfg, koanf.UnmarshalConf{Tag: "koanf"}); err != nil {
@@ -49,7 +36,6 @@ func LoadConfig(k *koanf.Koanf) (Config, error) {
 	return cfg, nil
 }
 
-// Validate enforces the router-package invariants.
 func (c Config) Validate() error {
 	var errs []error
 	if c.ExactBuffer <= 0 {

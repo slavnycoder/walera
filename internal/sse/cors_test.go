@@ -1,5 +1,3 @@
-// Package sse — cors_test.go asserts the Vary: Origin discipline and the
-// Origin-allowlist reflection behaviour required of the SSE endpoints.
 package sse
 
 import (
@@ -27,7 +25,7 @@ func TestCORS_NoOrigin_VaryStillSet(t *testing.T) {
 	if got := w.Header().Get("Access-Control-Allow-Origin"); got != "" {
 		t.Errorf("Access-Control-Allow-Origin = %q; want empty (no Origin → no ACAO)", got)
 	}
-	// TAO follows the ACAO gate exactly. No Origin header → no TAO either.
+
 	if got := w.Header().Get("Timing-Allow-Origin"); got != "" {
 		t.Errorf("Timing-Allow-Origin = %q; want empty (no Origin → no TAO)", got)
 	}
@@ -56,7 +54,7 @@ func TestCORS_OriginMatching_SetsACAOAndACAC(t *testing.T) {
 	if got := w.Header().Get("Access-Control-Allow-Credentials"); got != "true" {
 		t.Errorf("Access-Control-Allow-Credentials = %q; want %q", got, "true")
 	}
-	// TAO mirrors ACAO when the Origin is allowlisted.
+
 	if got := w.Header().Get("Timing-Allow-Origin"); got != "https://app.example" {
 		t.Errorf("Timing-Allow-Origin = %q; want %q", got, "https://app.example")
 	}
@@ -82,20 +80,12 @@ func TestCORS_OriginNotInAllowlist_VaryOnly(t *testing.T) {
 	if got := w.Header().Get("Access-Control-Allow-Origin"); got != "" {
 		t.Errorf("Access-Control-Allow-Origin = %q; want empty (origin not in allowlist)", got)
 	}
-	// TAO follows ACAO. Origin denied → no TAO either.
+
 	if got := w.Header().Get("Timing-Allow-Origin"); got != "" {
 		t.Errorf("Timing-Allow-Origin = %q; want empty (origin not in allowlist)", got)
 	}
 }
 
-// TestHandleCORS_TimingAllowOrigin_EnablesH2cProbe is the
-// regression test. The h2c-fallback probe in testbench/web/modules/
-// h2c-detector.js reads PerformanceResourceTiming.nextHopProtocol on a
-// cross-origin GET /healthz response; browsers null that field unless the
-// response carries Timing-Allow-Origin matching the requesting origin.
-// Asserts that an allowlist-matched request gets a TAO header reflecting
-// the exact Origin so the probe can distinguish "h2"/"h2c" from "http/1.1"
-// (instead of seeing an empty string and silently skipping the banner).
 func TestHandleCORS_TimingAllowOrigin_EnablesH2cProbe(t *testing.T) {
 	t.Parallel()
 
@@ -176,7 +166,7 @@ func TestPreflight_NonOptions_NotHandled(t *testing.T) {
 	if handled {
 		t.Errorf("handled = true; want false for GET request")
 	}
-	// No headers should have been set.
+
 	if w.Header().Get("Vary") != "" {
 		t.Errorf("Vary = %q; want empty (preflight should not set headers on non-OPTIONS)", w.Header().Get("Vary"))
 	}

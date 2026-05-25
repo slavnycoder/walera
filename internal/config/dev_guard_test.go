@@ -7,9 +7,6 @@ import (
 	"testing"
 )
 
-// TestRefuseDevEnv exercises the default-build refusal across all three
-// reserved name prefixes plus the benign-input pass-through and the
-// first-match-wins ordering contract.
 func TestRefuseDevEnv(t *testing.T) {
 	cases := []struct {
 		name        string
@@ -41,7 +38,7 @@ func TestRefuseDevEnv(t *testing.T) {
 				"WALERA_WAL_POSTGRES_DSN=postgres://x/y",
 				"WALERA_LOG_LEVEL=info",
 				"PATH=/usr/bin",
-				// Near-miss: stripped form lacks trailing _ and identifier.
+
 				"WALERA_EXPERIMENTATION=ok",
 			},
 			wantErr: false,
@@ -85,9 +82,6 @@ func TestRefuseDevEnv(t *testing.T) {
 	}
 }
 
-// TestLoadKoanf_RefusesDevEnv drives the refusal through the public
-// LoadKoanf entry point to confirm the wiring fires before any source
-// loader runs.
 func TestLoadKoanf_RefusesDevEnv(t *testing.T) {
 	t.Setenv("WALERA_EXPERIMENTAL_FOO", "1")
 	_, err := LoadKoanf("", nil)

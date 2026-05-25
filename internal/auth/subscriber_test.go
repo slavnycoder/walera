@@ -1,9 +1,3 @@
-// Package auth — subscriber_test.go validates auth.Subscriber lifecycle,
-// refresh policy, and back-buffer ordering.
-//
-// All tests use httptest servers (no live auth backend) and synthetic LSN
-// injection (no live wal.Reader). Backoff sequences are overridden to
-// millisecond scale so the suite finishes in < 1s wall clock.
 package auth
 
 import (
@@ -24,15 +18,10 @@ import (
 	"github.com/walera/walera/internal/wal"
 )
 
-// --- helpers ---
-
-// stubBreakerHook is a minimal breakerHook for subscriber tests. allow returns
-// the field's value on every Allow() call.
 type stubBreakerHook struct{ allow bool }
 
 func (s *stubBreakerHook) Allow() bool { return s.allow }
 
-// permissionsBody is a minimal valid /auth/permissions response.
 func permissionsBody(t *testing.T, tables map[string][]string) []byte {
 	t.Helper()
 	w := struct {
@@ -51,9 +40,6 @@ func permissionsBody(t *testing.T, tables map[string][]string) []byte {
 	return b
 }
 
-// scriptServer is an httptest server that returns a sequence of responses.
-// Each call advances an atomic counter; the response is selected from the
-// per-call closure list (or the final entry if call > len).
 type scriptServer struct {
 	t       *testing.T
 	srv     *httptest.Server
@@ -75,8 +61,6 @@ func newScriptServer(t *testing.T, h func(call int64, w http.ResponseWriter, r *
 	return s
 }
 
-// newSubTestClient wires a Client against the script server with a relaxed
-// timeout suitable for tests.
 func newSubTestClient(t *testing.T, server string) (*Client, *metrics.Registry) {
 	t.Helper()
 	mc := metrics.New()
@@ -89,8 +73,6 @@ func newSubTestClient(t *testing.T, server string) (*Client, *metrics.Registry) 
 	return c, mc
 }
 
-// newTestRouterSub builds a router.Subscriber with a small buffer; used as
-// the composed Sub in auth.Subscriber tests.
 func newTestRouterSub(t *testing.T) *router.Subscriber {
 	t.Helper()
 	return router.NewSubscriber(
@@ -105,11 +87,6 @@ func newTestRouterSub(t *testing.T) *router.Subscriber {
 	)
 }
 
-// subscriberTestOpts is the test-local convenience bundle that mirrors the
-// pre-Phase-7 SubscriberOpts shape so the dozens of existing test sites do
-// not each have to instantiate two structs. newTestSubscriber unpacks this
-// into the SubscriberConfig / SubscriberDeps pair the constructor now
-// takes.
 type subscriberTestOpts struct {
 	Sub        *router.Subscriber
 	Client     *Client
@@ -125,9 +102,6 @@ type subscriberTestOpts struct {
 	Backoffs   []time.Duration
 }
 
-// newTestSubscriber composes an auth.Subscriber with a fully-wired set of
-// defaults. lsnNow defaults to a synthetic-clock LSN counter so the
-// back-buffer test can advance LSN before each Store.
 func newTestSubscriber(t *testing.T, opts subscriberTestOpts) *Subscriber {
 	t.Helper()
 	if opts.Sub == nil {
@@ -165,7 +139,6 @@ func newTestSubscriber(t *testing.T, opts subscriberTestOpts) *Subscriber {
 	)
 }
 
-// makeMap builds a Whitelist with two whitelisted columns ("id", "name").
 func makeMap(t *testing.T, refreshLSN pglogrepl.LSN, cols ...string) *Whitelist {
 	t.Helper()
 	colSet := map[string]struct{}{}
@@ -182,7 +155,6 @@ func makeMap(t *testing.T, refreshLSN pglogrepl.LSN, cols ...string) *Whitelist 
 	}
 }
 
-// makeUpdateChange constructs a wal.Change for an UPDATE with Changed cols.
 func makeUpdateChange(table string, changed map[string]any) wal.Change {
 	return wal.Change{
 		Schema:  "public",
@@ -193,8 +165,6 @@ func makeUpdateChange(table string, changed map[string]any) wal.Change {
 		Changed: changed,
 	}
 }
-
-// --- tests ---
 
 func TestSubscriber_NewInstallsInitialMap(t *testing.T) {
 	t.Parallel()
@@ -249,8 +219,6 @@ func TestSubscriber_FilterClosure_UsesCurrentMap(t *testing.T) {
 	}
 }
 
-// TestSubscriber_FilterWithLSN_UsesCurrentMapForRecentTx — tx commits AFTER
-// the refresh; the current map governs.
 func TestSubscriber_FilterWithLSN_UsesCurrentMapForRecentTx(t *testing.T) {
 	t.Parallel()
 
@@ -275,8 +243,6 @@ func TestSubscriber_FilterWithLSN_UsesCurrentMapForRecentTx(t *testing.T) {
 	}
 }
 
-// TestSubscriber_FilterWithLSN_UsesPrevMapForOlderTx verifies the
-// back-buffer rule.
 func TestSubscriber_FilterWithLSN_UsesPrevMapForOlderTx(t *testing.T) {
 	t.Parallel()
 
@@ -286,8 +252,6 @@ func TestSubscriber_FilterWithLSN_UsesPrevMapForOlderTx(t *testing.T) {
 	})
 	c, _ := newSubTestClient(t, srv.srv.URL)
 
-	// Old map (RefreshLSN=100) whitelists id+name.
-	// New map (RefreshLSN=200) whitelists id only.
 	oldMap := makeMap(t, 100, "id", "name")
 	newMap := makeMap(t, 200, "id")
 
@@ -295,12 +259,10 @@ func TestSubscriber_FilterWithLSN_UsesPrevMapForOlderTx(t *testing.T) {
 		Client:     c,
 		InitialMap: oldMap,
 	})
-	// Simulate the back-buffer swap that swapMap performs.
+
 	s.PrevWhitelist.Store(oldMap)
 	s.AuthMap.Store(newMap)
 
-	// Tx with CommitLSN=150 (older than refresh@200) → must use oldMap →
-	// "name" is allowed.
 	change := makeUpdateChange("orders", map[string]any{"name": "v"})
 	out, drop := s.FilterWithLSN(change, pglogrepl.LSN(150))
 	if drop {
@@ -310,9 +272,6 @@ func TestSubscriber_FilterWithLSN_UsesPrevMapForOlderTx(t *testing.T) {
 		t.Fatalf("older tx: 'name' missing; want present via PrevWhitelist: %v", out.Changed)
 	}
 
-	// Tx with CommitLSN=250 (newer than refresh@200) → must use newMap →
-	// "name" is dropped (only PK 'id' survives, but Changed map carries no
-	// 'id' key → silent drop per Filter Rule 3).
 	change2 := makeUpdateChange("orders", map[string]any{"name": "v"})
 	_, drop2 := s.FilterWithLSN(change2, pglogrepl.LSN(250))
 	if !drop2 {
@@ -320,7 +279,6 @@ func TestSubscriber_FilterWithLSN_UsesPrevMapForOlderTx(t *testing.T) {
 	}
 }
 
-// TestSubscriber_FilterWithLSN_PrevMapNilDropsConservatively — defensive drop.
 func TestSubscriber_FilterWithLSN_PrevMapNilDropsConservatively(t *testing.T) {
 	t.Parallel()
 
@@ -335,21 +293,19 @@ func TestSubscriber_FilterWithLSN_PrevMapNilDropsConservatively(t *testing.T) {
 		Client:     c,
 		InitialMap: current,
 	})
-	// PrevWhitelist intentionally nil.
 
 	change := makeUpdateChange("orders", map[string]any{"name": "v"})
-	_, drop := s.FilterWithLSN(change, pglogrepl.LSN(150)) // older than refresh@200
+	_, drop := s.FilterWithLSN(change, pglogrepl.LSN(150))
 	if !drop {
 		t.Fatalf("drop=false; want true (PrevWhitelist nil → conservative drop)")
 	}
 }
 
-// TestSubscriber_RefreshTick_401_DropsAuthRevoked — 401 path.
 func TestSubscriber_RefreshTick_401_DropsAuthRevoked(t *testing.T) {
 	t.Parallel()
 
 	srv := newScriptServer(t, func(call int64, w http.ResponseWriter, _ *http.Request) {
-		// All calls return 401.
+
 		w.WriteHeader(http.StatusUnauthorized)
 		_, _ = w.Write([]byte(`{"error":"revoked"}`))
 		_ = call
@@ -408,8 +364,6 @@ func TestSubscriber_RefreshSuccess_LostTableWhitelistDropsAuthRevoked(t *testing
 	}
 }
 
-// TestSubscriber_RefreshTick_5xxRetriesThenDropsUnavailable — 5xx path with
-// retry exhaustion. Uses 1ms backoffs so the test completes in ~4ms.
 func TestSubscriber_RefreshTick_5xxRetriesThenDropsUnavailable(t *testing.T) {
 	t.Parallel()
 
@@ -428,7 +382,7 @@ func TestSubscriber_RefreshTick_5xxRetriesThenDropsUnavailable(t *testing.T) {
 
 	s.tryRefresh(context.Background())
 
-	if got := srv.calls.Load(); got != 4 { // initial + 3 retries
+	if got := srv.calls.Load(); got != 4 {
 		t.Fatalf("server hits: got %d; want 4", got)
 	}
 	if reason := s.Sub.Reason(); reason != "auth_unavailable" {
@@ -436,9 +390,6 @@ func TestSubscriber_RefreshTick_5xxRetriesThenDropsUnavailable(t *testing.T) {
 	}
 }
 
-// TestSubscriber_RefreshTick_5xxTrippedBreakerNoDrop — if the breaker
-// tripped DURING retries, the subscriber keeps its stale map and is NOT
-// dropped (bounded fail-open).
 func TestSubscriber_RefreshTick_5xxTrippedBreakerNoDrop(t *testing.T) {
 	t.Parallel()
 
@@ -447,7 +398,7 @@ func TestSubscriber_RefreshTick_5xxTrippedBreakerNoDrop(t *testing.T) {
 	})
 	c, _ := newSubTestClient(t, srv.srv.URL)
 
-	bk := &stubBreakerHook{allow: false} // breaker open from the start
+	bk := &stubBreakerHook{allow: false}
 	s := newTestSubscriber(t, subscriberTestOpts{
 		Client:     c,
 		Breaker:    bk,
@@ -462,13 +413,9 @@ func TestSubscriber_RefreshTick_5xxTrippedBreakerNoDrop(t *testing.T) {
 	}
 }
 
-// TestSubscriber_RefreshTick_BreakerOpenSkipsCall — RefreshLoop tick honors
-// Allow()==false by skipping the call entirely.
 func TestSubscriber_RefreshTick_BreakerOpenSkipsCall(t *testing.T) {
 	t.Parallel()
 
-	// Use a fast-tick ttl so RefreshLoop fires soon. Initial jitter is at most
-	// ttl/2.
 	srv := newScriptServer(t, func(_ int64, w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(permissionsBody(t, map[string][]string{"orders": {"id"}}))
@@ -490,7 +437,6 @@ func TestSubscriber_RefreshTick_BreakerOpenSkipsCall(t *testing.T) {
 		s.RefreshLoop(ctx)
 	}()
 
-	// Allow several ticker cycles to pass (well over ttl/2 + ttl).
 	time.Sleep(120 * time.Millisecond)
 	cancel()
 	<-done
@@ -503,8 +449,6 @@ func TestSubscriber_RefreshTick_BreakerOpenSkipsCall(t *testing.T) {
 	}
 }
 
-// TestSubscriber_RefreshSuccess_StampsRefreshLSNBeforeStore verifies the
-// stamp-then-swap ordering primitive.
 func TestSubscriber_RefreshSuccess_StampsRefreshLSNBeforeStore(t *testing.T) {
 	t.Parallel()
 
@@ -540,9 +484,6 @@ func TestSubscriber_RefreshSuccess_StampsRefreshLSNBeforeStore(t *testing.T) {
 	}
 }
 
-// TestSubscriber_InitialRefreshJitterDistribution — statistical test on
-// initialJitterFunc. 100 samples with ttl=60s expects mean in [10s, 20s]
-// (the uniform-[0,30s) mean is 15s; we allow wide tolerance).
 func TestSubscriber_InitialRefreshJitterDistribution(t *testing.T) {
 	t.Parallel()
 
@@ -552,7 +493,7 @@ func TestSubscriber_InitialRefreshJitterDistribution(t *testing.T) {
 
 	var sum time.Duration
 	var minDelay, maxDelay time.Duration
-	minDelay = halfTTL // upper bound seed; first sample shrinks it
+	minDelay = halfTTL
 	maxDelay = 0
 	for i := 0; i < N; i++ {
 		d := initialJitterFunc(ttl)
@@ -568,19 +509,16 @@ func TestSubscriber_InitialRefreshJitterDistribution(t *testing.T) {
 		}
 	}
 	mean := sum / N
-	// Expected mean is halfTTL/2 = 15s. Allow [10s, 20s] for n=100 variance.
+
 	if mean < 10*time.Second || mean > 20*time.Second {
 		t.Fatalf("jitter mean %v out of [10s, 20s] (n=%d, max=%v, min=%v)",
 			mean, N, maxDelay, minDelay)
 	}
 }
 
-// TestSubscriber_TryRefreshCoalescesConcurrentCalls — TryLock guards against
-// the registry's stale-refresh racing with the periodic ticker.
 func TestSubscriber_TryRefreshCoalescesConcurrentCalls(t *testing.T) {
 	t.Parallel()
 
-	// Slow handler so the first caller is mid-call when the second arrives.
 	handlerStart := make(chan struct{})
 	handlerRelease := make(chan struct{})
 	srv := newScriptServer(t, func(_ int64, w http.ResponseWriter, _ *http.Request) {
@@ -602,22 +540,18 @@ func TestSubscriber_TryRefreshCoalescesConcurrentCalls(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(2)
 
-	// First goroutine: enters tryRefresh and blocks inside the HTTP call.
 	go func() {
 		defer wg.Done()
 		s.tryRefresh(context.Background())
 	}()
 
-	// Wait until the first call is mid-flight.
 	<-handlerStart
 
-	// Second goroutine: should observe refreshMu locked and return immediately.
 	go func() {
 		defer wg.Done()
 		s.tryRefresh(context.Background())
 	}()
 
-	// Give the second caller a moment to TryLock-fail.
 	time.Sleep(20 * time.Millisecond)
 
 	close(handlerRelease)
@@ -628,8 +562,6 @@ func TestSubscriber_TryRefreshCoalescesConcurrentCalls(t *testing.T) {
 	}
 }
 
-// TestSubscriber_RefreshLoop_TickRefreshesMap — happy-path RefreshLoop with a
-// short TTL drives at least one successful tick that updates AuthMap.
 func TestSubscriber_RefreshLoop_TickRefreshesMap(t *testing.T) {
 	t.Parallel()
 
@@ -639,10 +571,8 @@ func TestSubscriber_RefreshLoop_TickRefreshesMap(t *testing.T) {
 	})
 	c, _ := newSubTestClient(t, srv.srv.URL)
 
-	// initial map has RefreshLSN=100; LSN function returns 999 → after first
-	// successful tick AuthMap.RefreshLSN must change to 999.
 	syntheticLSN := pglogrepl.LSN(999)
-	// Initial map with TTLSeconds=0 so DefaultTTL governs the ticker.
+
 	initial := makeMap(t, 100, "id")
 	initial.TTLSeconds = 0
 	bk := &stubBreakerHook{allow: true}
@@ -661,7 +591,6 @@ func TestSubscriber_RefreshLoop_TickRefreshesMap(t *testing.T) {
 		s.RefreshLoop(ctx)
 	}()
 
-	// Wait until at least one successful refresh has bumped the RefreshLSN.
 	deadline := time.Now().Add(500 * time.Millisecond)
 	for time.Now().Before(deadline) {
 		if m := s.AuthMap.Load(); m != nil && m.RefreshLSN == syntheticLSN {
@@ -678,8 +607,6 @@ func TestSubscriber_RefreshLoop_TickRefreshesMap(t *testing.T) {
 	}
 }
 
-// TestSubscriber_RefreshLoop_ExitsOnSubDrop — RefreshLoop exits when Sub.Done()
-// fires (subscriber externally torn down).
 func TestSubscriber_RefreshLoop_ExitsOnSubDrop(t *testing.T) {
 	t.Parallel()
 
@@ -689,7 +616,6 @@ func TestSubscriber_RefreshLoop_ExitsOnSubDrop(t *testing.T) {
 	})
 	c, _ := newSubTestClient(t, srv.srv.URL)
 
-	// Initial map with TTLSeconds=0 so DefaultTTL governs.
 	initial := makeMap(t, 100, "id")
 	initial.TTLSeconds = 0
 	bk := &stubBreakerHook{allow: true}
@@ -697,7 +623,7 @@ func TestSubscriber_RefreshLoop_ExitsOnSubDrop(t *testing.T) {
 		Client:     c,
 		Breaker:    bk,
 		InitialMap: initial,
-		DefaultTTL: 500 * time.Millisecond, // long ttl → exit via Sub.Done, not ticker
+		DefaultTTL: 500 * time.Millisecond,
 	})
 
 	done := make(chan struct{})
@@ -706,7 +632,6 @@ func TestSubscriber_RefreshLoop_ExitsOnSubDrop(t *testing.T) {
 		s.RefreshLoop(context.Background())
 	}()
 
-	// External drop fires Sub.Done().
 	time.Sleep(10 * time.Millisecond)
 	s.Sub.Drop("test_drop")
 	select {
@@ -716,8 +641,6 @@ func TestSubscriber_RefreshLoop_ExitsOnSubDrop(t *testing.T) {
 	}
 }
 
-// TestSubscriber_RefreshLoop_ZeroTTLExitsCleanly — degenerate config (TTL<=0)
-// returns immediately from RefreshLoop without spinning.
 func TestSubscriber_RefreshLoop_ZeroTTLExitsCleanly(t *testing.T) {
 	t.Parallel()
 
@@ -727,14 +650,14 @@ func TestSubscriber_RefreshLoop_ZeroTTLExitsCleanly(t *testing.T) {
 	c, _ := newSubTestClient(t, srv.srv.URL)
 
 	bk := &stubBreakerHook{allow: true}
-	// Provide a Whitelist with TTLSeconds=0 AND DefaultTTL=0 → degenerate.
+
 	m := &Whitelist{
 		UserID:     "user-1",
 		Tables:     map[string]map[string]struct{}{"orders": {"id": struct{}{}}},
 		TTLSeconds: 0,
 		RefreshLSN: 100,
 	}
-	// Construct directly (bypass the helper that defaults DefaultTTL→60s).
+
 	rsub := newTestRouterSub(t)
 	s := NewSubscriber(
 		SubscriberConfig{
@@ -764,20 +687,9 @@ func TestSubscriber_RefreshLoop_ZeroTTLExitsCleanly(t *testing.T) {
 	}
 }
 
-// TestSubscriber_TryRefresh_UnknownErrorDropsUnavailable — covers the
-// "unknown error class" branch in tryRefresh (an error that is neither a
-// revoked-class nor *ErrUnavailable).
 func TestSubscriber_TryRefresh_UnknownErrorDropsUnavailable(t *testing.T) {
 	t.Parallel()
 
-	// 200 with malformed JSON → Client returns *ErrUnavailable wrapping a
-	// decode error; that exercises the *ErrUnavailable retry path. To hit
-	// the "unknown error class" branch we synthesize a Client that returns a
-	// custom error. Since Client is concrete, we substitute via a small
-	// fake test-only approach: use a closing server which produces a
-	// transport error → *ErrUnavailable. That's the same retry-then-drop
-	// path covered elsewhere. Instead we test the case where a successful
-	// 200 contains a malformed body, which Client wraps as *ErrUnavailable.
 	srv := newScriptServer(t, func(_ int64, w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("not-json"))
@@ -798,7 +710,6 @@ func TestSubscriber_TryRefresh_UnknownErrorDropsUnavailable(t *testing.T) {
 	}
 }
 
-// TestSubscriber_SwapMap_NilFreshNoOp — swapMap with nil fresh is a no-op.
 func TestSubscriber_SwapMap_NilFreshNoOp(t *testing.T) {
 	t.Parallel()
 
@@ -821,8 +732,6 @@ func TestSubscriber_SwapMap_NilFreshNoOp(t *testing.T) {
 	}
 }
 
-// TestSubscriber_FilterClosure_NilMapDrops — defensive: nil AuthMap returns
-// drop=true on every change.
 func TestSubscriber_FilterClosure_NilMapDrops(t *testing.T) {
 	t.Parallel()
 
@@ -831,8 +740,6 @@ func TestSubscriber_FilterClosure_NilMapDrops(t *testing.T) {
 	})
 	c, _ := newSubTestClient(t, srv.srv.URL)
 
-	// Construct directly; bypass NewSubscriber's "install initial" so AuthMap
-	// is nil.
 	s := &Subscriber{
 		Sub:    newTestRouterSub(t),
 		client: c,
@@ -849,8 +756,6 @@ func TestSubscriber_FilterClosure_NilMapDrops(t *testing.T) {
 	}
 }
 
-// gatherAuthRefreshCount walks the metric registry and returns the counter
-// value at walera_auth_refresh_total{result=<result>}.
 func gatherAuthRefreshCount(t *testing.T, reg *metrics.Registry, result string) float64 {
 	t.Helper()
 	families, err := reg.Gatherer().Gather()
@@ -872,17 +777,9 @@ func gatherAuthRefreshCount(t *testing.T, reg *metrics.Registry, result string) 
 	return 0
 }
 
-// TestSubscriber_RefreshTick_IncrementsAuthRefreshMetric asserts that every
-// per-subscriber refresh attempt increments
-// walera_auth_refresh_total{result=<label>}. We exercise three of the five
-// label arms in one run (ok, unauthorized, unavailable) to keep the test
-// fast; the remaining label arms (forbidden, not_found) follow the same
-// code path through refreshResultLabel.
 func TestSubscriber_RefreshTick_IncrementsAuthRefreshMetric(t *testing.T) {
 	t.Parallel()
 
-	// Script the server: call 1 → 200, call 2 → 401, call 3..6 → 500 (drives
-	// the initial 5xx + three retry backoffs all into "unavailable").
 	srv := newScriptServer(t, func(call int64, w http.ResponseWriter, _ *http.Request) {
 		switch call {
 		case 1:
@@ -897,7 +794,6 @@ func TestSubscriber_RefreshTick_IncrementsAuthRefreshMetric(t *testing.T) {
 	})
 	c, mc := newSubTestClient(t, srv.srv.URL)
 
-	// Drive refresh #1 — expect result=ok.
 	s1 := newTestSubscriber(t, subscriberTestOpts{
 		Client:     c,
 		InitialMap: makeMap(t, 100, "id"),
@@ -909,7 +805,6 @@ func TestSubscriber_RefreshTick_IncrementsAuthRefreshMetric(t *testing.T) {
 		t.Errorf("auth_refresh_total{result=ok} after 200: got %v; want 1", got)
 	}
 
-	// Drive refresh #2 — expect result=unauthorized.
 	s2 := newTestSubscriber(t, subscriberTestOpts{
 		Client:     c,
 		InitialMap: makeMap(t, 100, "id"),
@@ -921,9 +816,6 @@ func TestSubscriber_RefreshTick_IncrementsAuthRefreshMetric(t *testing.T) {
 		t.Errorf("auth_refresh_total{result=unauthorized} after 401: got %v; want 1", got)
 	}
 
-	// Drive refresh #3 — expect result=unavailable (4× through the retry
-	// schedule: initial 5xx + three retries). Backoffs trimmed to 1ms so the
-	// suite stays sub-second.
 	s3 := newTestSubscriber(t, subscriberTestOpts{
 		Client:     c,
 		InitialMap: makeMap(t, 100, "id"),
@@ -937,8 +829,6 @@ func TestSubscriber_RefreshTick_IncrementsAuthRefreshMetric(t *testing.T) {
 		t.Errorf("auth_refresh_total{result=unavailable} after 4×5xx: got %v; want 4", got)
 	}
 
-	// Sanity — the unused label arms must remain at zero (pre-touched series
-	// visible at 0, never incremented).
 	for _, result := range []string{"forbidden", "not_found"} {
 		if got := gatherAuthRefreshCount(t, mc, result); got != 0 {
 			t.Errorf("auth_refresh_total{result=%s}: got %v; want 0 (no producer fired)", result, got)

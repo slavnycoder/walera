@@ -1,23 +1,5 @@
 //go:build integration
 
-// Package integration — scenario 08: graceful shutdown event.
-//
-// On SIGTERM, the cdc-sse binary runs the shutdown sequence:
-//
-//	Step 1: srv.Shutdown — stop accepting new connections.
-//	Step 2: broadcaster.Shutdown — drop every subscriber with reason
-//	        "shutdown"; the SSE writer's defer emits the terminal frame
-//	        `event: shutdown\ndata: {"reason":"service_restart"}\n\n`
-//	        and closes the connection.
-//	Step 3-5: cancel reader, cancel background goroutines, exit 0.
-//
-// Test shape:
-//  1. Open 3 SSE subscribers to distinct PKs.
-//  2. INSERT to confirm wiring (one event per sub).
-//  3. SIGTERM the binary.
-//  4. For each subscriber, drain events with a 6s deadline; assert each
-//     receives exactly ONE shutdown frame whose data matches the canonical
-//     payload; assert the connection closes afterwards.
 package integration
 
 import (
@@ -39,7 +21,7 @@ func Test08GracefulShutdown(t *testing.T) {
 		[]string{"users"},
 		map[string][]string{"users": {"id", "email", "name"}},
 	)
-	// Long TTL — keep auth-refresh quiet during the shutdown window.
+
 	if err := h.Auth.SetTTL("test-token", 60); err != nil {
 		t.Fatalf("SetTTL: %v", err)
 	}
@@ -60,7 +42,6 @@ func Test08GracefulShutdown(t *testing.T) {
 		defer cf()
 	}
 
-	// Steady-state INSERTs — proves all 3 streams are live before shutdown.
 	for i := 1; i <= 3; i++ {
 		if err := h.PG.Exec(ctx,
 			"INSERT INTO users (id, email, name) VALUES ($1, $2, $3)",
@@ -73,15 +54,10 @@ func Test08GracefulShutdown(t *testing.T) {
 		_ = readTxEvent(ctx, t, h, s.events, s.errCh)
 	}
 
-	// Trigger shutdown.
 	if err := h.Binary.Signal(syscall.SIGTERM); err != nil {
 		t.Fatalf("SIGTERM: %v", err)
 	}
 
-	// Per-sub assertion: each subscriber receives exactly one frame whose
-	// Type == "shutdown" and Data == `{"reason":"service_restart"}`. Run the
-	// three drains in parallel goroutines so the assertion measures the
-	// broadcast fan-out, not its serialization.
 	const want = `{"reason":"service_restart"}`
 	var wg sync.WaitGroup
 	failures := make(chan string, len(subs))
@@ -103,29 +79,24 @@ func Test08GracefulShutdown(t *testing.T) {
 							failures <- "sub " + itoa(s.idx) + ": shutdown data = " + string(ev.Data) + "; want " + want
 							return
 						}
-						// Success. Now confirm the connection closes (errCh
-						// EOF or events channel close) within 2s of the
-						// shutdown frame — proves the writer cleanly tore
-						// down the conn.
+
 						closeDeadline := time.Now().Add(2 * time.Second)
 						for time.Now().Before(closeDeadline) {
 							select {
 							case _, ok := <-s.events:
 								if !ok {
-									return // events channel closed → success
+									return
 								}
-								// Extra event after shutdown is unexpected but
-								// not a critical failure of THIS assertion.
+
 							case <-s.errCh:
-								return // errCh signalled → success
+								return
 							case <-time.After(100 * time.Millisecond):
 							}
 						}
-						// Connection did not close within 2s — note but don't
-						// fail (the assertion above already passed).
+
 						return
 					}
-					// Heartbeat / other — keep waiting.
+
 				case err := <-s.errCh:
 					failures <- "sub " + itoa(s.idx) + ": errCh before shutdown frame: " + err.Error()
 					return
@@ -149,22 +120,13 @@ func Test08GracefulShutdown(t *testing.T) {
 			strings.Join(failed, "\n  "), h.Binary.Stderr())
 	}
 
-	// Confirm the binary's stderr contains both shutdown goroutine markers
-	// — Step 1 and Step 2 run in parallel; both must log.
 	stderr := h.Binary.Stderr()
 	if !strings.Contains(stderr, "shutdown") {
 		t.Errorf("binary stderr missing 'shutdown' log entries; stderr:\n%s", stderr)
 	}
 
-	// The harness's t.Cleanup waits up to 10s for the binary to exit cleanly
-	// on its own SIGTERM. The shutdown contract mandates exit within
-	// cfg.shutdown.deadline = 5s in the test config; an exit-deadline
-	// assertion here would race the harness cleanup. Instead, rely on
-	// Cleanup's 10s budget — if the binary doesn't exit within that, the
-	// harness already t.Logf's the SIGKILL.
 }
 
-// itoa is a tiny helper to avoid importing strconv in this file's hot path.
 func itoa(n int) string {
 	if n == 0 {
 		return "0"

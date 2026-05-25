@@ -5,11 +5,6 @@ import (
 	"testing"
 )
 
-// TestConfig_NewSlotName covers the wal.Config.NewSlotName helper that was previously
-// untested. Exercises all five rune-classification branches: lowercase, digit,
-// underscore, uppercase → lowercase, and other → '_'. The assertion uses the
-// typed SlotName value (not a bare string compare) so the named-type contract
-// is part of the test surface.
 func TestConfig_NewSlotName(t *testing.T) {
 	cfg := Config{SlotNamePrefix: "walera"}
 	got := cfg.NewSlotName("Host-1.local", 42)
@@ -18,8 +13,6 @@ func TestConfig_NewSlotName(t *testing.T) {
 	}
 }
 
-// TestParseNaiveTimestamp covers parseNaiveTimestamp's UTC vs local-time
-// branches, including the trailing-fraction handling.
 func TestParseNaiveTimestamp(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -46,9 +39,6 @@ func TestParseNaiveTimestamp(t *testing.T) {
 	}
 }
 
-// TestParseTimestampTZ covers parseTimestampTZ across the offset-normalization
-// shapes (HH, HHMM, HH:MM) the function rewrites before delegating to
-// time.Parse.
 func TestParseTimestampTZ(t *testing.T) {
 	tests := []string{
 		"2024-01-02 03:04:05+00",
@@ -68,18 +58,15 @@ func TestParseTimestampTZ(t *testing.T) {
 	}
 }
 
-// TestNormalizeOffset exercises the "[+-]HH" suffix rewrite branch that
-// converts PG's short offsets into RFC3339-compatible "[+-]HH:00". Inputs
-// that do not match the suffix predicate must pass through untouched.
 func TestNormalizeOffset(t *testing.T) {
 	tests := []struct {
 		in, want string
 	}{
 		{"2026-05-14 10:23:45.123+00", "2026-05-14 10:23:45.123+00:00"},
 		{"2026-05-14 10:23:45.123-05", "2026-05-14 10:23:45.123-05:00"},
-		{"2026-05-14 10:23:45-05:30", "2026-05-14 10:23:45-05:30"}, // already has colon — untouched
-		{"+00", "+00"}, // too short for the suffix predicate
-		{"", ""},       // empty — early return
+		{"2026-05-14 10:23:45-05:30", "2026-05-14 10:23:45-05:30"},
+		{"+00", "+00"},
+		{"", ""},
 	}
 	for _, tc := range tests {
 		t.Run(tc.in, func(t *testing.T) {
@@ -90,8 +77,6 @@ func TestNormalizeOffset(t *testing.T) {
 	}
 }
 
-// TestSplitArrayElements covers splitArrayElements' quote-handling, escape
-// handling, NULL passthrough, and the unterminated-quote error path.
 func TestSplitArrayElements(t *testing.T) {
 	t.Run("simple unquoted", func(t *testing.T) {
 		got, err := splitArrayElements("a,b,c")
@@ -109,7 +94,7 @@ func TestSplitArrayElements(t *testing.T) {
 		if err != nil {
 			t.Fatalf("error: %v", err)
 		}
-		// element 0: a,b ; element 1: c"d ; element 2: e\f
+
 		if len(got) != 3 || got[0] != "a,b" || got[1] != `c"d` || got[2] != `e\f` {
 			t.Errorf("got %v", got)
 		}
@@ -136,9 +121,7 @@ func TestSplitArrayElements(t *testing.T) {
 	})
 
 	t.Run("unterminated quote — best-effort", func(t *testing.T) {
-		// The current implementation does not error on an unterminated quote;
-		// it returns what it parsed. Exercise the path so the loop's
-		// quote-handling branch is covered.
+
 		if _, err := splitArrayElements(`"unterminated`); err != nil {
 			t.Errorf("unexpected error: %v", err)
 		}

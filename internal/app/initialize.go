@@ -1,6 +1,3 @@
-// Package app — initialize.go is the single hand-written singleton wiring
-// file. See internal/app/doc.go for the wirer grouping rationale and
-// INVARIANTS.md §2 for the auth cycle-break contract.
 package app
 
 import (
@@ -18,15 +15,12 @@ import (
 	"github.com/walera/walera/internal/walconn"
 )
 
-// coreWiring carries the metrics registry + WAL reader/tx-channel produced
-// by wireCore.
 type coreWiring struct {
 	Registry  *metrics.Registry
 	WalReader *wal.Reader
 	TxCh      <-chan wal.Tx
 }
 
-// authWiring carries the auth-subsystem singletons produced by wireAuth.
 type authWiring struct {
 	AuthClient  *auth.Client
 	Breaker     *auth.Breaker
@@ -34,9 +28,6 @@ type authWiring struct {
 	Limits      *limits.Limits
 }
 
-// dataPlaneWiring carries the SSE encoder + router broadcaster + writer
-// pool (with its Prometheus adapter) + SSE handler produced by
-// wireDataPlane.
 type dataPlaneWiring struct {
 	Encoder     *sse.Encoder
 	Broadcaster *router.Broadcaster
@@ -45,9 +36,6 @@ type dataPlaneWiring struct {
 	Handler     *sse.Handler
 }
 
-// httpWiring carries the health server, the shared mux, the main and
-// optional pprof HTTP servers, and the per-process WAL replication slot
-// name produced by wireHTTP.
 type httpWiring struct {
 	HealthServer *health.Server
 	Mux          *http.ServeMux
@@ -56,10 +44,6 @@ type httpWiring struct {
 	SlotName     wal.SlotName
 }
 
-// InitializeApp constructs every long-lived singleton in topological order
-// and returns the assembled *App handle plus a no-op cleanup closure.
-// cfg is passed BY VALUE; adminConn ownership transfers to *App on success
-// (Shutdown step 4 is the sole close site).
 func InitializeApp(cfg AppConfig, logger zerolog.Logger, adminConn walconn.AdminConn) (*App, func(), error) {
 	cw := wireCore(cfg, logger)
 	aw := wireAuth(cfg, logger, cw.Registry)
@@ -89,9 +73,6 @@ func InitializeApp(cfg AppConfig, logger zerolog.Logger, adminConn walconn.Admin
 	return a, func() {}, nil
 }
 
-// wireCore constructs the metrics registry and the WAL reader + its tx
-// channel — the data-flow roots every subsequent helper depends on.
-// Registry pointer identity is preserved across the rest of the graph.
 func wireCore(cfg AppConfig, logger zerolog.Logger) coreWiring {
 	registry := metrics.New()
 
@@ -107,22 +88,19 @@ func wireCore(cfg AppConfig, logger zerolog.Logger) coreWiring {
 	}
 }
 
-// wireAuth constructs the auth client, its circuit breaker, the per-user
-// subscribers registry and the limits keeper. Encapsulates the auth
-// cycle break (see INVARIANTS.md §2).
 func wireAuth(cfg AppConfig, logger zerolog.Logger, registry *metrics.Registry) authWiring {
 	authClient := auth.New(cfg.Auth, auth.Deps{
-		Breaker: nil, // installed two lines below; nopBreaker substituted until then
+		Breaker: nil,
 		Logger:  logger,
 		Metrics: registry,
 	})
 	breaker := auth.NewBreaker(cfg.Auth.Breaker, auth.BreakerDeps{
-		Prober:  authClient, // *Client satisfies Prober via CheckAuth
+		Prober:  authClient,
 		Logger:  logger,
 		Metrics: registry,
 	})
-	// auth cycle break; see INVARIANTS.md §2.
-	authClient.SetBreaker(breaker) // init-only; guarded by sync.Once inside SetBreaker
+
+	authClient.SetBreaker(breaker)
 
 	subscribers := auth.NewSubscribers(auth.SubscribersDeps{
 		Logger:  logger,
@@ -142,8 +120,6 @@ func wireAuth(cfg AppConfig, logger zerolog.Logger, registry *metrics.Registry) 
 	}
 }
 
-// wireDataPlane constructs the SSE encoder, router broadcaster, writer
-// pool (with its Prometheus adapter) and the SSE HTTP handler.
 func wireDataPlane(cfg AppConfig, logger zerolog.Logger, registry *metrics.Registry, aw authWiring) dataPlaneWiring {
 	encoder := sse.NewEncoder(cfg.HTTP.MaxPayloadBytes)
 
@@ -202,10 +178,6 @@ func wireDataPlane(cfg AppConfig, logger zerolog.Logger, registry *metrics.Regis
 	}
 }
 
-// wireHTTP constructs the health server, the shared HTTP mux (health
-// routes mounted BEFORE SSE routes), the main HTTP server and the
-// optional pprof listener, and derives the per-process WAL replication
-// slot name.
 func wireHTTP(cfg AppConfig, logger zerolog.Logger, cw coreWiring, aw authWiring, handler *sse.Handler) httpWiring {
 	healthSrv := health.New(cfg.Health, health.Deps{
 		Logger:      logger,

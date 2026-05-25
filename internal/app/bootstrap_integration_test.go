@@ -1,10 +1,5 @@
 //go:build integration
 
-// Package app — bootstrap_integration_test.go boots a testcontainers
-// Postgres and exercises verifyReplicationRole against three role shapes:
-// a REPLICATION role (passes), a superuser (passes), and a LOGIN-only role
-// (fails with an actionable, slot-free error). The build tag keeps these
-// out of the default `go test ./...` run; CI invokes `-tags=integration`.
 package app
 
 import (
@@ -23,9 +18,6 @@ import (
 	"github.com/walera/walera/internal/walconn"
 )
 
-// bootPGSuper launches PostgreSQL 18 with the container superuser "walera"
-// as the connecting role. Returns the host and mapped port so callers can
-// build per-role DSNs.
 func bootPGSuper(t *testing.T) (host string, port string) {
 	t.Helper()
 	ctx := context.Background()
@@ -60,14 +52,11 @@ func bootPGSuper(t *testing.T) (host string, port string) {
 	return h, p.Port()
 }
 
-// dsnFor builds a sslmode=disable DSN for the named role against the test
-// database on the given host/port.
 func dsnFor(host, port, role, password string) string {
 	return fmt.Sprintf("postgres://%s:%s@%s:%s/walera_test?sslmode=disable",
 		role, password, host, port)
 }
 
-// connAs opens a pgx.Conn as the named role and wraps it as walconn.AdminConn.
 func connAs(t *testing.T, ctx context.Context, dsn string) walconn.AdminConn {
 	t.Helper()
 	conn, err := pgx.Connect(ctx, dsn)
@@ -83,7 +72,6 @@ func TestVerifyReplicationRole_AllCases(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	// Provision the two non-superuser test roles via the container superuser.
 	superDSN := dsnFor(host, port, "walera", "walera")
 	superConn, err := pgx.Connect(ctx, superDSN)
 	if err != nil {

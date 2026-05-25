@@ -1,5 +1,3 @@
-// Package writer — pool.go constructs the bounded pgxpool.Pool for the
-// commit loop. Every knob is set explicitly. See INVARIANTS.md.
 package writer
 
 import (
@@ -10,9 +8,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// NewPool parses the DSN, applies bounded sizing + connection-lifetime
-// guards, and returns a connected *pgxpool.Pool. The caller is responsible
-// for pool.Close() at shutdown.
 func NewPool(ctx context.Context, cfg WriterPGConfig, poolCfg WriterPoolConfig) (*pgxpool.Pool, error) {
 	pcfg, err := pgxpool.ParseConfig(cfg.DSN)
 	if err != nil {

@@ -52,10 +52,7 @@ func TestRedactDSN(t *testing.T) {
 		want string
 	}{
 		{
-			// net/url percent-encodes "*" inside userinfo on String(), so
-			// the canonical form of the redacted password is %2A%2A%2A.
-			// The contract is "password hidden", not "literal *** in the
-			// emitted string".
+
 			name: "url form with password",
 			in:   "postgres://alice:secret@db:5432/walera",
 			want: "postgres://alice:%2A%2A%2A@db:5432/walera",
@@ -97,7 +94,7 @@ func TestRedactDSN(t *testing.T) {
 			if got != tc.want {
 				t.Errorf("RedactDSN(%q) = %q; want %q", tc.in, got, tc.want)
 			}
-			// Defensive: no test should leak the literal password.
+
 			if strings.Contains(got, "secret") {
 				t.Errorf("RedactDSN(%q) = %q; leaks 'secret'", tc.in, got)
 			}

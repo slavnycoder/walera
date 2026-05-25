@@ -1,8 +1,5 @@
 package router
 
-// This file contains the sharded-index -race concurrency test.
-// Run via: go test -race -run TestIndexConcurrent ./internal/router/
-
 import (
 	"context"
 	"fmt"
@@ -11,7 +8,6 @@ import (
 	"time"
 )
 
-// TestIndex_AddLookupRemove covers the basic single-key lifecycle.
 func TestIndex_AddLookupRemove(t *testing.T) {
 	t.Parallel()
 	idx := newIndex()
@@ -39,8 +35,6 @@ func TestIndex_AddLookupRemove(t *testing.T) {
 	}
 }
 
-// TestIndex_AddLookupRemove_MultipleSubscribers verifies the exact index
-// supports multiple clients watching the same row and removes by pointer.
 func TestIndex_AddLookupRemove_MultipleSubscribers(t *testing.T) {
 	t.Parallel()
 	idx := newIndex()
@@ -97,10 +91,6 @@ func containsSubscriber(subs []*Subscriber, want *Subscriber) bool {
 	return false
 }
 
-// TestIndex_ShardDistribution adds 1000 distinct keys and asserts that the
-// xxhash-based shard distribution touches all shards. With 1000 keys spread
-// across numShards shards, xxhash distribution should populate every shard —
-// this is an anti-collision smoke check, not a chi-square test.
 func TestIndex_ShardDistribution(t *testing.T) {
 	t.Parallel()
 	idx := newIndex()
@@ -123,17 +113,6 @@ func TestIndex_ShardDistribution(t *testing.T) {
 	}
 }
 
-// TestIndexConcurrent is the sharded-index -race gate.
-//
-// Spawns G=256 goroutines × N=1024 iterations of interleaved Add/Lookup/Remove
-// over disjoint keys, with the race detector enabled. Asserts:
-//  1. No data race detector hits (enforced by `go test -race`).
-//  2. Every Lookup returns the just-Added subscriber.
-//  3. Final idx.Len() == 0 after all Removes complete.
-//  4. Total wall time bounded by a 30s hard timeout.
-//
-// Raw `go` is acceptable in tests per PATTERNS.md §"Test layout"; production
-// code MUST use safego.Go (ROUTE-09).
 func TestIndexConcurrent(t *testing.T) {
 	t.Parallel()
 	idx := newIndex()
@@ -145,8 +124,6 @@ func TestIndexConcurrent(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(G)
 
-	// Per-goroutine context used by the constructed subscribers — we never
-	// drop these, so a background context with no cancellation is fine.
 	ctx := context.Background()
 
 	for g := 0; g < G; g++ {
@@ -183,7 +160,7 @@ func TestIndexConcurrent(t *testing.T) {
 
 	select {
 	case <-done:
-		// All goroutines finished — proceed to final assertion.
+
 	case <-time.After(30 * time.Second):
 		t.Fatal("TestIndexConcurrent: timed out waiting for goroutines (30s)")
 	}
