@@ -179,7 +179,6 @@ func newTestHandler(t *testing.T, cors []string, lcfg *limits.Config) *testHandl
 
 	authCfg := auth.Config{
 		BackendURL:        backend.srv.URL,
-		ServiceToken:      "svc-tok",
 		DefaultTTLSeconds: 60,
 		RequestTimeout:    2 * time.Second,
 		Breaker: auth.BreakerConfig{

@@ -67,9 +67,7 @@ docker pull ghcr.io/slavnycoder/walera:latest
 docker run --rm \
   -p 8080:8080 \
   -e WALERA_DATABASE_URL='postgres://walera:secret@host:5432/app?sslmode=disable' \
-  -e WALERA_WAL_PUBLICATION_NAME='cdc_sse_streamer' \
-  -e WALERA_AUTH_BACKEND_URL='http://auth:9000' \
-  -e WALERA_AUTH_SERVICE_TOKEN='service-token' \
+  -e WALERA_AUTH_BACKEND_URL='https://auth.example.com' \
   ghcr.io/slavnycoder/walera:latest
 ```
 
@@ -111,11 +109,7 @@ for the full reference (operational tuning + development-only patterns).
   plus the automatically-derived replication connection). The role must
   hold the `REPLICATION` attribute, and the connection must be direct (no
   PgBouncer).
-- `WALERA_WAL_PUBLICATION_NAME` — pgoutput publication name.
 - `WALERA_AUTH_BACKEND_URL` — auth service base URL.
-- `WALERA_AUTH_SERVICE_TOKEN` — bearer token Walera presents to the
-  auth backend (required when `WALERA_AUTH_BACKEND_URL` is set).
-- `WALERA_HTTP_ADDR` — SSE listen address (e.g., `:8080`).
 
 A minimal `config.yaml` skeleton looks like:
 
@@ -123,21 +117,8 @@ A minimal `config.yaml` skeleton looks like:
 database:
   url: postgres://walera:secret@host:5432/app?sslmode=disable
 
-wal:
-  publication_name: cdc_sse_streamer
-
 auth:
-  backend_url: http://auth:9000
-  service_token: service-token
-
-http:
-  cors_origins:
-    - http://localhost:3000
-    - http://localhost:5173
-
-limits:
-  trusted_proxies:
-    - 10.0.0.0/8
+  backend_url: https://auth.example.com
 ```
 
 For the full configuration reference, including tuning, CORS

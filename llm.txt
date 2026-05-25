@@ -128,7 +128,7 @@ Accept: application/json
 Channel format:
 - Single row: `orders:42` (URL-encoded as `orders%3A42`)
 - Whole table: `orders:all`
-- Health probe: `_health` (token is `WALERA_AUTH_SERVICE_TOKEN`)
+- Health probe: `_health` (no Authorization header)
 
 Required response shape (`200 OK`):
 
@@ -238,7 +238,6 @@ WALERA_WAL_POSTGRES_DSN='postgres://walera_admin:secret@pg:5432/app?sslmode=disa
 WALERA_WAL_REPLICATION_DSN='postgres://walera_repl:secret@pg:5432/app?sslmode=disable&replication=database'
 WALERA_WAL_PUBLICATION_NAME='cdc_sse_streamer'
 WALERA_AUTH_BACKEND_URL='http://auth.internal:9000'
-WALERA_AUTH_SERVICE_TOKEN='<token-your-backend-accepts-for-channel=_health>'
 WALERA_HTTP_CORS_ORIGINS='https://app.example.com'
 ```
 

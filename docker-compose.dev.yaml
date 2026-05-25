@@ -8,8 +8,8 @@
 # The mock-auth backend is INTENTIONALLY OMITTED from this file. The auth
 # contract is operator-specific; for dev work the Phase-3 mock-auth.py (or
 # a wired-up auth backend) is sufficient and runs outside compose. Wire
-# Walera to it via WALERA_AUTH_SERVICE_URL + WALERA_AUTH_SERVICE_TOKEN in
-# the `walera.environment` block below.
+# Walera to it via WALERA_AUTH_BACKEND_URL in the `walera.environment` block
+# below.
 #
 # Notes:
 #   - Postgres 18-alpine is used because it is the smallest official image
@@ -65,10 +65,9 @@ services:
       GOGC: "200"
       GOMEMLIMIT: "6500MiB"
       # Auth — wire to an external mock-auth (e.g., Phase-3 mock-auth.py) and
-      # supply the token via your shell environment, e.g.:
+      # supply its URL via your shell environment, e.g.:
       #   AUTH_SERVICE_URL=http://host.docker.internal:9000 docker compose up
-      # WALERA_AUTH_SERVICE_URL: "${AUTH_SERVICE_URL:-}"
-      # WALERA_AUTH_SERVICE_TOKEN: "${AUTH_SERVICE_TOKEN:-}"
+      # WALERA_AUTH_BACKEND_URL: "${AUTH_SERVICE_URL:-}"
     ports:
       - "8080:8080"
     volumes:

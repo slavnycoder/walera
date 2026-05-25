@@ -26,10 +26,6 @@ type Config struct {
 	// Default: "_health".
 	HealthChannel string `koanf:"health_channel"`
 
-	// ServiceToken is the bearer token used by health.Server and the breaker
-	// half-open probe. Mandatory.
-	ServiceToken string `koanf:"service_token"`
-
 	// RequestTimeout caps every HTTP call to the auth backend. Default: 2s.
 	RequestTimeout time.Duration `koanf:"request_timeout"`
 
@@ -123,9 +119,6 @@ func (c Config) Validate() error {
 				errs = append(errs, errors.New("auth.backend_url must use https:// (override with WALERA_AUTH_ALLOW_PLAINTEXT=1 for dev)"))
 			}
 		}
-	}
-	if c.ServiceToken == "" {
-		errs = append(errs, errors.New("auth.service_token is required"))
 	}
 	if c.RequestTimeout <= 0 {
 		errs = append(errs, errors.New("auth.request_timeout must be > 0"))

@@ -69,12 +69,11 @@ func (nopBreaker) Allow() bool { return true }
 // Client performs HTTP calls against the configured auth backend. All exported
 // methods are safe for concurrent use.
 type Client struct {
-	base         string
-	serviceToken string
-	hc           *http.Client
-	bk           BreakerHook
-	log          zerolog.Logger
-	mc           *metrics.Registry
+	base string
+	hc   *http.Client
+	bk   BreakerHook
+	log  zerolog.Logger
+	mc   *metrics.Registry
 
 	setBreakerOnce sync.Once
 }
@@ -105,12 +104,11 @@ func New(cfg Config, deps Deps) *Client {
 		bk = nopBreaker{}
 	}
 	c := &Client{
-		base:         cfg.BackendURL,
-		serviceToken: cfg.ServiceToken,
-		hc:           newHTTPClient(cfg),
-		bk:           bk,
-		log:          deps.Logger,
-		mc:           deps.Metrics,
+		base: cfg.BackendURL,
+		hc:   newHTTPClient(cfg),
+		bk:   bk,
+		log:  deps.Logger,
+		mc:   deps.Metrics,
 	}
 	for _, r := range []string{"ok", "unauthorized", "forbidden", "not_found", "unavailable"} {
 		c.mc.AuthRequests(r).Add(0)
@@ -182,7 +180,9 @@ func (c *Client) Permissions(ctx context.Context, token, channel, requestID stri
 		c.bk.RecordResult(false)
 		return nil, &ErrUnavailable{Cause: err}
 	}
-	req.Header.Set("Authorization", "Bearer "+token)
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
 	if !validOutboundRequestID(requestID) {
 		var buf [16]byte
 		if _, err := rand.Read(buf[:]); err != nil {
@@ -277,7 +277,7 @@ func (c *Client) CheckAuth(ctx context.Context) error {
 		panic("auth: crypto/rand.Read failed: " + err.Error())
 	}
 	id := "health-" + hex.EncodeToString(buf[:])
-	_, err := c.Permissions(ctx, c.serviceToken, "_health", id)
+	_, err := c.Permissions(ctx, "", "_health", id)
 	if err == nil {
 		return nil
 	}

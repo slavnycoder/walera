@@ -169,7 +169,6 @@ func newSingletonTestConfig(t *testing.T) *AppConfig {
 		Auth: auth.Config{
 			BackendURL:        "https://auth.example/test",
 			DefaultTTLSeconds: 60,
-			ServiceToken:      "svc-tok-test",
 			RequestTimeout:    5 * time.Second,
 			Breaker: auth.BreakerConfig{
 				WindowBuckets:        30,

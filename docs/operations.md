@@ -194,9 +194,8 @@ services:
     image: ghcr.io/slavnycoder/walera:latest
     environment:
       WALERA_DATABASE_URL: postgres://walera:secret@postgres:5432/app?sslmode=disable
-      WALERA_WAL_PUBLICATION_NAME: cdc_sse_streamer
       WALERA_AUTH_BACKEND_URL: http://auth:9000
-      WALERA_AUTH_SERVICE_TOKEN: service-token
+      WALERA_AUTH_ALLOW_PLAINTEXT: "1"
     ports:
       - "8080:8080"
     depends_on:
@@ -243,7 +242,6 @@ defaults — every deployment must supply them.
 | ----------------------------- | ----------------------- | -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
 | `WALERA_DATABASE_URL`         | `database.url`          | Single Postgres DSN — admin connection and the derived replication connection. Direct to PG (no PgBouncer). | `postgres://walera:secret@db:5432/app?sslmode=require`                                       |
 | `WALERA_AUTH_BACKEND_URL`     | `auth.backend_url`      | Auth backend base URL (https).                                       | `https://auth.example.com`                                                                  |
-| `WALERA_AUTH_SERVICE_TOKEN`   | `auth.service_token`    | Bearer used by Walera's own `_health` probe; required with the URL.  | `service-token-xxxx`                                                                        |
 
 The single role in `WALERA_DATABASE_URL` MUST hold the `REPLICATION`
 attribute. Walera derives the replication connection by adding
@@ -602,7 +600,6 @@ the corresponding line in the source file is whichever line of the
 | Symptom                                            | Fix                                                                                          |
 | -------------------------------------------------- | -------------------------------------------------------------------------------------------- |
 | `auth.backend_url is required`                     | Set `WALERA_AUTH_BACKEND_URL`.                                                               |
-| `auth.service_token is required`                   | Set `WALERA_AUTH_SERVICE_TOKEN`. The auth backend must accept it for `channel=_health`.      |
 | Browser CORS error                                 | Set `WALERA_HTTP_CORS_ORIGINS` to the exact frontend origin (including port).                |
 | Native `EventSource` cannot authenticate           | Use `@microsoft/fetch-event-source`, a backend proxy, or cookie auth.                        |
 | `unsupported startup parameter: replication`       | Replication DSN is going through PgBouncer. Connect directly to PostgreSQL.                  |

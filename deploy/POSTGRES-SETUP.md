@@ -15,8 +15,9 @@ namespace.
 > connection; Walera derives the replication connection from it automatically
 > by adding `replication=database` at load time. Create ONE database role,
 > give it the `REPLICATION` attribute, and put it in `WALERA_DATABASE_URL`.
-> Do NOT append `replication=database` to the URL yourself — config load
-> rejects a base URL that already carries it.
+> If `replication` is present by accident, Walera strips it from the admin
+> connection and sets the derived replication connection to
+> `replication=database`.
 
 ---
 
@@ -80,9 +81,8 @@ both connections derived from `WALERA_DATABASE_URL`:
 
 Because the same role serves the replication connection, it **must** hold the
 `REPLICATION` attribute. This requirement is **not** validated at config load
-— config load only checks that the URL parses and does not already carry
-`replication=database`. A role that is missing the `REPLICATION` attribute
-fails at **runtime**, on `START_REPLICATION`.
+— config load only checks that the URL parses. A role that is missing the
+`REPLICATION` attribute fails at **runtime**, on `START_REPLICATION`.
 
 ```sql
 -- Create the single role with REPLICATION and a strong password.
@@ -114,9 +114,10 @@ The single base DSN passed via `WALERA_DATABASE_URL` looks like:
 postgres://walera:change-me@pg.example.com:5432/app?sslmode=require
 ```
 
-Do **not** append `replication=database` — Walera derives the replication
-form of this URL automatically, and config load rejects a base URL that
-already carries it.
+Walera derives the replication form of this URL automatically. If the URL
+already carries a `replication` parameter, Walera removes it from the admin
+connection and applies `replication=database` only to the derived replication
+connection.
 
 ---
 
@@ -308,9 +309,8 @@ kubectl exec -n walera deploy/walera -- cat /proc/self/limits | grep -i 'open fi
 > is run. The bundle's `kustomization.yaml` deliberately does NOT
 > include `secret.yaml` as a resource — that file is a template/
 > reference for operator use only and contains no `stringData:` values.
-> Walera's startup validation fails fast (with the named error
-> `auth.service_token is required`) if the Secret is missing or has an
-> empty `auth_service_token` value.
+> Walera's startup validation fails fast if the required `database_url` value
+> is missing or empty.
 >
 > Use one of the three workflows below (§7a, §7b, §7c) to create the
 > Secret first, then apply the bundle.
@@ -325,7 +325,6 @@ below remain the canonical Secret-creation paths.
 ```sh
 kubectl create secret generic walera-secrets \
   --namespace=walera \
-  --from-literal=auth_service_token='<bearer-token>' \
   --from-literal=database_url='postgres://walera:...@pg:5432/app?sslmode=require'
 ```
 
@@ -344,9 +343,7 @@ metadata:
   namespace: walera
 type: Opaque
 stringData:
-  auth_service_token: '<bearer-token>'
   # Single Postgres DSN; the role MUST have the REPLICATION attribute.
-  # Do NOT append replication=database (Walera derives it).
   database_url: 'postgres://walera:...@pg:5432/app?sslmode=require'
 EOF
 
@@ -375,10 +372,6 @@ spec:
     name: walera-secrets
     creationPolicy: Owner
   data:
-    - secretKey: auth_service_token
-      remoteRef:
-        key: secret/walera
-        property: auth_service_token
     - secretKey: database_url
       remoteRef:
         key: secret/walera

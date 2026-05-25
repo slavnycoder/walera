@@ -3,12 +3,11 @@
 # Mounted by deployment.yaml at /etc/walera/config.yaml (read-only).
 #
 # CRITICAL — SECRETS DISCIPLINE (Pitfall G7 / D4-22):
-#   The two secrets-bearing keys (database.url, auth.service_token) are
-#   DELIBERATELY left empty in this ConfigMap. They come from the
+#   The required database.url secret-bearing key is DELIBERATELY left empty in
+#   this ConfigMap. It comes from the
 #   `walera-secrets` Secret at runtime via koanf's env-var transform:
 #     WALERA_DATABASE_URL       -> database.url
-#     WALERA_AUTH_SERVICE_TOKEN -> auth.service_token
-#   See deployment.yaml's `env:` block — each is sourced from secretKeyRef.
+#   See deployment.yaml's `env:` block.
 #
 # When editing the config body, mirror the in-repo `config.yaml` to keep
 # default values aligned with what unit tests assert (config_test.go).
@@ -31,9 +30,9 @@ metadata:
 data:
   config.yaml: |
     # Walera production configuration.
-    # SECRET values (database.url, auth.service_token) are intentionally empty
-    # here — they are injected at runtime from the `walera-secrets` Secret via
-    # WALERA_-prefixed env vars (see deployment.yaml).
+    # SECRET database.url is intentionally empty here — it is injected at
+    # runtime from the `walera-secrets` Secret via WALERA_DATABASE_URL (see
+    # deployment.yaml).
 
     # SECRET — provided by walera-secrets / WALERA_DATABASE_URL env var.
     # Single Postgres DSN; the role MUST have the REPLICATION attribute.

@@ -55,8 +55,8 @@ Accept: application/json
 ```
 
 - For `/sse/v1/orders/all`, the channel is `orders:all`.
-- For Walera's own readiness probes the channel is `_health` and the
-  token is the operator-configured service token.
+- For Walera's own readiness probes the channel is `_health`; Walera does not
+  send an `Authorization` header for this probe.
 
 The full URL is `<WALERA_AUTH_BACKEND_URL>/auth/permissions?channel=…`.
 

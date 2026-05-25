@@ -27,7 +27,6 @@ func validClientDeps() Deps {
 func validClientConfig() Config {
 	return Config{
 		BackendURL:     "http://127.0.0.1:1",
-		ServiceToken:   "svc",
 		RequestTimeout: time.Second,
 	}
 }

@@ -65,9 +65,8 @@ these are local to their respective files and need no cross-file anchor.)_
 6. **Tokens never logged.** Bearer credentials are passed only as a function
    parameter to `Client.Permissions` and written only to the `Authorization`
    header. They are NEVER assigned to local variables beyond the header set
-   call. NEVER captured into struct fields beyond `Client.serviceToken` and
-   `Subscriber.token` (both unexported, both never read by any log
-   statement). The CI grep gate
+   call. NEVER captured into struct fields beyond `Subscriber.token`
+   (unexported, never read by any log statement). The CI grep gate
    `! grep -nE 'Str\(.*[Tt]oken|Str\(.*Authorization' internal/auth/client.go`
    enforces this discipline at build time. Anchor: `client.go:Permissions`
    header-set block (~line 167) (pre-sweep de6b665).

@@ -281,7 +281,6 @@ router:
   heartbeat_interval: 1s
 auth:
   backend_url: %q
-  service_token: service-token
   default_ttl_seconds: 1
   health_channel: _health
   request_timeout: 2s

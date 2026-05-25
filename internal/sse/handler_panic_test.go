@@ -25,7 +25,6 @@ func newHandlerPanicValidDeps(t *testing.T) (Config, Deps) {
 	m := metrics.New()
 	authCfg := auth.Config{
 		BackendURL:        "http://127.0.0.1:1",
-		ServiceToken:      "svc",
 		DefaultTTLSeconds: 60,
 		RequestTimeout:    time.Second,
 		HealthChannel:     "_health",

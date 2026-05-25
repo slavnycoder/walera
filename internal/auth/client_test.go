@@ -104,7 +104,6 @@ func newTestClient(t *testing.T, baseURL string, timeout time.Duration) (*Client
 	mc := metrics.New()
 	cfg := Config{
 		BackendURL:     baseURL,
-		ServiceToken:   "svc-tok",
 		RequestTimeout: timeout,
 	}
 	return New(cfg, Deps{Logger: zerolog.Nop(), Breaker: fb, Metrics: mc}), fb, mc
@@ -348,7 +347,10 @@ func TestClient_Permissions_InvalidShape(t *testing.T) {
 
 func TestClient_CheckAuth_Reachable(t *testing.T) {
 	t.Parallel()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "" {
+			t.Errorf("Authorization = %q; want empty for health probe", got)
+		}
 		_, _ = w.Write([]byte(validBody))
 	}))
 	t.Cleanup(srv.Close)
@@ -465,7 +467,6 @@ func TestPermissions_OutboundRequestID_InvalidSubstituted(t *testing.T) {
 
 	c := New(Config{
 		BackendURL:     srv.URL,
-		ServiceToken:   "svc-tok",
 		RequestTimeout: 2 * time.Second,
 	}, Deps{Logger: logger, Metrics: metrics.New()})
 
@@ -516,7 +517,6 @@ func TestPermissions_OutboundRequestID_Truncated_LogsBoundedOriginal(t *testing.
 
 	c := New(Config{
 		BackendURL:     srv.URL,
-		ServiceToken:   "svc-tok",
 		RequestTimeout: 2 * time.Second,
 	}, Deps{Logger: logger, Metrics: metrics.New()})
 
@@ -587,7 +587,6 @@ func TestPermissions_OutboundRequestID_ValidPassedThrough(t *testing.T) {
 
 	c := New(Config{
 		BackendURL:     srv.URL,
-		ServiceToken:   "svc-tok",
 		RequestTimeout: 2 * time.Second,
 	}, Deps{Logger: logger, Metrics: metrics.New()})
 
@@ -640,7 +639,7 @@ func TestValidOutboundRequestID(t *testing.T) {
 func TestClient_New_PreTouchesAllResultLabels(t *testing.T) {
 	t.Parallel()
 	mc := metrics.New()
-	_ = New(Config{BackendURL: "http://x", ServiceToken: "tok", RequestTimeout: time.Second}, Deps{Logger: zerolog.Nop(), Metrics: mc})
+	_ = New(Config{BackendURL: "http://x", RequestTimeout: time.Second}, Deps{Logger: zerolog.Nop(), Metrics: mc})
 	for _, label := range []string{"ok", "unauthorized", "forbidden", "not_found", "unavailable"} {
 		// gatherCounter returns 0 for both "missing" and "zero". A series
 		// must be present after pre-touch — verify via Gather() families.
@@ -677,7 +676,6 @@ func TestClient_SetBreaker_NilSubstitutesNop(t *testing.T) {
 	fb := &fakeBreaker{}
 	c := New(Config{
 		BackendURL:     "http://x",
-		ServiceToken:   "tok",
 		RequestTimeout: time.Second,
 	}, Deps{Logger: zerolog.Nop(), Breaker: fb, Metrics: metrics.New()})
 
@@ -703,7 +701,6 @@ func TestClient_SetBreaker_InstallsHook(t *testing.T) {
 	t.Parallel()
 	c := New(Config{
 		BackendURL:     "http://x",
-		ServiceToken:   "tok",
 		RequestTimeout: time.Second,
 	}, Deps{Logger: zerolog.Nop(), Breaker: nil, Metrics: metrics.New()})
 

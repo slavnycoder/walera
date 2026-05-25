@@ -113,11 +113,7 @@ services:
       # Auth — Phase 05 mock-auth on the testbench-net bridge. The env var
       # below maps to koanf path auth.backend_url (config.go:351 validation).
       WALERA_AUTH_BACKEND_URL: "http://mock-auth:9000"
-      # Service token: validate() at config.go:354-356 requires non-empty
-      # even though mock-auth ignores it (the v1.0 auth client forwards the
-      # client's Bearer token). Use a placeholder that is obviously not a
-      # real secret; overridable via WALERA_AUTH_SERVICE_TOKEN in .env.
-      WALERA_AUTH_SERVICE_TOKEN: "${WALERA_AUTH_SERVICE_TOKEN:-demo-unused}"
+      WALERA_AUTH_ALLOW_PLAINTEXT: "1"
       # HTTP — CORS for the Phase 08 demo UI at localhost:8081; h2c on by
       # default. Single-string env value is coerced to
       # []string{"http://localhost:8081"} per the contract locked by Plan

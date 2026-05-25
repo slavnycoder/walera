@@ -82,7 +82,6 @@ func newSubTestClient(t *testing.T, server string) (*Client, *metrics.Registry) 
 	mc := metrics.New()
 	cfg := Config{
 		BackendURL:     server,
-		ServiceToken:   "test-service-token",
 		RequestTimeout: 2 * time.Second,
 		HealthChannel:  "_health",
 	}

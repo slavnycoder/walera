@@ -14,7 +14,6 @@ func newK(t *testing.T) *koanf.Koanf {
 	k := koanf.New(".")
 	auth.ApplyDefaults(k)
 	_ = k.Set("auth.backend_url", "https://auth.example/test")
-	_ = k.Set("auth.service_token", "svc-tok")
 	return k
 }
 
@@ -40,15 +39,6 @@ func TestLoadConfig_RequiresBackendURL(t *testing.T) {
 	_, err := auth.LoadConfig(k)
 	if err == nil || !strings.Contains(err.Error(), "auth.backend_url is required") {
 		t.Fatalf("LoadConfig: err = %v; want backend_url required", err)
-	}
-}
-
-func TestLoadConfig_RequiresServiceToken(t *testing.T) {
-	k := newK(t)
-	_ = k.Set("auth.service_token", "")
-	_, err := auth.LoadConfig(k)
-	if err == nil || !strings.Contains(err.Error(), "auth.service_token is required") {
-		t.Fatalf("LoadConfig: err = %v; want service_token required", err)
 	}
 }
 

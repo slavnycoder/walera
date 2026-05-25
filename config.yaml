@@ -5,9 +5,10 @@
 # Single Postgres DSN input. The base URL IS the admin connection; the
 # replication connection is derived from it automatically (replication=database
 # is added at load time). The role MUST have the REPLICATION attribute and the
-# connection MUST NOT route through PgBouncer. Do NOT append
-# replication=database here — config load rejects a base URL that already
-# carries it.
+# connection MUST NOT route through PgBouncer. If replication=database is
+# present by accident, Walera strips it from the admin connection and adds its
+# own canonical replication=database value to the derived replication
+# connection.
 # Example: "postgres://walera:secret@pg.example.com:5432/mydb?sslmode=require"
 database:
   url: ""

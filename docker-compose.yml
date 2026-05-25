@@ -64,7 +64,6 @@ services:
       # auth.backend_url answers.
       WALERA_AUTH_BACKEND_URL: "${AUTH_BACKEND_URL:-http://host.docker.internal:9000}"
       WALERA_AUTH_ALLOW_PLAINTEXT: "1"
-      WALERA_AUTH_SERVICE_TOKEN: "${AUTH_SERVICE_TOKEN:-service-token}"
       WALERA_HTTP_CORS_ORIGINS: "${CORS_ORIGINS:-http://localhost:3000,http://localhost:5173}"
       GOGC: "200"
       GOMEMLIMIT: "6500MiB"

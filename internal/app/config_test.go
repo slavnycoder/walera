@@ -20,14 +20,12 @@ func writeTempYAML(t *testing.T, content string) string {
 	return path
 }
 
-// setPhase3RequiredEnv sets the two Phase-3 mandatory env vars
-// (WALERA_AUTH_BACKEND_URL + WALERA_AUTH_SERVICE_TOKEN) needed for Load() to
-// pass validation. Phase-2 tests call this before Load to keep their focus on
-// Phase-2 fields without re-asserting Phase-3 defaults.
+// setPhase3RequiredEnv sets the Phase-3 mandatory auth backend URL needed for
+// Load() to pass validation. Phase-2 tests call this before Load to keep their
+// focus on Phase-2 fields without re-asserting Phase-3 defaults.
 func setPhase3RequiredEnv(t *testing.T) {
 	t.Helper()
 	t.Setenv("WALERA_AUTH_BACKEND_URL", "https://auth.example/test")
-	t.Setenv("WALERA_AUTH_SERVICE_TOKEN", "svc-tok-test")
 }
 
 // TestLoad_YAMLFields verifies that Load() correctly reads fields from a YAML file.
@@ -89,8 +87,8 @@ database:
 	}
 }
 
-// TestLoad_MissingMandatoryFields verifies that Load() returns a non-nil error when
-// mandatory fields are absent (database.url, publication_name).
+// TestLoad_MissingMandatoryFields verifies that Load() returns a non-nil error
+// when mandatory fields are absent.
 func TestLoad_MissingMandatoryFields(t *testing.T) {
 	// Empty YAML file — all mandatory fields are missing.
 	path := writeTempYAML(t, ``)
@@ -332,12 +330,27 @@ func TestLoad_Validate_HttpAddrSchema(t *testing.T) {
 
 // --- Auth + HTTP wiring (formerly tracked separately) ---
 
-// setPhase2RequiredEnv sets every Phase-2 required WAL env var so Load passes
+// setPhase2RequiredEnv sets the mandatory database URL so Load passes
 // validation for tests that focus only on Phase-3 keys.
 func setPhase2RequiredEnv(t *testing.T) {
 	t.Helper()
 	t.Setenv("WALERA_DATABASE_URL", "postgres://a:b@localhost/db")
-	t.Setenv("WALERA_WAL_PUBLICATION_NAME", "pub")
+}
+
+func TestLoad_MinimalConfig(t *testing.T) {
+	t.Setenv("WALERA_DATABASE_URL", "postgres://a:b@localhost/db")
+	t.Setenv("WALERA_AUTH_BACKEND_URL", "https://auth.example/test")
+
+	cfg, err := LoadAppConfig("")
+	if err != nil {
+		t.Fatalf("LoadAppConfig minimal env returned error: %v", err)
+	}
+	if cfg.WAL.PublicationName != "walera_pub" {
+		t.Errorf("WAL.PublicationName = %q; want default walera_pub", cfg.WAL.PublicationName)
+	}
+	if cfg.HTTP.Addr != ":8080" {
+		t.Errorf("HTTP.Addr = %q; want default :8080", cfg.HTTP.Addr)
+	}
 }
 
 // TestConfigPhase3Defaults asserts every documented default for the
@@ -410,11 +423,10 @@ func TestConfigPhase3Defaults(t *testing.T) {
 }
 
 // TestConfigPhase3EnvOverrides asserts env-var overrides reach the unmarshalled
-// Config for backend_url, service_token, and a representative limits int.
+// Config for backend_url and a representative limits int.
 func TestConfigPhase3EnvOverrides(t *testing.T) {
 	setPhase2RequiredEnv(t)
 	t.Setenv("WALERA_AUTH_BACKEND_URL", "https://auth.test")
-	t.Setenv("WALERA_AUTH_SERVICE_TOKEN", "svc-tok")
 	t.Setenv("WALERA_LIMITS_GLOBAL_CONCURRENT", "100")
 
 	cfg, err := LoadAppConfig("")
@@ -425,29 +437,8 @@ func TestConfigPhase3EnvOverrides(t *testing.T) {
 	if cfg.Auth.BackendURL != "https://auth.test" {
 		t.Errorf("Auth.BackendURL: got %q; want %q", cfg.Auth.BackendURL, "https://auth.test")
 	}
-	if cfg.Auth.ServiceToken != "svc-tok" {
-		t.Errorf("Auth.ServiceToken: got %q; want %q", cfg.Auth.ServiceToken, "svc-tok")
-	}
 	if cfg.Limits.GlobalConcurrent != 100 {
 		t.Errorf("Limits.GlobalConcurrent: got %d; want 100", cfg.Limits.GlobalConcurrent)
-	}
-}
-
-// TestConfigPhase3ValidationRequiresServiceToken asserts that Load returns a
-// validation error containing the exact text "auth.service_token is required"
-// when WALERA_AUTH_BACKEND_URL is set but WALERA_AUTH_SERVICE_TOKEN is not.
-func TestConfigPhase3ValidationRequiresServiceToken(t *testing.T) {
-	setPhase2RequiredEnv(t)
-	t.Setenv("WALERA_AUTH_BACKEND_URL", "https://auth.test")
-	// Explicitly unset service token to override any inherited value.
-	t.Setenv("WALERA_AUTH_SERVICE_TOKEN", "")
-
-	_, err := LoadAppConfig("")
-	if err == nil {
-		t.Fatal("Load() expected validation error when auth.service_token empty, got nil")
-	}
-	if !strings.Contains(err.Error(), "auth.service_token is required") {
-		t.Errorf("err = %v; want substring %q", err, "auth.service_token is required")
 	}
 }
 
@@ -747,7 +738,6 @@ func TestLoad_PublicationName_DefaultsWhenEmpty(t *testing.T) {
 func TestLoad_SEC04_HttpsAccepted(t *testing.T) {
 	setPhase2RequiredEnv(t)
 	t.Setenv("WALERA_AUTH_BACKEND_URL", "https://auth.example/test")
-	t.Setenv("WALERA_AUTH_SERVICE_TOKEN", "svc-tok")
 	if _, err := LoadAppConfig(""); err != nil {
 		t.Fatalf("Load() with https returned error: %v", err)
 	}
@@ -756,7 +746,6 @@ func TestLoad_SEC04_HttpsAccepted(t *testing.T) {
 func TestLoad_SEC04_HttpsRequired_NoOverride(t *testing.T) {
 	setPhase2RequiredEnv(t)
 	t.Setenv("WALERA_AUTH_BACKEND_URL", "http://auth.example/test")
-	t.Setenv("WALERA_AUTH_SERVICE_TOKEN", "svc-tok")
 	t.Setenv("WALERA_AUTH_ALLOW_PLAINTEXT", "")
 	_, err := LoadAppConfig("")
 	if err == nil {
@@ -773,7 +762,6 @@ func TestLoad_SEC04_HttpsRequired_NoOverride(t *testing.T) {
 func TestLoad_SEC04_HttpsRequired_OverrideAccepts(t *testing.T) {
 	setPhase2RequiredEnv(t)
 	t.Setenv("WALERA_AUTH_BACKEND_URL", "http://auth.example/test")
-	t.Setenv("WALERA_AUTH_SERVICE_TOKEN", "svc-tok")
 	t.Setenv("WALERA_AUTH_ALLOW_PLAINTEXT", "1")
 	if _, err := LoadAppConfig(""); err != nil {
 		t.Fatalf("Load() with override returned error: %v", err)
@@ -786,7 +774,6 @@ func TestLoad_SEC04_HttpsRequired_OverrideExactlyOne(t *testing.T) {
 		t.Run("override="+v, func(t *testing.T) {
 			setPhase2RequiredEnv(t)
 			t.Setenv("WALERA_AUTH_BACKEND_URL", "http://auth.example/test")
-			t.Setenv("WALERA_AUTH_SERVICE_TOKEN", "svc-tok")
 			t.Setenv("WALERA_AUTH_ALLOW_PLAINTEXT", v)
 			_, err := LoadAppConfig("")
 			if err == nil {
@@ -802,7 +789,6 @@ func TestLoad_SEC04_HttpsRequired_OverrideExactlyOne(t *testing.T) {
 func TestLoad_SEC04_MalformedURL_TreatedAsNonHttps(t *testing.T) {
 	setPhase2RequiredEnv(t)
 	t.Setenv("WALERA_AUTH_BACKEND_URL", "not a url")
-	t.Setenv("WALERA_AUTH_SERVICE_TOKEN", "svc-tok")
 	t.Setenv("WALERA_AUTH_ALLOW_PLAINTEXT", "")
 	_, err := LoadAppConfig("")
 	if err == nil {
@@ -828,7 +814,6 @@ func TestLoad_SEC04_ControlCharURL_TreatedAsNonHttps(t *testing.T) {
 	setPhase2RequiredEnv(t)
 	// \x7f (DEL) is a control character that causes url.Parse to error.
 	t.Setenv("WALERA_AUTH_BACKEND_URL", "https://example.com/\x7f")
-	t.Setenv("WALERA_AUTH_SERVICE_TOKEN", "svc-tok")
 	t.Setenv("WALERA_AUTH_ALLOW_PLAINTEXT", "")
 	_, err := LoadAppConfig("")
 	if err == nil {
@@ -1059,7 +1044,6 @@ func Test_SEC04_HttpAuthBackend_FailsStartup(t *testing.T) {
 	t.Run("http_rejected_without_override", func(t *testing.T) {
 		setPhase2RequiredEnv(t)
 		t.Setenv("WALERA_AUTH_BACKEND_URL", "http://auth.local")
-		t.Setenv("WALERA_AUTH_SERVICE_TOKEN", "svc-tok")
 		// Explicit empty — clears any inherited override from the parent
 		// process env so the test is hermetic. Mirrors
 		// TestLoad_SEC04_HttpsRequired_NoOverride at config_test.go:774.
@@ -1082,7 +1066,6 @@ func Test_SEC04_HttpAuthBackend_FailsStartup(t *testing.T) {
 	t.Run("http_accepted_with_override", func(t *testing.T) {
 		setPhase2RequiredEnv(t)
 		t.Setenv("WALERA_AUTH_BACKEND_URL", "http://auth.local")
-		t.Setenv("WALERA_AUTH_SERVICE_TOKEN", "svc-tok")
 		t.Setenv("WALERA_AUTH_ALLOW_PLAINTEXT", "1")
 		if _, err := LoadAppConfig(""); err != nil {
 			t.Fatalf("Load() with override returned unexpected error: %v", err)
@@ -1092,7 +1075,6 @@ func Test_SEC04_HttpAuthBackend_FailsStartup(t *testing.T) {
 	t.Run("https_baseline_accepted", func(t *testing.T) {
 		setPhase2RequiredEnv(t)
 		t.Setenv("WALERA_AUTH_BACKEND_URL", "https://auth.local")
-		t.Setenv("WALERA_AUTH_SERVICE_TOKEN", "svc-tok")
 		// Even with the override unset/empty, https:// is the valid
 		// baseline.
 		t.Setenv("WALERA_AUTH_ALLOW_PLAINTEXT", "")

@@ -76,7 +76,6 @@ func buildRunWriterHandler(b *testing.B) (*Handler, *WriterPool) {
 
 	authCfg := auth.Config{
 		BackendURL:        "http://127.0.0.1:1", // never dialled — gate is bypassed
-		ServiceToken:      "svc-tok",
 		DefaultTTLSeconds: 60,
 		RequestTimeout:    2 * time.Second,
 		Breaker: auth.BreakerConfig{

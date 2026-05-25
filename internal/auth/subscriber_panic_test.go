@@ -42,7 +42,6 @@ func validSubscriberDeps(t *testing.T) SubscriberDeps {
 	// network call is made on construction.
 	c := New(Config{
 		BackendURL:     "http://127.0.0.1:1",
-		ServiceToken:   "svc",
 		RequestTimeout: time.Second,
 		HealthChannel:  "_health",
 	}, Deps{Logger: zerolog.Nop(), Metrics: metrics.New()})

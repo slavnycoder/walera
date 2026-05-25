@@ -71,11 +71,6 @@ spec:
               value: "200"
             - name: GOMEMLIMIT
               value: "6500MiB"
-            - name: WALERA_AUTH_SERVICE_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: walera-secrets
-                  key: auth_service_token
             - name: WALERA_DATABASE_URL
               valueFrom:
                 secretKeyRef:
