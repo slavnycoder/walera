@@ -29,8 +29,9 @@
 // replication connection strings both come from it. The former
 // WALERA_WAL_POSTGRES_DSN / WALERA_WAL_REPLICATION_DSN inputs are removed.
 //
-// A small allow-list of multi-level keys (wal.bootstrap.*) is remapped
-// explicitly so the env shape stays predictable.
+// A small allow-list of documented multi-level keys (for example
+// wal.bootstrap.*, wal.reconnect.*, and auth.breaker.*) is remapped explicitly
+// so the env shape stays predictable.
 package config
 
 import (
@@ -110,20 +111,15 @@ func LoadKoanf(path string, applyDefaults func(*koanf.Koanf)) (*koanf.Koanf, err
 //
 // Multi-level keys whose flat env name carries a second underscore that
 // maps to a nested koanf path are explicitly remapped. Add new entries when
-// introducing a sub-tree that must be settable from env.
+// introducing a documented sub-tree that must be settable from env.
 func envTransform(key, value string) (string, any) {
 	const prefix = "WALERA_"
 	if !strings.HasPrefix(key, prefix) {
 		return "", nil // ignore — should not happen given the prefix filter
 	}
 	k2 := strings.ToLower(strings.Replace(key[len(prefix):], "_", ".", 1))
-	switch k2 {
-	case "wal.bootstrap_mode":
-		k2 = "wal.bootstrap.mode"
-	case "wal.bootstrap_tables":
-		k2 = "wal.bootstrap.tables"
-	case "wal.bootstrap_create_roles":
-		k2 = "wal.bootstrap.create_roles"
+	if remapped, ok := multiLevelEnvKeys[k2]; ok {
+		k2 = remapped
 	}
 	// Slice-valued keys: split on comma and trim whitespace.
 	switch k2 {
@@ -146,4 +142,19 @@ func envTransform(key, value string) (string, any) {
 		return "", nil
 	}
 	return k2, value
+}
+
+var multiLevelEnvKeys = map[string]string{
+	"auth.breaker_bucket_seconds":         "auth.breaker.bucket_seconds",
+	"auth.breaker_cooldown":               "auth.breaker.cooldown",
+	"auth.breaker_debounce_floor":         "auth.breaker.debounce_floor",
+	"auth.breaker_failure_rate_threshold": "auth.breaker.failure_rate_threshold",
+	"auth.breaker_stale_refresh_jitter":   "auth.breaker.stale_refresh_jitter",
+	"auth.breaker_window_buckets":         "auth.breaker.window_buckets",
+
+	"wal.bootstrap_create_roles": "wal.bootstrap.create_roles",
+	"wal.bootstrap_mode":         "wal.bootstrap.mode",
+	"wal.bootstrap_tables":       "wal.bootstrap.tables",
+
+	"wal.reconnect_reset_after_success_duration": "wal.reconnect.reset_after_success_duration",
 }

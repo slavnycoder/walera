@@ -59,10 +59,17 @@ func TestLoadKoanf_AppliesDefaults(t *testing.T) {
 }
 
 // TestLoadKoanf_EnvTransform_MultiLevelRemap exercises the explicit env
-// remap allow-list (wal.bootstrap_* → wal.bootstrap.*).
+// remap allow-list for documented nested config keys.
 func TestLoadKoanf_EnvTransform_MultiLevelRemap(t *testing.T) {
 	t.Setenv("WALERA_WAL_BOOTSTRAP_MODE", "verify")
 	t.Setenv("WALERA_WAL_BOOTSTRAP_CREATE_ROLES", "true")
+	t.Setenv("WALERA_WAL_RECONNECT_RESET_AFTER_SUCCESS_DURATION", "45s")
+	t.Setenv("WALERA_AUTH_BREAKER_WINDOW_BUCKETS", "7")
+	t.Setenv("WALERA_AUTH_BREAKER_BUCKET_SECONDS", "3")
+	t.Setenv("WALERA_AUTH_BREAKER_FAILURE_RATE_THRESHOLD", "0.75")
+	t.Setenv("WALERA_AUTH_BREAKER_DEBOUNCE_FLOOR", "4")
+	t.Setenv("WALERA_AUTH_BREAKER_COOLDOWN", "11s")
+	t.Setenv("WALERA_AUTH_BREAKER_STALE_REFRESH_JITTER", "2s")
 	k, err := config.LoadKoanf("", nil)
 	if err != nil {
 		t.Fatalf("LoadKoanf: %v", err)
@@ -72,6 +79,27 @@ func TestLoadKoanf_EnvTransform_MultiLevelRemap(t *testing.T) {
 	}
 	if got := k.Bool("wal.bootstrap.create_roles"); !got {
 		t.Errorf("wal.bootstrap.create_roles = %v; want true", got)
+	}
+	if got := k.String("wal.reconnect.reset_after_success_duration"); got != "45s" {
+		t.Errorf("wal.reconnect.reset_after_success_duration = %q; want 45s", got)
+	}
+	if got := k.String("auth.breaker.window_buckets"); got != "7" {
+		t.Errorf("auth.breaker.window_buckets = %q; want 7", got)
+	}
+	if got := k.String("auth.breaker.bucket_seconds"); got != "3" {
+		t.Errorf("auth.breaker.bucket_seconds = %q; want 3", got)
+	}
+	if got := k.String("auth.breaker.failure_rate_threshold"); got != "0.75" {
+		t.Errorf("auth.breaker.failure_rate_threshold = %q; want 0.75", got)
+	}
+	if got := k.String("auth.breaker.debounce_floor"); got != "4" {
+		t.Errorf("auth.breaker.debounce_floor = %q; want 4", got)
+	}
+	if got := k.String("auth.breaker.cooldown"); got != "11s" {
+		t.Errorf("auth.breaker.cooldown = %q; want 11s", got)
+	}
+	if got := k.String("auth.breaker.stale_refresh_jitter"); got != "2s" {
+		t.Errorf("auth.breaker.stale_refresh_jitter = %q; want 2s", got)
 	}
 }
 
