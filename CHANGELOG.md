@@ -7,15 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-<!-- Update YYYY-MM-DD to the v2.0.0 tag date before publishing the release. -->
-## [2.0.0] - YYYY-MM-DD
+## [1.0.0] - 2026-05-25
 
-The v2.0 milestone is a comprehensive code-style and lifecycle-hardening
-pass over the v1.x service. There are no breaking changes to the SSE
-client contract (`/sse/v1/`), the auth-backend protocol, or the
-PostgreSQL prerequisites. The user-visible delta is concentrated in
-documentation, operational tooling, configuration surface, and CI
-gating.
+Initial public release of Walera: PostgreSQL CDC over SSE with
+authorization refresh, routing fan-out, slow-client handling, Prometheus
+metrics, health endpoints, container publishing, and deployment
+documentation.
 
 ### Added
 
