@@ -13,7 +13,6 @@ import (
 	"go.uber.org/automaxprocs/maxprocs"
 
 	"github.com/walera/walera/internal/app"
-	"github.com/walera/walera/internal/wal"
 	"github.com/walera/walera/internal/walconn"
 )
 
@@ -52,8 +51,6 @@ func main() {
 	} else {
 		logger = logger.Level(level)
 	}
-	wal.NaiveTimestampAssumeUTC = cfg.WAL.NaiveTimestampAssumeUTC
-
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 

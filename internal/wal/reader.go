@@ -227,7 +227,7 @@ func (r *Reader) tickStandby(ctx context.Context) {
 
 func (r *Reader) runLoop(ctx context.Context) error {
 
-	txBld := newTxBuilder()
+	txBld := newTxBuilderWithConfig(r.cfg)
 	relCache := newRelationCache()
 
 	tickerCtx, tickerCancel := context.WithCancel(ctx)

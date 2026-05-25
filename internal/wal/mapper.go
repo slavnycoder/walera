@@ -10,7 +10,15 @@ import (
 	"time"
 )
 
-var NaiveTimestampAssumeUTC bool = true
+const defaultNaiveTimestampAssumeUTC = true
+
+type valueMapper struct {
+	naiveTimestampAssumeUTC bool
+}
+
+func newValueMapper(cfg Config) valueMapper {
+	return valueMapper{naiveTimestampAssumeUTC: cfg.NaiveTimestampAssumeUTC}
+}
 
 const (
 	OIDInt2        uint32 = 21
@@ -86,6 +94,10 @@ var pgTimestampTZFormats = []string{
 }
 
 func mapValue(oid uint32, raw []byte, isNull bool) (any, error) {
+	return valueMapper{naiveTimestampAssumeUTC: defaultNaiveTimestampAssumeUTC}.mapValue(oid, raw, isNull)
+}
+
+func (m valueMapper) mapValue(oid uint32, raw []byte, isNull bool) (any, error) {
 	if isNull {
 		return nil, nil
 	}
@@ -132,7 +144,7 @@ func mapValue(oid uint32, raw []byte, isNull bool) (any, error) {
 		return s, nil
 
 	case OIDTimestamp:
-		t, err := parseNaiveTimestamp(s)
+		t, err := m.parseNaiveTimestamp(s)
 		if err != nil {
 			return nil, fmt.Errorf("wal: OID 1114 (timestamp): %w", err)
 		}
@@ -190,7 +202,7 @@ func mapValue(oid uint32, raw []byte, isNull bool) (any, error) {
 		OIDBpcharArray, OIDFloat4Array, OIDFloat8Array, OIDBoolArray, OIDUUIDArray,
 		OIDNumericArray:
 		elemOID := arrayElementOID[oid]
-		return parseArray(s, elemOID)
+		return m.parseArray(s, elemOID)
 
 	default:
 
@@ -199,9 +211,13 @@ func mapValue(oid uint32, raw []byte, isNull bool) (any, error) {
 }
 
 func parseNaiveTimestamp(s string) (time.Time, error) {
+	return valueMapper{naiveTimestampAssumeUTC: defaultNaiveTimestampAssumeUTC}.parseNaiveTimestamp(s)
+}
+
+func (m valueMapper) parseNaiveTimestamp(s string) (time.Time, error) {
 	for _, layout := range pgTimestampFormats {
 		if t, err := time.Parse(layout, s); err == nil {
-			if NaiveTimestampAssumeUTC {
+			if m.naiveTimestampAssumeUTC {
 
 				t = time.Date(t.Year(), t.Month(), t.Day(),
 					t.Hour(), t.Minute(), t.Second(), t.Nanosecond(), time.UTC)
@@ -356,7 +372,7 @@ func parseInterval(s string) (string, error) {
 	return result, nil
 }
 
-func parseArray(s string, elemOID uint32) (any, error) {
+func (m valueMapper) parseArray(s string, elemOID uint32) (any, error) {
 	s = strings.TrimSpace(s)
 	if len(s) < 2 || s[0] != '{' || s[len(s)-1] != '}' {
 
@@ -385,7 +401,7 @@ func parseArray(s string, elemOID uint32) (any, error) {
 			result = append(result, nil)
 			continue
 		}
-		v, err := mapValue(elemOID, []byte(elem), false)
+		v, err := m.mapValue(elemOID, []byte(elem), false)
 		if err != nil {
 			return nil, fmt.Errorf("wal: parse array element %q: %w", elem, err)
 		}

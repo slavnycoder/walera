@@ -14,10 +14,15 @@ type inFlightTx struct {
 
 type txBuilder struct {
 	inFlight *inFlightTx
+	mapper   valueMapper
 }
 
 func newTxBuilder() *txBuilder {
-	return &txBuilder{}
+	return newTxBuilderWithConfig(Config{NaiveTimestampAssumeUTC: defaultNaiveTimestampAssumeUTC})
+}
+
+func newTxBuilderWithConfig(cfg Config) *txBuilder {
+	return &txBuilder{mapper: newValueMapper(cfg)}
 }
 
 func (b *txBuilder) Reset() {
@@ -51,7 +56,7 @@ func (b *txBuilder) HandleInsert(msg *pglogrepl.InsertMessage, cache *relationCa
 		Op:     OpInsert,
 	}
 
-	data, pk, pkCol, err := buildDataMap(msg.Tuple, rel)
+	data, pk, pkCol, err := buildDataMap(msg.Tuple, rel, b.mapper)
 	if err != nil {
 		return fmt.Errorf("wal: HandleInsert %s.%s: %w", rel.Schema, rel.Table, err)
 	}
@@ -79,7 +84,7 @@ func (b *txBuilder) HandleUpdate(msg *pglogrepl.UpdateMessage, cache *relationCa
 		Op:     OpUpdate,
 	}
 
-	changed, pk, pkCol, err := buildChangedMap(msg.NewTuple, rel)
+	changed, pk, pkCol, err := buildChangedMap(msg.NewTuple, rel, b.mapper)
 	if err != nil {
 		return fmt.Errorf("wal: HandleUpdate %s.%s: %w", rel.Schema, rel.Table, err)
 	}
@@ -141,7 +146,7 @@ func (b *txBuilder) HandleCommit(msg *pglogrepl.CommitMessage) *Tx {
 	return tx
 }
 
-func buildDataMap(tuple *pglogrepl.TupleData, rel *relationInfo) (data map[string]any, pk, pkCol string, err error) {
+func buildDataMap(tuple *pglogrepl.TupleData, rel *relationInfo, mapper valueMapper) (data map[string]any, pk, pkCol string, err error) {
 	if tuple == nil {
 		return nil, "", "", nil
 	}
@@ -159,7 +164,7 @@ func buildDataMap(tuple *pglogrepl.TupleData, rel *relationInfo) (data map[strin
 		relCol := rel.Columns[i]
 
 		isNull := col.DataType == pglogrepl.TupleDataTypeNull
-		v, mapErr := mapValue(relCol.DataType, col.Data, isNull)
+		v, mapErr := mapper.mapValue(relCol.DataType, col.Data, isNull)
 		if mapErr != nil {
 			return nil, "", "", fmt.Errorf("column %q: %w", relCol.Name, mapErr)
 		}
@@ -173,7 +178,7 @@ func buildDataMap(tuple *pglogrepl.TupleData, rel *relationInfo) (data map[strin
 	return data, pk, pkCol, nil
 }
 
-func buildChangedMap(tuple *pglogrepl.TupleData, rel *relationInfo) (changed map[string]any, pk, pkCol string, err error) {
+func buildChangedMap(tuple *pglogrepl.TupleData, rel *relationInfo, mapper valueMapper) (changed map[string]any, pk, pkCol string, err error) {
 	if tuple == nil {
 		return nil, "", "", nil
 	}
@@ -195,7 +200,7 @@ func buildChangedMap(tuple *pglogrepl.TupleData, rel *relationInfo) (changed map
 		}
 
 		isNull := col.DataType == pglogrepl.TupleDataTypeNull
-		v, mapErr := mapValue(relCol.DataType, col.Data, isNull)
+		v, mapErr := mapper.mapValue(relCol.DataType, col.Data, isNull)
 		if mapErr != nil {
 			return nil, "", "", fmt.Errorf("column %q: %w", relCol.Name, mapErr)
 		}

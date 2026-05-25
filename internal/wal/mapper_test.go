@@ -199,8 +199,8 @@ func TestMapValueTimestampNaiveUTCToggle(t *testing.T) {
 
 	raw := []byte("2026-05-14 10:23:45.123456")
 
-	NaiveTimestampAssumeUTC = true
-	got, err := mapValue(OIDTimestamp, raw, false)
+	utcMapper := valueMapper{naiveTimestampAssumeUTC: true}
+	got, err := utcMapper.mapValue(OIDTimestamp, raw, false)
 	if err != nil {
 		t.Fatalf("NaiveTimestampAssumeUTC=true: unexpected error: %v", err)
 	}
@@ -209,8 +209,8 @@ func TestMapValueTimestampNaiveUTCToggle(t *testing.T) {
 		t.Errorf("NaiveTimestampAssumeUTC=true: got %q, want %q", gotStr, "2026-05-14T10:23:45.123456Z")
 	}
 
-	NaiveTimestampAssumeUTC = false
-	got2, err := mapValue(OIDTimestamp, raw, false)
+	localMapper := valueMapper{naiveTimestampAssumeUTC: false}
+	got2, err := localMapper.mapValue(OIDTimestamp, raw, false)
 	if err != nil {
 		t.Fatalf("NaiveTimestampAssumeUTC=false: unexpected error: %v", err)
 	}
@@ -219,8 +219,6 @@ func TestMapValueTimestampNaiveUTCToggle(t *testing.T) {
 	if gotStr2 == "" {
 		t.Errorf("NaiveTimestampAssumeUTC=false: got empty string")
 	}
-
-	NaiveTimestampAssumeUTC = true
 }
 
 func TestMapValueTimestampTZPrecision(t *testing.T) {
@@ -435,7 +433,7 @@ func TestChangeKey(t *testing.T) {
 
 func TestNaiveTimestampParseFallback(t *testing.T) {
 
-	NaiveTimestampAssumeUTC = true
+	mapper := valueMapper{naiveTimestampAssumeUTC: true}
 	cases := []struct {
 		raw  string
 		want string
@@ -445,7 +443,7 @@ func TestNaiveTimestampParseFallback(t *testing.T) {
 		{"2026-05-14 10:23:45.123456789", "2026-05-14T10:23:45.123456789Z"},
 	}
 	for _, tc := range cases {
-		got, err := mapValue(OIDTimestamp, []byte(tc.raw), false)
+		got, err := mapper.mapValue(OIDTimestamp, []byte(tc.raw), false)
 		if err != nil {
 			t.Errorf("raw=%q: unexpected error: %v", tc.raw, err)
 			continue
