@@ -10,9 +10,8 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/rs/zerolog"
-
-	"github.com/walera/walera/internal/walconn"
 )
 
 var pgRoleNameRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,62}$`)
@@ -26,9 +25,14 @@ type bootstrapConfig struct {
 	PostgresDSN     string
 }
 
-func verifyPGPrereqs(ctx context.Context, adminConn walconn.AdminConn, logger zerolog.Logger) error {
+type bootstrapDB interface {
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+}
 
-	conn := (*pgx.Conn)(adminConn)
+func verifyPGPrereqs(ctx context.Context, conn bootstrapDB, logger zerolog.Logger) error {
+
 	readPGSetting := func(name string) (string, error) {
 		var setting string
 		if err := conn.QueryRow(ctx,
@@ -75,9 +79,7 @@ func verifyPGPrereqs(ctx context.Context, adminConn walconn.AdminConn, logger ze
 	return nil
 }
 
-func verifyReplicationRole(ctx context.Context, adminConn walconn.AdminConn, logger zerolog.Logger) error {
-
-	conn := (*pgx.Conn)(adminConn)
+func verifyReplicationRole(ctx context.Context, conn bootstrapDB, logger zerolog.Logger) error {
 	var (
 		rolname        string
 		rolreplication bool
@@ -104,8 +106,7 @@ func verifyReplicationRole(ctx context.Context, adminConn walconn.AdminConn, log
 	return nil
 }
 
-func bootstrapPublication(ctx context.Context, adminConn walconn.AdminConn, cfg bootstrapConfig, logger zerolog.Logger) error {
-	conn := (*pgx.Conn)(adminConn)
+func bootstrapPublication(ctx context.Context, conn bootstrapDB, cfg bootstrapConfig, logger zerolog.Logger) error {
 	switch cfg.Mode {
 	case "off":
 		logger.Info().
@@ -130,8 +131,8 @@ func bootstrapPublication(ctx context.Context, adminConn walconn.AdminConn, cfg 
 	case "auto":
 
 		if cfg.CreateRoles {
-			bootstrapEnsureRole(ctx, walconn.AdminConn(conn), cfg.ReplicationDSN, true, logger)
-			bootstrapEnsureRole(ctx, walconn.AdminConn(conn), cfg.PostgresDSN, false, logger)
+			bootstrapEnsureRole(ctx, conn, cfg.ReplicationDSN, true, logger)
+			bootstrapEnsureRole(ctx, conn, cfg.PostgresDSN, false, logger)
 		}
 
 		var exists bool
@@ -162,7 +163,7 @@ func bootstrapPublication(ctx context.Context, adminConn walconn.AdminConn, cfg 
 					Msg("publication check passed")
 			}
 			if len(cfg.Tables) > 0 {
-				bootstrapVerifyTables(ctx, walconn.AdminConn(conn), cfg.PublicationName, cfg.Tables, logger)
+				bootstrapVerifyTables(ctx, conn, cfg.PublicationName, cfg.Tables, logger)
 			}
 		} else {
 
@@ -197,8 +198,7 @@ func bootstrapPublication(ctx context.Context, adminConn walconn.AdminConn, cfg 
 	return nil
 }
 
-func checkSlotHeadroom(ctx context.Context, adminConn walconn.AdminConn, headroomMin int, slotName string, logger zerolog.Logger) {
-	conn := (*pgx.Conn)(adminConn)
+func checkSlotHeadroom(ctx context.Context, conn bootstrapDB, headroomMin int, slotName string, logger zerolog.Logger) {
 	var maxSlots, usedSlots int
 	if err := conn.QueryRow(ctx,
 		"SELECT setting::int FROM pg_settings WHERE name = 'max_replication_slots'",
@@ -229,8 +229,7 @@ func checkSlotHeadroom(ctx context.Context, adminConn walconn.AdminConn, headroo
 		Msg("slot headroom check passed")
 }
 
-func bootstrapEnsureRole(ctx context.Context, adminConn walconn.AdminConn, dsn string, isReplication bool, logger zerolog.Logger) {
-	conn := (*pgx.Conn)(adminConn)
+func bootstrapEnsureRole(ctx context.Context, conn bootstrapDB, dsn string, isReplication bool, logger zerolog.Logger) {
 	u, err := url.Parse(dsn)
 	if err != nil || u.User == nil {
 		logger.Warn().Err(err).
@@ -302,8 +301,7 @@ func bootstrapEnsureRole(ctx context.Context, adminConn walconn.AdminConn, dsn s
 	}
 }
 
-func bootstrapVerifyTables(ctx context.Context, adminConn walconn.AdminConn, publication string, want []string, logger zerolog.Logger) {
-	conn := (*pgx.Conn)(adminConn)
+func bootstrapVerifyTables(ctx context.Context, conn bootstrapDB, publication string, want []string, logger zerolog.Logger) {
 	rows, err := conn.Query(ctx,
 		"SELECT schemaname || '.' || tablename FROM pg_publication_tables WHERE pubname = $1",
 		publication,
