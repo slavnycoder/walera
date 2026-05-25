@@ -105,7 +105,7 @@ func (h *Handler) clientIP(r *http.Request) string {
 }
 
 // writeStatusOnlyError writes a status-code-only response (no body) with
-// optional Retry-After header. Used by gates 1, 2, 4 and the 5xx auth
+// optional Retry-After header. Used by gates 1, 2, 4, 5 and the 5xx auth
 // response. Vary: Origin is set unconditionally via handleCORS.
 func (h *Handler) writeStatusOnlyError(w http.ResponseWriter, r *http.Request, status, retryAfterSeconds int) {
 	handleCORS(w, r, h.cfg.CORSOrigins)
@@ -151,7 +151,7 @@ func (h *Handler) writeAuthError(w http.ResponseWriter, r *http.Request, err err
 }
 
 // writeJSONReason writes an application/json error body of the form
-// {"reason":"..."}. Used by gates 5 and 6 (and the auth-revoked SSE
+// {"reason":"..."}. Used by gate 6 (and the auth-revoked SSE
 // error frame mirrors this shape on the wire). Typed struct +
 // json.NewEncoder eliminates byte-string concatenation.
 func (h *Handler) writeJSONReason(w http.ResponseWriter, r *http.Request, status int, reason string) {
@@ -175,7 +175,7 @@ type handshakeResult struct {
 	perUserAcquired bool
 }
 
-// runHandshake executes the five SSE handshake gates in order (see
+// runHandshake executes the six SSE handshake gates in order (see
 // INVARIANTS.md §10) and writes the matching HTTP error response on the
 // first failure. On success (ok=true) the caller releases limits via
 // ReleaseGlobal / ReleasePerUser using the flags returned in
@@ -233,7 +233,13 @@ func (h *Handler) runHandshake(w http.ResponseWriter, r *http.Request, table, ch
 	}
 	res.perUserAcquired = true
 
-	// --- Gate 5: table in whitelist ---
+	// --- Gate 5: per-user open rate ---
+	if !h.limits.AllowPerUserRate(userID) {
+		h.writeStatusOnlyError(w, r, http.StatusTooManyRequests, 1)
+		return res, false
+	}
+
+	// --- Gate 6: table in whitelist ---
 	if _, ok := authMap.Tables[table]; !ok {
 		h.writeJSONReason(w, r, http.StatusForbidden, "not_allowed")
 		return res, false

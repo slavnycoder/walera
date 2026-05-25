@@ -214,13 +214,13 @@ func TestLimits_AllowPreAuthRate_TokenBucket(t *testing.T) {
 func TestLimits_AllowPerUserRate_TokenBucket(t *testing.T) {
 	t.Parallel()
 	l := mkLimits(t, 100, 100)
-	if !l.allowPerUserRate("u1") {
+	if !l.AllowPerUserRate("u1") {
 		t.Fatal("first AllowPerUserRate: got false; want true")
 	}
-	if !l.allowPerUserRate("u1") {
+	if !l.AllowPerUserRate("u1") {
 		t.Fatal("second AllowPerUserRate: got false; want true")
 	}
-	if l.allowPerUserRate("u1") {
+	if l.AllowPerUserRate("u1") {
 		t.Fatal("third AllowPerUserRate: got true; want false")
 	}
 	if v := gatherCounter(t, l.mc, "walera_limit_rejected_total", "kind", "per_user_rate"); v != 1 {
@@ -302,7 +302,7 @@ func TestLimits_PerUserRateRetryAfter(t *testing.T) {
 		t.Errorf("PerUserRateRetryAfter(absent): got %s; want 1s", got)
 	}
 	// Populate via Allow then call RetryAfter — should be non-negative.
-	_ = l.allowPerUserRate("u1")
+	_ = l.AllowPerUserRate("u1")
 	d := l.perUserRateRetryAfter("u1")
 	if d < 0 {
 		t.Errorf("PerUserRateRetryAfter(populated): got %s; want >= 0", d)

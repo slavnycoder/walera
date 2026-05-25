@@ -38,7 +38,7 @@ func (h *Handler) writeSSEHeaders(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-// runWriter is invoked by runHandshakeAndWriter after all five gates
+// runWriter is invoked by runHandshakeAndWriter after all six gates
 // pass. Builds router.Subscriber + auth.Subscriber, wires the auth
 // refresh ticker, emits SSE headers, hijacks the TCP conn (or falls
 // back to respWriter+rc on TLS/h2c), attaches to the WriterPool,

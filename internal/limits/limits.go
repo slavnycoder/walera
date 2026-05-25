@@ -1,7 +1,7 @@
 // Package limits — limits.go implements the admission-control gates.
 //
 // All four gates are non-blocking: AcquireGlobal / AcquirePerUser /
-// AllowPreAuthRate / allowPerUserRate return bool. Callers translate false
+// AllowPreAuthRate / AllowPerUserRate return bool. Callers translate false
 // to a 429/503 response with the appropriate Retry-After header.
 package limits
 
@@ -210,8 +210,8 @@ func (l *Limits) AllowPreAuthRate(clientIP string) bool {
 	return true
 }
 
-// allowPerUserRate consults the per-user token bucket.
-func (l *Limits) allowPerUserRate(userID string) bool {
+// AllowPerUserRate consults the per-user token bucket.
+func (l *Limits) AllowPerUserRate(userID string) bool {
 	v, _ := l.perUserRate.LoadOrStore(userID, &rateEntry{
 		lim: rate.NewLimiter(rate.Limit(l.cfg.PerUserRatePerSecond), l.cfg.PerUserBurst),
 	})

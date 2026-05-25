@@ -1089,6 +1089,52 @@ func TestHandshake_PerUserConcurrentExceeded(t *testing.T) {
 	}
 }
 
+// TestHandshake_PerUserRateExceeded — after auth identifies user_id, the
+// post-auth token bucket rejects reconnect spam even below the concurrency cap.
+func TestHandshake_PerUserRateExceeded(t *testing.T) {
+	t.Parallel()
+	lcfg := &limits.Config{
+		GlobalConcurrent:     1024,
+		PerUserConcurrentMax: 10,
+		PerUserRatePerSecond: 0.0001, PerUserBurst: 1, // effectively single-use
+		PreAuthRatePerSecond: 100, PreAuthBurst: 100,
+		SweepInterval:      60 * time.Second,
+		SweepIdleThreshold: 5 * time.Minute,
+	}
+	kit := newTestHandler(t, nil, lcfg)
+	validMapBackend(kit.backend)
+	srv := newTestServer(t, kit.h)
+
+	first, err := http.DefaultClient.Do(validRequest(t, srv.URL+"/sse/v1/users/42"))
+	if err != nil {
+		t.Fatalf("first Do: %v", err)
+	}
+	defer first.Body.Close()
+	if first.StatusCode != http.StatusOK {
+		t.Fatalf("first status = %d; want 200", first.StatusCode)
+	}
+	sub := kit.bc.firstSub(t)
+	defer func() {
+		sub.Drop("test")
+		_, _ = io.Copy(io.Discard, first.Body)
+	}()
+
+	resp, err := http.DefaultClient.Do(validRequest(t, srv.URL+"/sse/v1/users/42"))
+	if err != nil {
+		t.Fatalf("second Do: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusTooManyRequests {
+		t.Errorf("second status = %d; want 429", resp.StatusCode)
+	}
+	if got := resp.Header.Get("Retry-After"); got != "1" {
+		t.Errorf("Retry-After = %q; want %q", got, "1")
+	}
+	if got := gatherCounterValue(t, kit.limits.Metrics(), "walera_limit_rejected_total", "kind", "per_user_rate"); got != 1 {
+		t.Errorf("limit_rejected_total{kind=per_user_rate}: got %v; want 1", got)
+	}
+}
+
 // TestHandshake_LegacyRootsIgnored — a backend that still emits the legacy
 // `roots` field (whose value is unrelated to Tables) must not affect the
 // authorization decision. The requested table comes from the URL/channel and
