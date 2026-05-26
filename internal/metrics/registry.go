@@ -28,6 +28,8 @@ type Registry struct {
 	walStandbyACKFailures prometheus.Counter
 
 	routingFanOut        prometheus.Histogram
+	txFanOutWork         prometheus.Histogram
+	coBeyondAnchorTotal  prometheus.Counter
 	routingIndexSize     *prometheus.GaugeVec
 	subscriberQueueDepth *prometheus.HistogramVec
 	subscriberLifetime   prometheus.Histogram
@@ -69,6 +71,8 @@ func New() *Registry {
 		r.walTxSizeChanges,
 		r.walDecodeDuration,
 		r.routingFanOut,
+		r.txFanOutWork,
+		r.coBeyondAnchorTotal,
 		r.routingIndexSize,
 		r.subscriberQueueDepth,
 		r.subscriberLifetime,
@@ -89,10 +93,12 @@ func New() *Registry {
 		},
 	))
 
+	r.coBeyondAnchorTotal.Add(0)
 	r.routingIndexSize.WithLabelValues("exact").Add(0)
 	r.routingIndexSize.WithLabelValues("wildcard").Add(0)
 	r.subscriberQueueDepth.WithLabelValues("exact").Observe(0)
 	r.subscriberQueueDepth.WithLabelValues("wildcard").Observe(0)
+	r.txFanOutWork.Observe(0)
 	for _, result := range []string{"ok", "unauthorized", "forbidden", "not_found", "unavailable"} {
 		r.authRefreshTotal.WithLabelValues(result).Add(0)
 	}
@@ -245,6 +251,17 @@ func newRouterMetrics(r *Registry) {
 		Help:    "Number of subscribers matched per tx (per-tx fan-out).",
 		Buckets: []float64{1, 5, 25, 100, 500, 2500, 10000},
 	})
+	r.txFanOutWork = prometheus.NewHistogram(prometheus.HistogramOpts{
+		Name: "walera_tx_fan_out_work",
+		Help: "Per-transaction delivered-change fan-out work (Σ post-filter delivered changes across eligible subscribers). Observe-only; the per-subscriber post-filter MaxChangesPerTx cap is the protective control.",
+		// Buckets extend the walera_routing_fan_out tail to 50000 because
+		// work = changes × subscribers can exceed pure fan-out counts.
+		Buckets: []float64{1, 5, 25, 100, 500, 2500, 10000, 50000},
+	})
+	r.coBeyondAnchorTotal = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "walera_co_tx_beyond_anchor_total",
+		Help: "Cumulative delivered changes that a subscriber received from a matched transaction beyond their own anchor-matched key(s) — the incremental volume added by whole-transaction delivery. Observe-only; complements walera_tx_fan_out_work.",
+	})
 	r.routingIndexSize = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "walera_routing_index_size",
 		Help: "Subscribers registered per index kind, sampled every 30s.",
@@ -316,6 +333,10 @@ func (r *Registry) WALTxSizeChanges() prometheus.Histogram { return r.walTxSizeC
 func (r *Registry) WALDecodeDuration() prometheus.Histogram { return r.walDecodeDuration }
 
 func (r *Registry) RoutingFanOut() prometheus.Histogram { return r.routingFanOut }
+
+func (r *Registry) TxFanOutWork() prometheus.Histogram { return r.txFanOutWork }
+
+func (r *Registry) CoBeyondAnchorTotal() prometheus.Counter { return r.coBeyondAnchorTotal }
 
 func (r *Registry) RoutingIndexSize(kind string) prometheus.Gauge {
 	return r.routingIndexSize.WithLabelValues(kind)

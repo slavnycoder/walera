@@ -8,6 +8,93 @@ import (
 	dto "github.com/prometheus/client_model/go"
 )
 
+// TestRegistry_TxFanOutWork_PreTouched asserts that walera_tx_fan_out_work is
+// present in Gather() output from a freshly constructed Registry (pre-touch
+// confirmed — no gap from t=0) and that TxFanOutWork() returns a non-nil
+// prometheus.Histogram on which Observe can be called.
+func TestRegistry_TxFanOutWork_PreTouched(t *testing.T) {
+	t.Parallel()
+	r := New()
+
+	h := r.TxFanOutWork()
+	if h == nil {
+		t.Fatal("TxFanOutWork() returned nil")
+	}
+	// Verify the accessor returns a usable histogram (should not panic).
+	h.Observe(42)
+
+	mfs, err := r.Gatherer().Gather()
+	if err != nil {
+		t.Fatalf("Gather: %v", err)
+	}
+	var found *dto.MetricFamily
+	for _, mf := range mfs {
+		if mf.GetName() == "walera_tx_fan_out_work" {
+			found = mf
+			break
+		}
+	}
+	if found == nil {
+		t.Fatal("walera_tx_fan_out_work not in Gather() output — pre-touch or registration missing")
+	}
+
+	// The series must be present even before any caller-driven Observe (pre-touch).
+	// After our Observe(42) above the histogram should have at least one sample.
+	ms := found.GetMetric()
+	if len(ms) == 0 {
+		t.Fatal("walera_tx_fan_out_work: no Metric children")
+	}
+	if ms[0].GetHistogram() == nil {
+		t.Fatal("walera_tx_fan_out_work: not a Histogram")
+	}
+}
+
+// TestRegistry_TxFanOutWork_Buckets asserts the histogram uses the expected
+// extended bucket set aligned with the plan spec (tail extended to 50000 to
+// cover work = changes × subscribers which can exceed pure fan-out).
+func TestRegistry_TxFanOutWork_Buckets(t *testing.T) {
+	t.Parallel()
+	r := New()
+
+	mfs, err := r.Gatherer().Gather()
+	if err != nil {
+		t.Fatalf("Gather: %v", err)
+	}
+	var found *dto.MetricFamily
+	for _, mf := range mfs {
+		if mf.GetName() == "walera_tx_fan_out_work" {
+			found = mf
+			break
+		}
+	}
+	if found == nil {
+		t.Fatal("walera_tx_fan_out_work not in Gather() output")
+	}
+	ms := found.GetMetric()
+	if len(ms) == 0 {
+		t.Fatal("walera_tx_fan_out_work: no Metric children")
+	}
+	h := ms[0].GetHistogram()
+	if h == nil {
+		t.Fatal("walera_tx_fan_out_work: not a Histogram")
+	}
+
+	want := []float64{1, 5, 25, 100, 500, 2500, 10000, 50000}
+	got := make([]float64, 0, len(h.GetBucket()))
+	for _, b := range h.GetBucket() {
+		got = append(got, b.GetUpperBound())
+	}
+	if len(got) != len(want) {
+		t.Fatalf("walera_tx_fan_out_work bucket count: got %d %v; want %d %v",
+			len(got), got, len(want), want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("walera_tx_fan_out_work bucket[%d]: got %v; want %v", i, got[i], want[i])
+		}
+	}
+}
+
 func TestRegistry_GatherIncludesAllMetrics(t *testing.T) {
 	t.Parallel()
 
@@ -32,6 +119,7 @@ func TestRegistry_GatherIncludesAllMetrics(t *testing.T) {
 	r.PGConnectionStatus().Set(0)
 
 	r.WALStandbyACKFailures().Inc()
+	r.PoolWorkerDirtySubs("0").Set(0)
 
 	mfs, err := r.Gatherer().Gather()
 	if err != nil {
@@ -50,6 +138,7 @@ func TestRegistry_GatherIncludesAllMetrics(t *testing.T) {
 		"walera_auth_refresh_total",
 		"walera_auth_request_duration_seconds",
 		"walera_auth_requests_total",
+		"walera_co_tx_beyond_anchor_total",
 		"walera_events_sent_total",
 		"walera_limit_rejected_total",
 		"walera_pg_connection_status",
@@ -57,6 +146,7 @@ func TestRegistry_GatherIncludesAllMetrics(t *testing.T) {
 
 		"walera_pool_drain_batch_size",
 		"walera_pool_drain_duration_seconds",
+		"walera_pool_worker_dirty_subs",
 		"walera_route_lookup_duration_seconds",
 		"walera_routing_fan_out",
 		"walera_routing_index_size",
@@ -66,6 +156,7 @@ func TestRegistry_GatherIncludesAllMetrics(t *testing.T) {
 		"walera_subscriber_queue_depth",
 		"walera_subscribers_active",
 		"walera_tx_dropped_total",
+		"walera_tx_fan_out_work",
 		"walera_wal_decode_duration_seconds",
 		"walera_wal_lsn_lag_bytes",
 		"walera_wal_standby_ack_failures_total",
@@ -235,6 +326,49 @@ func TestRegistry_PoolMetricsRegistered(t *testing.T) {
 		[]float64{1, 4, 16, 64, 256, 1024})
 	checkBuckets(t, "walera_pool_drain_duration_seconds",
 		[]float64{0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0})
+}
+
+// TestRegistry_CoBeyondAnchorTotal_PreTouched asserts that walera_co_tx_beyond_anchor_total
+// is present in Gather() output from a freshly constructed Registry (pre-touch confirmed —
+// no gap from t=0) and that CoBeyondAnchorTotal() returns a non-nil prometheus.Counter on
+// which Add can be called. Mirrors TestRegistry_TxFanOutWork_PreTouched.
+func TestRegistry_CoBeyondAnchorTotal_PreTouched(t *testing.T) {
+	t.Parallel()
+	r := New()
+
+	c := r.CoBeyondAnchorTotal()
+	if c == nil {
+		t.Fatal("CoBeyondAnchorTotal() returned nil")
+	}
+	// Verify the accessor returns a usable counter (should not panic).
+	c.Add(0)
+
+	mfs, err := r.Gatherer().Gather()
+	if err != nil {
+		t.Fatalf("Gather: %v", err)
+	}
+	var found *dto.MetricFamily
+	for _, mf := range mfs {
+		if mf.GetName() == "walera_co_tx_beyond_anchor_total" {
+			found = mf
+			break
+		}
+	}
+	if found == nil {
+		t.Fatal("walera_co_tx_beyond_anchor_total not in Gather() output — pre-touch or registration missing")
+	}
+
+	// The series must be present even before any caller-driven Add (pre-touch).
+	ms := found.GetMetric()
+	if len(ms) == 0 {
+		t.Fatal("walera_co_tx_beyond_anchor_total: no Metric children")
+	}
+	if ms[0].GetCounter() == nil {
+		t.Fatal("walera_co_tx_beyond_anchor_total: not a Counter")
+	}
+	if got := ms[0].GetCounter().GetValue(); got != 0 {
+		t.Errorf("walera_co_tx_beyond_anchor_total pre-touch value: got %v; want 0", got)
+	}
 }
 
 func TestRegistry_DisconnectsShutdownLabelPreTouched(t *testing.T) {

@@ -208,6 +208,18 @@ The recommended client recovery pattern is:
 3. On any SSE disconnect or `shutdown` event, repeat step 1 before
    resubscribing — do not assume local state is current.
 
+**Transaction-scoped delivery (v2.4).** Subscribers whitelisted for
+multiple related tables receive all whitelisted changes from a matched
+transaction in a single atomic event — not just the change that
+anchored the match. Relatedness is the application's responsibility:
+co-write related rows in the same Postgres `BEGIN` / `COMMIT` block.
+Authorization is enforced solely by the per-user field whitelist; Walera
+does not route by foreign keys. A raw channel match authorizes
+co-transactional delivery only if at least one matching anchor change
+survives that whitelist. The Prometheus counter
+`walera_co_tx_beyond_anchor_total` tracks the incremental delivery
+volume this behaviour adds over per-change matching alone.
+
 See [Delivery semantics](./docs/delivery-semantics.md) for the
 complete specification and
 [ADR 0001](./docs/adr/0001-delivery-semantics.md) for the rationale.

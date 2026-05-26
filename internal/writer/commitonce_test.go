@@ -114,28 +114,40 @@ func TestCommitOnceImpl_ArticlesInsert(t *testing.T) {
 	}
 }
 
-func TestCommitOnceImpl_OrdersInsertsLineItems(t *testing.T) {
+func TestCommitOnceImpl_OrdersInsertsDepth4Chain(t *testing.T) {
 	tx := &fakeTx{scanID: 42}
 	pool := &fakePool{tx: tx}
 	cfg := WriterPGConfig{TxTimeout: time.Second}
-	if err := commitOnceImpl(context.Background(), pool, "orders", 2, newRNG(), cfg); err != nil {
+	const rows = 2
+	if err := commitOnceImpl(context.Background(), pool, "orders", rows, newRNG(), cfg); err != nil {
 		t.Fatalf("commitOnceImpl: %v", err)
 	}
 
-	if len(tx.queries) != 4 {
-		t.Errorf("expected 4 queries, got %d: %v", len(tx.queries), tx.queries)
+	wantOrders := rows
+	wantLines := rows * lineItemsPerOrder
+	wantOptions := wantLines * optionsPerLineItem
+	wantAudits := wantOptions * auditsPerOption
+	wantTotal := wantOrders + wantLines + wantOptions + wantAudits
+
+	if len(tx.queries) != wantTotal {
+		t.Errorf("expected %d queries, got %d: %v", wantTotal, len(tx.queries), tx.queries)
 	}
-	var orders, lines int
+	var orders, lines, options, audits int
 	for _, q := range tx.queries {
-		if strings.Contains(q, "INSERT INTO orders") {
+		switch {
+		case strings.Contains(q, "INSERT INTO orders"):
 			orders++
-		}
-		if strings.Contains(q, "INSERT INTO line_items") {
+		case strings.Contains(q, "INSERT INTO line_items"):
 			lines++
+		case strings.Contains(q, "INSERT INTO line_item_options"):
+			options++
+		case strings.Contains(q, "INSERT INTO option_audits"):
+			audits++
 		}
 	}
-	if orders != 2 || lines != 2 {
-		t.Errorf("orders=%d line_items=%d, want 2/2", orders, lines)
+	if orders != wantOrders || lines != wantLines || options != wantOptions || audits != wantAudits {
+		t.Errorf("orders=%d lines=%d options=%d audits=%d, want %d/%d/%d/%d",
+			orders, lines, options, audits, wantOrders, wantLines, wantOptions, wantAudits)
 	}
 }
 

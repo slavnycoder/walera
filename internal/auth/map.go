@@ -33,11 +33,13 @@ func (m *Whitelist) Allowed(table, column string) bool {
 
 func (m *Whitelist) Filter(c wal.Change) (wal.Change, bool) {
 	if m == nil {
-		return c, true
+		return wal.Change{}, true
 	}
 	cols, ok := m.Tables[c.Table]
 	if !ok {
-		return c, true
+		// Return a zero Change so table, PK, and row content never leak even
+		// if a caller ignores drop=true (covers PK-only OpDelete events too).
+		return wal.Change{}, true
 	}
 
 	out := c
@@ -72,8 +74,7 @@ func (m *Whitelist) Filter(c wal.Change) (wal.Change, bool) {
 			}
 		}
 		if !keptNonPK {
-
-			return c, true
+			return wal.Change{}, true
 		}
 		return out, false
 
@@ -81,7 +82,7 @@ func (m *Whitelist) Filter(c wal.Change) (wal.Change, bool) {
 		return out, false
 
 	default:
-		return c, true
+		return wal.Change{}, true
 	}
 }
 

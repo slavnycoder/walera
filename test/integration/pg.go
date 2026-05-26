@@ -32,7 +32,7 @@ func NewPG(t *testing.T) *PG {
 		postgres.WithUsername("walera"),
 		postgres.WithPassword("walera"),
 		postgres.WithConfigFile("testdata/postgresql-walera.conf"),
-		postgres.WithInitScripts("testdata/001_publication.sql"),
+		postgres.WithInitScripts("testdata/001_publication.sql", "testdata/002_tx_scoped_tables.sql"),
 		postgres.WithSQLDriver("pgx"),
 		testcontainers.WithWaitStrategy(
 			wait.ForLog("database system is ready to accept connections").

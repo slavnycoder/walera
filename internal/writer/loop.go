@@ -58,6 +58,17 @@ func commitOnceImpl(ctx context.Context, pool commitOncePool, target string, row
 	return nil
 }
 
+// Depth-4 chain fan-out per orders insert. The triggers on line_items,
+// line_item_options, and option_audits chain bumps all the way up to
+// orders.updated_at — a single chain produces 1 INSERT + 3 line_item
+// INSERTs + 6 option INSERTs + 6 audit INSERTs = 16 WAL row records and
+// 3+6+6 = 15 cascaded UPDATE WAL records, all inside one transaction.
+const (
+	lineItemsPerOrder  = 3
+	optionsPerLineItem = 2
+	auditsPerOption    = 1
+)
+
 func insertOne(ctx context.Context, tx pgx.Tx, target string, rng *mathrand.Rand) error {
 	switch target {
 	case "orders":
@@ -70,14 +81,40 @@ func insertOne(ctx context.Context, tx pgx.Tx, target string, rng *mathrand.Rand
 		).Scan(&orderID); err != nil {
 			return err
 		}
-		_, err := tx.Exec(ctx,
-			"INSERT INTO line_items (orders_id, sku, qty, unit_price_cents) VALUES ($1, $2, $3, $4)",
-			orderID,
-			fmt.Sprintf("SKU-%d", rng.IntN(10000)),
-			int32(1+rng.IntN(5)),
-			int64(rng.IntN(10000)),
-		)
-		return err
+		for li := 0; li < lineItemsPerOrder; li++ {
+			var lineItemID int64
+			if err := tx.QueryRow(ctx,
+				"INSERT INTO line_items (orders_id, sku, qty, unit_price_cents) VALUES ($1, $2, $3, $4) RETURNING id",
+				orderID,
+				fmt.Sprintf("SKU-%d", rng.IntN(10000)),
+				int32(1+rng.IntN(5)),
+				int64(rng.IntN(10000)),
+			).Scan(&lineItemID); err != nil {
+				return err
+			}
+			for op := 0; op < optionsPerLineItem; op++ {
+				var optionID int64
+				if err := tx.QueryRow(ctx,
+					"INSERT INTO line_item_options (line_items_id, key, value) VALUES ($1, $2, $3) RETURNING id",
+					lineItemID,
+					fmt.Sprintf("attr-%d", rng.IntN(32)),
+					fmt.Sprintf("val-%d", rng.IntN(256)),
+				).Scan(&optionID); err != nil {
+					return err
+				}
+				for au := 0; au < auditsPerOption; au++ {
+					if _, err := tx.Exec(ctx,
+						"INSERT INTO option_audits (line_item_options_id, actor, note) VALUES ($1, $2, $3)",
+						optionID,
+						"writer",
+						fmt.Sprintf("rev-%d", rng.IntN(1024)),
+					); err != nil {
+						return err
+					}
+				}
+			}
+		}
+		return nil
 	case "devices":
 		_, err := tx.Exec(ctx,
 			"INSERT INTO devices (name, firmware_version, metadata) VALUES ($1, $2, $3::jsonb)",

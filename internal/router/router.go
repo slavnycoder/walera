@@ -5,6 +5,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jackc/pglogrepl"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog"
 
@@ -128,13 +129,36 @@ func (b *Broadcaster) routeTx(tx wal.Tx) {
 	lookupTimer := prometheus.NewTimer(b.metrics.RouteLookupDuration())
 	defer lookupTimer.ObserveDuration()
 
-	matched := make(map[*Subscriber][]int, 8)
-	b.mergeMatches(tx, matched)
+	eligible := make(map[*Subscriber]struct{}, 8)
+	b.mergeMatches(tx, eligible)
 
-	b.metrics.RoutingFanOut().Observe(float64(len(matched)))
+	b.metrics.RoutingFanOut().Observe(float64(len(eligible)))
+	if len(eligible) == 0 {
+		return
+	}
 
-	for sub, indices := range matched {
-		b.dispatchEvent(tx, sub, indices)
+	// fullIndices is allocated once and shared read-only across the sequential
+	// dispatch loop (SAFE-01: no goroutine spawned in dispatchEvent).
+	fullIndices := make([]int, len(tx.Changes))
+	for i := range fullIndices {
+		fullIndices[i] = i
+	}
+
+	var totalDelivered int64
+	var totalBeyondAnchor int64
+	for sub := range eligible {
+		delivered, beyondAnchor := b.dispatchEvent(tx, sub, fullIndices)
+		totalDelivered += int64(delivered)
+		totalBeyondAnchor += int64(beyondAnchor)
+	}
+	// Guard on >0 so a matched tx whose eligible subscribers were all dropped
+	// does not inflate the histogram/counter with empty work — registry
+	// pre-touch already seeds both series at t=0 (INVARIANT #4).
+	if totalDelivered > 0 {
+		b.metrics.TxFanOutWork().Observe(float64(totalDelivered))
+	}
+	if totalBeyondAnchor > 0 {
+		b.metrics.CoBeyondAnchorTotal().Add(float64(totalBeyondAnchor))
 	}
 }
 
@@ -146,52 +170,83 @@ func (b *Broadcaster) matchWildcard(key string) []*Subscriber {
 	return b.wildcard.Lookup(key)
 }
 
-func (b *Broadcaster) mergeMatches(tx wal.Tx, matched map[*Subscriber][]int) {
-	for i, ch := range tx.Changes {
+// mergeMatches builds the per-tx eligibility set: a subscriber becomes eligible
+// once any change in the tx matches its exact or wildcard key. The set shape
+// inherently deduplicates multiple matches.
+func (b *Broadcaster) mergeMatches(tx wal.Tx, eligible map[*Subscriber]struct{}) {
+	for _, ch := range tx.Changes {
 		for _, sub := range b.matchExact(ch.Key()) {
-			matched[sub] = append(matched[sub], i)
+			eligible[sub] = struct{}{}
 		}
 		for _, sub := range b.matchWildcard(ch.WildcardKey()) {
-			matched[sub] = append(matched[sub], i)
+			eligible[sub] = struct{}{}
 		}
 	}
 }
 
-func (b *Broadcaster) dispatchEvent(tx wal.Tx, sub *Subscriber, indices []int) {
+func subChannelKey(sub *Subscriber) string {
+	key := sub.Schema() + "." + sub.Table()
+	if sub.Kind() == KindExact {
+		key += ":" + sub.PK()
+	}
+	return key
+}
+
+func matchesAnchor(sub *Subscriber, ch wal.Change) bool {
+	if ch.Schema != sub.Schema() || ch.Table != sub.Table() {
+		return false
+	}
+	switch sub.Kind() {
+	case KindExact:
+		return ch.PK == sub.PK()
+	case KindWildcard:
+		return true
+	default:
+		return false
+	}
+}
+
+// dispatchEvent applies the subscriber's whitelist filter to the full tx index
+// set, enforces the post-filter MaxChangesPerTx cap, encodes, and sends.
+// Returns (delivered, beyondAnchor): delivered counts post-filter changes sent
+// (0 on any drop or silent skip); beyondAnchor counts delivered changes whose
+// routing key differs from the subscriber's own anchor key.
+// All Drop call sites must stay inside this function (INVARIANT #3).
+func (b *Broadcaster) dispatchEvent(tx wal.Tx, sub *Subscriber, indices []int) (int, int) {
 	if tx.CommitLSN <= sub.StartLSN() {
-		return
+		return 0, 0
 	}
 
 	capLimit := b.cfg.MaxChangesPerTx
-	if len(indices) > capLimit {
-		b.metrics.TxDropped("tx_too_large").Inc()
-		sub.Drop("tx_too_large")
-		channel := sub.Schema() + "." + sub.Table()
-		if sub.Kind() == KindExact {
-			channel = channel + ":" + sub.PK()
-		}
-		b.log.Warn().
-			Str("subscriber_id", sub.ID()).
-			Str("channel", channel).
-			Int("change_count", len(indices)).
-			Int("limit", capLimit).
-			Str("commit_lsn", tx.CommitLSN.String()).
-			Msg("subscriber dropped: tx_too_large")
-		return
-	}
+	subSchema := sub.Schema()
 
 	ev := Event{Tx: tx, MatchedIndices: indices}
 	if sub.Filter != nil {
 		filtered := make([]wal.Change, 0, len(indices))
+		anchorSurvived := false
 		for _, i := range indices {
-			ch, drop := sub.Filter(tx.Changes[i], tx.CommitLSN)
+			raw := tx.Changes[i]
+			if raw.Schema != subSchema {
+				continue
+			}
+			rawAnchor := matchesAnchor(sub, raw)
+			ch, drop := sub.Filter(raw, tx.CommitLSN)
 			if drop {
 				continue
 			}
+			if rawAnchor {
+				anchorSurvived = true
+			}
 			filtered = append(filtered, ch)
 		}
-		if len(filtered) == 0 {
-			return
+		if len(filtered) == 0 || !anchorSurvived {
+			return 0, 0 // silent drop — no metric, no Drop() (INVARIANT #3)
+		}
+		// Cap is post-filter, not pre-filter: pre-filter would falsely drop
+		// narrow-whitelist subscribers on large txs.
+		if len(filtered) > capLimit {
+			b.dropTxTooLarge(sub, tx.CommitLSN, "filtered_count", len(filtered), capLimit)
+			return 0, 0
 		}
 		subTx := tx
 		subTx.Changes = filtered
@@ -200,6 +255,41 @@ func (b *Broadcaster) dispatchEvent(tx wal.Tx, sub *Subscriber, indices []int) {
 			newIdx[i] = i
 		}
 		ev = Event{Tx: subTx, MatchedIndices: newIdx}
+	} else {
+		// nil-Filter path: schema-scope MatchedIndices in a single pass,
+		// allocating a new slice only on the first cross-schema change.
+		// TestRouteTxNilFilterUnchangedFastPath pins no-clone of tx.Changes
+		// when every change belongs to subSchema.
+		schemaIdx := indices
+		cloned := false
+		anchorSurvived := false
+		for pos, i := range indices {
+			raw := tx.Changes[i]
+			if raw.Schema != subSchema {
+				if !cloned {
+					schemaIdx = make([]int, pos, len(indices))
+					copy(schemaIdx, indices[:pos])
+					cloned = true
+				}
+				continue
+			}
+			if matchesAnchor(sub, raw) {
+				anchorSurvived = true
+			}
+			if cloned {
+				schemaIdx = append(schemaIdx, i)
+			}
+		}
+		if len(schemaIdx) == 0 || !anchorSurvived {
+			return 0, 0
+		}
+		if len(schemaIdx) > capLimit {
+			b.dropTxTooLarge(sub, tx.CommitLSN, "change_count", len(schemaIdx), capLimit)
+			return 0, 0
+		}
+		if cloned {
+			ev = Event{Tx: tx, MatchedIndices: schemaIdx}
+		}
 	}
 
 	frame, overflow := b.enc.Encode(ev)
@@ -211,7 +301,7 @@ func (b *Broadcaster) dispatchEvent(tx wal.Tx, sub *Subscriber, indices []int) {
 			Str("commit_lsn", tx.CommitLSN.String()).
 			Int("matched_changes", len(ev.MatchedIndices)).
 			Msg("subscriber dropped: tx_too_large (payload cap)")
-		return
+		return 0, 0
 	}
 
 	if !sub.send(frame) {
@@ -222,8 +312,40 @@ func (b *Broadcaster) dispatchEvent(tx wal.Tx, sub *Subscriber, indices []int) {
 			Str("reason", "slow_consumer").
 			Str("commit_lsn", tx.CommitLSN.String()).
 			Msg("subscriber dropped: slow_consumer")
-		return
+		return 0, 0
 	}
+
+	// Beyond-anchor delta: count delivered changes whose routing key differs
+	// from the subscriber's anchor. KindExact compares ch.Key() against
+	// "schema.table:pk"; KindWildcard compares ch.WildcardKey() against
+	// "schema.table".
+	isExact := sub.Kind() == KindExact
+	anchorKey := subChannelKey(sub)
+	var beyondAnchor int
+	for _, idx := range ev.MatchedIndices {
+		ch := ev.Tx.Changes[idx]
+		routingKey := ch.WildcardKey()
+		if isExact {
+			routingKey = ch.Key()
+		}
+		if routingKey != anchorKey {
+			beyondAnchor++
+		}
+	}
+
+	return len(ev.MatchedIndices), beyondAnchor
+}
+
+func (b *Broadcaster) dropTxTooLarge(sub *Subscriber, commitLSN pglogrepl.LSN, countField string, count, limit int) {
+	b.metrics.TxDropped("tx_too_large").Inc()
+	sub.Drop("tx_too_large")
+	b.log.Warn().
+		Str("subscriber_id", sub.ID()).
+		Str("channel", subChannelKey(sub)).
+		Int(countField, count).
+		Int("limit", limit).
+		Str("commit_lsn", commitLSN.String()).
+		Msg("subscriber dropped: tx_too_large")
 }
 
 func (b *Broadcaster) Metrics() *metrics.Registry { return b.metrics }

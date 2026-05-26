@@ -21,6 +21,13 @@ func mkMap(userID string, tables map[string][]string) *Whitelist {
 	return m
 }
 
+func assertDroppedChangeSanitized(t *testing.T, name string, out wal.Change) {
+	t.Helper()
+	if out.Schema != "" || out.Table != "" || out.Op != "" || out.PK != "" || out.PKCol != "" || out.Data != nil || out.Changed != nil {
+		t.Errorf("%s: dropped change leaked identity/content: got %+v; want zero Change", name, out)
+	}
+}
+
 func TestMapFilter_PreservesPK(t *testing.T) {
 	t.Parallel()
 
@@ -71,10 +78,17 @@ func TestMapFilter_AllChangedColumnsHiddenIsSilentDrop(t *testing.T) {
 		PK: "42", PKCol: "id",
 		Changed: map[string]any{"name": "Alice"},
 	}
-	_, drop := m.Filter(c)
+	out, drop := m.Filter(c)
 	if !drop {
 		t.Fatal("drop=false; want true (hidden-update-only with PK absent → silent drop)")
 	}
+	if out.Changed != nil {
+		t.Errorf("out.Changed=%v; want nil (must not leak on drop=true)", out.Changed)
+	}
+	if out.Data != nil {
+		t.Errorf("out.Data=%v; want nil (must not leak on drop=true)", out.Data)
+	}
+	assertDroppedChangeSanitized(t, t.Name(), out)
 }
 
 func TestMapFilter_PKAloneInChangedIsSilentDrop(t *testing.T) {
@@ -86,10 +100,17 @@ func TestMapFilter_PKAloneInChangedIsSilentDrop(t *testing.T) {
 		PK: "42", PKCol: "id",
 		Changed: map[string]any{"id": "42", "secret": "redacted"},
 	}
-	_, drop := m.Filter(c)
+	out, drop := m.Filter(c)
 	if !drop {
 		t.Fatal("drop=false; want true (only PK survives after filter → silent drop)")
 	}
+	if out.Changed != nil {
+		t.Errorf("out.Changed=%v; want nil (must not leak on drop=true)", out.Changed)
+	}
+	if out.Data != nil {
+		t.Errorf("out.Data=%v; want nil (must not leak on drop=true)", out.Data)
+	}
+	assertDroppedChangeSanitized(t, t.Name(), out)
 }
 
 func TestMapFilter_PGEmitsAllColumnsHiddenUpdateIsSilentDrop(t *testing.T) {
@@ -101,10 +122,17 @@ func TestMapFilter_PGEmitsAllColumnsHiddenUpdateIsSilentDrop(t *testing.T) {
 		PK: "88", PKCol: "id",
 		Changed: map[string]any{"id": "88", "email": "old@x", "name": "NewName"},
 	}
-	_, drop := m.Filter(c)
+	out, drop := m.Filter(c)
 	if !drop {
 		t.Fatal("drop=false; want true (PG-emits-all-cols update with PK-only whitelist must drop)")
 	}
+	if out.Changed != nil {
+		t.Errorf("out.Changed=%v; want nil (must not leak on drop=true)", out.Changed)
+	}
+	if out.Data != nil {
+		t.Errorf("out.Data=%v; want nil (must not leak on drop=true)", out.Data)
+	}
+	assertDroppedChangeSanitized(t, t.Name(), out)
 }
 
 func TestMapFilter_DeleteUntouched(t *testing.T) {
@@ -135,10 +163,11 @@ func TestMapFilter_TableNotInMapReturnsDrop(t *testing.T) {
 		PK: "9", PKCol: "id",
 		Data: map[string]any{"id": "9"},
 	}
-	_, drop := m.Filter(c)
+	out, drop := m.Filter(c)
 	if !drop {
 		t.Fatal("drop=false; want true (orders not in whitelist)")
 	}
+	assertDroppedChangeSanitized(t, t.Name(), out)
 }
 
 func TestParseMap_ValidJSON(t *testing.T) {
@@ -191,4 +220,77 @@ func TestParseMap_RejectsMalformedJSON(t *testing.T) {
 	if _, err := ParseWhitelist(body); err == nil {
 		t.Fatal("ParseWhitelist: expected error for malformed JSON, got nil")
 	}
+}
+
+// TestMapFilter_DeleteNonWhitelistedTableDropped locks in the absent-table delete-leak gate:
+// under whole-transaction delivery, every change in a matched tx reaches Filter for every
+// eligible subscriber — including DELETE, INSERT, and UPDATE on tables absent from the whitelist.
+// The absent-table !ok early-return at map.go:38-41 must drop all ops with no PK or row-content leakage.
+func TestMapFilter_DeleteNonWhitelistedTableDropped(t *testing.T) {
+	t.Parallel()
+
+	// Whitelist covers only todo_lists; the `tasks` table is intentionally absent.
+	m := mkMap("u1", map[string][]string{"todo_lists": {"id", "title"}})
+
+	tests := []struct {
+		name string
+		c    wal.Change
+	}{
+		{
+			name: "OpDelete on non-whitelisted table",
+			c: wal.Change{
+				Schema: "public", Table: "tasks", Op: wal.OpDelete,
+				PK: "99", PKCol: "id",
+			},
+		},
+		{
+			name: "OpInsert on non-whitelisted table",
+			c: wal.Change{
+				Schema: "public", Table: "tasks", Op: wal.OpInsert,
+				PK: "99", PKCol: "id",
+				Data: map[string]any{"id": "99", "title": "Buy milk"},
+			},
+		},
+		{
+			name: "OpUpdate on non-whitelisted table",
+			c: wal.Change{
+				Schema: "public", Table: "tasks", Op: wal.OpUpdate,
+				PK: "99", PKCol: "id",
+				Changed: map[string]any{"id": "99", "title": "Buy milk"},
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			out, drop := m.Filter(tc.c)
+			if !drop {
+				t.Fatalf("%s: drop=false; want true (tasks not in whitelist — must not leak)", tc.name)
+			}
+			// Even if a caller ignored drop, no row content must leak.
+			if out.Data != nil {
+				t.Errorf("%s: out.Data=%v; want nil (no row-content leakage when drop=true)", tc.name, out.Data)
+			}
+			if out.Changed != nil {
+				t.Errorf("%s: out.Changed=%v; want nil (no row-content leakage when drop=true)", tc.name, out.Changed)
+			}
+			assertDroppedChangeSanitized(t, tc.name, out)
+		})
+	}
+}
+
+func TestMapFilter_NilMapReturnsZeroChangeOnDrop(t *testing.T) {
+	t.Parallel()
+
+	var m *Whitelist
+	c := wal.Change{
+		Schema: "public", Table: "users", Op: wal.OpDelete,
+		PK: "42", PKCol: "id",
+	}
+	out, drop := m.Filter(c)
+	if !drop {
+		t.Fatal("drop=false; want true (nil map is conservative)")
+	}
+	assertDroppedChangeSanitized(t, t.Name(), out)
 }

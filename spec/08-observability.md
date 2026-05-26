@@ -34,6 +34,8 @@
 - `index_shard_size{shard}` (gauge): for balance check.
 - `routing_lookup_duration_seconds` (histogram).
 - `routing_fan_out` (histogram): subscribers matched per change.
+- `walera_tx_fan_out_work` (histogram): per-transaction sum of post-filter delivered changes across all eligible subscribers (Σ delivered changes per subscriber). Observe-only capacity signal for whole-transaction fan-out work distribution; no hard cap is enforced. Complements `routing_fan_out` (per-change match count) by measuring total delivered-change work at the transaction level.
+- `walera_co_tx_beyond_anchor_total` (counter): cumulative changes delivered to subscribers from matched transactions beyond the subscriber's own anchor-matched key(s). Measures the incremental delivery volume added by whole-transaction delivery — changes that would not have been delivered under per-change matching alone. Observe-only; no hard cap enforced.
 
 **Runtime:** standard Go exporters (`go_goroutines`, `go_memstats_*`, `process_open_fds`, etc.).
 
