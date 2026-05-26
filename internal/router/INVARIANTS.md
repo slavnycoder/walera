@@ -80,6 +80,19 @@ Pre-sweep archaeology anchor: commit `de6b665` (pre-SWEEP-02 HEAD).
    independent. This is reconciled as DEAD-03 outcome (b): "defined
    exactly once OR documented reason for cross-package independence."
 
+## Authorization
+
+1. **Co-transactional fan-out requires a surviving anchor.**
+   A subscriber is only eligible to receive beyond-anchor rows from a
+   matched transaction when at least one raw channel-matching change
+   survives `Subscriber.Filter`. A raw exact or wildcard match that is
+   later dropped by field filtering does not authorize delivery of
+   other whitelisted rows in the same transaction. This preserves the
+   existing hidden-column semantics: an UPDATE that only changes fields
+   invisible to the subscriber remains invisible and cannot be used as a
+   fan-out anchor. Anchor: `router.go:dispatchEvent` and
+   `matchesAnchor`.
+
 ## Lifecycle & Shutdown
 
 _No additional invariants required for SWEEP-02 — `Shutdown`'s

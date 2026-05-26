@@ -1047,6 +1047,41 @@ func TestBroadcaster_CoTxWhitelistedDelivery(t *testing.T) {
 	}
 }
 
+// TestBroadcaster_CoTxRequiresSurvivingAnchor:
+// A raw channel match is not enough to authorize transaction-scoped fan-out.
+// If the subscriber's Filter drops the exact anchor change, co-transactional
+// changes that would otherwise pass the Filter must not be delivered.
+func TestBroadcaster_CoTxRequiresSurvivingAnchor(t *testing.T) {
+	t.Parallel()
+
+	b, reg := mkBroadcaster(10000)
+	sub := mkExactSub("public", "todo_lists", "42", 0, 4)
+	recordedFor(t, sub).useEncoder(b.enc.(*stubEncoder))
+	sub.Filter = func(c wal.Change, _ pglogrepl.LSN) (wal.Change, bool) {
+		if c.Table == "todo_lists" {
+			return wal.Change{}, true
+		}
+		return c, false
+	}
+	b.Register(sub)
+
+	tx := mkTx(pglogrepl.LSN(0x1011), 111,
+		mkChange(wal.OpUpdate, "public", "todo_lists", "42"),
+		mkChange(wal.OpInsert, "public", "tasks", "99"),
+	)
+	b.routeTx(tx)
+
+	expectNoFrame(t, sub, 100*time.Millisecond)
+	for _, reason := range []string{"slow_consumer", "tx_too_large", "multi_root"} {
+		if v := gatherCounter(t, reg, "walera_tx_dropped_total", "reason", reason); v != 0 {
+			t.Errorf("tx_dropped_total{reason=%s}: got %v; want 0", reason, v)
+		}
+	}
+	if got := gatherCounterNoLabel(t, reg, "walera_co_tx_beyond_anchor_total"); got != 0 {
+		t.Errorf("walera_co_tx_beyond_anchor_total = %v; want 0", got)
+	}
+}
+
 // TestBroadcaster_SingleEventPerSubDedup:
 // A wildcard subscriber on todo_lists is matched by multiple changes in one tx.
 // The subscriber must receive exactly ONE event containing all changes in commit order.
@@ -1423,4 +1458,58 @@ func TestBroadcaster_FanOutRaceStress(t *testing.T) {
 
 	// If -race detected a data race the test binary would have already panicked.
 	// Reaching here confirms no race was detected.
+}
+
+// TestRouteTxSchemaScoped_FilterPath: when the publication contains a same-named
+// table in another schema and a tx touches both, an exact subscriber on
+// public.<table>:<pk> with a non-nil Filter must NOT see the private row even
+// if the Filter accepts every change (auth whitelist keys only on table name).
+func TestRouteTxSchemaScoped_FilterPath(t *testing.T) {
+	t.Parallel()
+	b, _ := mkBroadcaster(10000)
+	sub := mkExactSub("public", "users", "42", 0, 4)
+	recordedFor(t, sub).useEncoder(b.enc.(*stubEncoder))
+	sub.Filter = func(c wal.Change, _ pglogrepl.LSN) (wal.Change, bool) { return c, false }
+	b.Register(sub)
+
+	tx := mkTx(pglogrepl.LSN(0x500), 5,
+		mkChange(wal.OpInsert, "public", "users", "42"),
+		mkChange(wal.OpInsert, "private", "users", "99"),
+	)
+	b.routeTx(tx)
+
+	ev := drainOne(t, sub, 200*time.Millisecond)
+	if got, want := len(ev.Tx.Changes), 1; got != want {
+		t.Fatalf("ev.Tx.Changes length: got %d; want %d (cross-schema row must be stripped)", got, want)
+	}
+	if ev.Tx.Changes[0].Schema != "public" || ev.Tx.Changes[0].PK != "42" {
+		t.Errorf("delivered change: got %+v; want public.users:42", ev.Tx.Changes[0])
+	}
+}
+
+// TestRouteTxSchemaScoped_NilFilterStripsCrossSchema: nil-Filter path must
+// also schema-scope (clones MatchedIndices but keeps tx.Changes backing).
+func TestRouteTxSchemaScoped_NilFilterStripsCrossSchema(t *testing.T) {
+	t.Parallel()
+	b, _ := mkBroadcaster(10000)
+	sub := mkExactSub("public", "users", "42", 0, 4)
+	recordedFor(t, sub).useEncoder(b.enc.(*stubEncoder))
+	b.Register(sub)
+
+	tx := mkTx(pglogrepl.LSN(0x501), 6,
+		mkChange(wal.OpInsert, "private", "users", "99"),
+		mkChange(wal.OpInsert, "public", "users", "42"),
+	)
+	b.routeTx(tx)
+
+	ev := drainOne(t, sub, 200*time.Millisecond)
+	if got, want := len(ev.MatchedIndices), 1; got != want {
+		t.Fatalf("ev.MatchedIndices length: got %d; want %d", got, want)
+	}
+	if got := ev.MatchedIndices[0]; got != 1 {
+		t.Errorf("ev.MatchedIndices[0]: got %d; want 1 (index into original tx.Changes)", got)
+	}
+	if reflect.ValueOf(ev.Tx.Changes).Pointer() != reflect.ValueOf(tx.Changes).Pointer() {
+		t.Error("ev.Tx.Changes should still share backing array with tx.Changes (only indices rescoped)")
+	}
 }

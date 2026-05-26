@@ -214,7 +214,9 @@ transaction in a single atomic event — not just the change that
 anchored the match. Relatedness is the application's responsibility:
 co-write related rows in the same Postgres `BEGIN` / `COMMIT` block.
 Authorization is enforced solely by the per-user field whitelist; Walera
-does not route by foreign keys. The Prometheus counter
+does not route by foreign keys. A raw channel match authorizes
+co-transactional delivery only if at least one matching anchor change
+survives that whitelist. The Prometheus counter
 `walera_co_tx_beyond_anchor_total` tracks the incremental delivery
 volume this behaviour adds over per-change matching alone.
 

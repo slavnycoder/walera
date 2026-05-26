@@ -137,11 +137,12 @@ across separate transactions.
 **2. The whitelist is the sole authorization gate.**
 A co-transactional table is delivered only if that table is present
 in the subscriber's per-user field whitelist. The anchor table itself
-must be whitelisted to authorize the channel — a subscriber whose
-whitelist does not include the anchor table's row will not receive
-the event at all, even if other tables in the transaction are
-whitelisted. Authorization is enforced inside Walera at fan-out time;
-no other gate exists.
+must produce at least one post-filter anchor change to authorize the
+channel. If a raw channel match is later removed by field filtering
+(for example, an UPDATE changed only hidden columns), Walera silently
+skips the whole event for that subscriber, even if other tables in the
+transaction are whitelisted. Authorization is enforced inside Walera at
+fan-out time; no other gate exists.
 
 **3. Walera does not route by foreign keys.**
 There is no foreign-key resolution, join inference, or relationship
