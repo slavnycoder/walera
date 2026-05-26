@@ -150,9 +150,14 @@ func (b *Broadcaster) routeTx(tx wal.Tx) {
 		totalBeyondAnchor += int64(beyondAnchor)
 	}
 	// D-03: observe fan-out work and beyond-anchor counter once per tx
-	// (INVARIANT #4: stays in routeTx frame).
-	if len(eligible) > 0 {
+	// (INVARIANT #4: stays in routeTx frame). Guard on >0 so a matched tx
+	// whose eligible subscribers were all dropped (slow-consumer / tx-too-large)
+	// does not inflate the histogram SampleCount / counter with empty work —
+	// the registry pre-touch already seeds both series at t=0.
+	if totalDelivered > 0 {
 		b.metrics.TxFanOutWork().Observe(float64(totalDelivered))
+	}
+	if totalBeyondAnchor > 0 {
 		b.metrics.CoBeyondAnchorTotal().Add(float64(totalBeyondAnchor))
 	}
 }
