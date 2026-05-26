@@ -138,6 +138,7 @@ func TestRegistry_GatherIncludesAllMetrics(t *testing.T) {
 		"walera_auth_refresh_total",
 		"walera_auth_request_duration_seconds",
 		"walera_auth_requests_total",
+		"walera_co_tx_beyond_anchor_total",
 		"walera_events_sent_total",
 		"walera_limit_rejected_total",
 		"walera_pg_connection_status",
@@ -325,6 +326,49 @@ func TestRegistry_PoolMetricsRegistered(t *testing.T) {
 		[]float64{1, 4, 16, 64, 256, 1024})
 	checkBuckets(t, "walera_pool_drain_duration_seconds",
 		[]float64{0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0})
+}
+
+// TestRegistry_CoBeyondAnchorTotal_PreTouched asserts that walera_co_tx_beyond_anchor_total
+// is present in Gather() output from a freshly constructed Registry (pre-touch confirmed —
+// no gap from t=0) and that CoBeyondAnchorTotal() returns a non-nil prometheus.Counter on
+// which Add can be called. Mirrors TestRegistry_TxFanOutWork_PreTouched.
+func TestRegistry_CoBeyondAnchorTotal_PreTouched(t *testing.T) {
+	t.Parallel()
+	r := New()
+
+	c := r.CoBeyondAnchorTotal()
+	if c == nil {
+		t.Fatal("CoBeyondAnchorTotal() returned nil")
+	}
+	// Verify the accessor returns a usable counter (should not panic).
+	c.Add(0)
+
+	mfs, err := r.Gatherer().Gather()
+	if err != nil {
+		t.Fatalf("Gather: %v", err)
+	}
+	var found *dto.MetricFamily
+	for _, mf := range mfs {
+		if mf.GetName() == "walera_co_tx_beyond_anchor_total" {
+			found = mf
+			break
+		}
+	}
+	if found == nil {
+		t.Fatal("walera_co_tx_beyond_anchor_total not in Gather() output — pre-touch or registration missing")
+	}
+
+	// The series must be present even before any caller-driven Add (pre-touch).
+	ms := found.GetMetric()
+	if len(ms) == 0 {
+		t.Fatal("walera_co_tx_beyond_anchor_total: no Metric children")
+	}
+	if ms[0].GetCounter() == nil {
+		t.Fatal("walera_co_tx_beyond_anchor_total: not a Counter")
+	}
+	if got := ms[0].GetCounter().GetValue(); got != 0 {
+		t.Errorf("walera_co_tx_beyond_anchor_total pre-touch value: got %v; want 0", got)
+	}
 }
 
 func TestRegistry_DisconnectsShutdownLabelPreTouched(t *testing.T) {
