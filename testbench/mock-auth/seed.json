@@ -2,10 +2,12 @@
   "demo-alice": {
     "user_id": "u_demo_alice",
     "tables": {
-      "orders":     ["id", "customer_name", "total_cents", "status", "created_at", "updated_at"],
-      "devices":    ["id", "name", "firmware_version", "last_seen_at", "metadata"],
-      "articles":   ["slug", "title", "body", "published", "created_at"],
-      "line_items": ["id", "orders_id", "sku", "qty", "unit_price_cents"]
+      "orders":            ["id", "customer_name", "total_cents", "status", "created_at", "updated_at"],
+      "devices":           ["id", "name", "firmware_version", "last_seen_at", "metadata"],
+      "articles":          ["slug", "title", "body", "published", "created_at"],
+      "line_items":        ["id", "orders_id", "sku", "qty", "unit_price_cents", "updated_at"],
+      "line_item_options": ["id", "line_items_id", "key", "value", "updated_at"],
+      "option_audits":     ["id", "line_item_options_id", "actor", "note", "created_at"]
     },
     "roots": ["orders", "devices", "articles"],
     "ttl_seconds": 60
