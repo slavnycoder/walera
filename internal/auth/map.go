@@ -37,7 +37,13 @@ func (m *Whitelist) Filter(c wal.Change) (wal.Change, bool) {
 	}
 	cols, ok := m.Tables[c.Table]
 	if !ok {
-		return c, true
+		// Absent-table gate (D-07 / TXN-03): drop all ops for tables not in the whitelist,
+		// including PK-only OpDelete events. Clear Data and Changed so no row content leaks
+		// even if a caller mistakenly ignores drop=true.
+		sanitized := c
+		sanitized.Data = nil
+		sanitized.Changed = nil
+		return sanitized, true
 	}
 
 	out := c
