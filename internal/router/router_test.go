@@ -463,7 +463,11 @@ func TestBroadcaster_WildcardFanOut_MultiChange(t *testing.T) {
 	sendTx(t, txCh, tx)
 
 	ev := drainOne(t, sub, 200*time.Millisecond)
-	want := []int{0, 1, 2}
+	// Under per-tx semantics: wildcard subscriber on users becomes eligible once
+	// any users change matches; fullIndices covers the whole tx [0,1,2,3] including
+	// the orders:999 change. With nil Filter (no whitelist), all 4 changes are
+	// delivered. A whitelist-equipped Filter would gate out orders if desired.
+	want := []int{0, 1, 2, 3}
 	if got := ev.MatchedIndices; !equalInts(got, want) {
 		t.Errorf("MatchedIndices: got %v; want %v", got, want)
 	}

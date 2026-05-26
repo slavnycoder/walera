@@ -128,13 +128,27 @@ func (b *Broadcaster) routeTx(tx wal.Tx) {
 	lookupTimer := prometheus.NewTimer(b.metrics.RouteLookupDuration())
 	defer lookupTimer.ObserveDuration()
 
-	matched := make(map[*Subscriber][]int, 8)
-	b.mergeMatches(tx, matched)
+	eligible := make(map[*Subscriber]struct{}, 8)
+	b.mergeMatches(tx, eligible)
 
-	b.metrics.RoutingFanOut().Observe(float64(len(matched)))
+	b.metrics.RoutingFanOut().Observe(float64(len(eligible)))
 
-	for sub, indices := range matched {
-		b.dispatchEvent(tx, sub, indices)
+	// fullIndices covers the whole tx; dispatchEvent's filter loop is the sole
+	// delivery gate (per-change whitelist). Allocated once and shared read-only
+	// across sequential dispatch calls — no goroutine spawned in dispatchEvent
+	// (Pitfall 7 / SAFE-01; INVARIANT #3 drop sites stay in dispatchEvent).
+	fullIndices := make([]int, len(tx.Changes))
+	for i := range fullIndices {
+		fullIndices[i] = i
+	}
+
+	var totalDelivered int64
+	for sub := range eligible {
+		totalDelivered += int64(b.dispatchEvent(tx, sub, fullIndices))
+	}
+	// D-03: observe fan-out work once per tx (INVARIANT #4: stays in routeTx frame).
+	if len(eligible) > 0 {
+		b.metrics.TxFanOutWork().Observe(float64(totalDelivered))
 	}
 }
 
@@ -146,39 +160,30 @@ func (b *Broadcaster) matchWildcard(key string) []*Subscriber {
 	return b.wildcard.Lookup(key)
 }
 
-func (b *Broadcaster) mergeMatches(tx wal.Tx, matched map[*Subscriber][]int) {
-	for i, ch := range tx.Changes {
+// mergeMatches builds the per-tx eligibility set: a subscriber is eligible once any
+// change in the tx matches its exact or wildcard key. The map[*Subscriber]struct{}
+// inherently deduplicates multiple matches (INVARIANT #1; TXN-01/TXN-04).
+func (b *Broadcaster) mergeMatches(tx wal.Tx, eligible map[*Subscriber]struct{}) {
+	for _, ch := range tx.Changes {
 		for _, sub := range b.matchExact(ch.Key()) {
-			matched[sub] = append(matched[sub], i)
+			eligible[sub] = struct{}{}
 		}
 		for _, sub := range b.matchWildcard(ch.WildcardKey()) {
-			matched[sub] = append(matched[sub], i)
+			eligible[sub] = struct{}{}
 		}
 	}
 }
 
-func (b *Broadcaster) dispatchEvent(tx wal.Tx, sub *Subscriber, indices []int) {
+// dispatchEvent applies the subscriber's whitelist filter to the full tx index set,
+// enforces the post-filter MaxChangesPerTx cap (D-02), encodes, and sends.
+// Returns the count of delivered changes (0 on any drop or silent skip).
+// All Drop call sites remain exclusively inside this function (INVARIANT #3).
+func (b *Broadcaster) dispatchEvent(tx wal.Tx, sub *Subscriber, indices []int) int {
 	if tx.CommitLSN <= sub.StartLSN() {
-		return
+		return 0
 	}
 
 	capLimit := b.cfg.MaxChangesPerTx
-	if len(indices) > capLimit {
-		b.metrics.TxDropped("tx_too_large").Inc()
-		sub.Drop("tx_too_large")
-		channel := sub.Schema() + "." + sub.Table()
-		if sub.Kind() == KindExact {
-			channel = channel + ":" + sub.PK()
-		}
-		b.log.Warn().
-			Str("subscriber_id", sub.ID()).
-			Str("channel", channel).
-			Int("change_count", len(indices)).
-			Int("limit", capLimit).
-			Str("commit_lsn", tx.CommitLSN.String()).
-			Msg("subscriber dropped: tx_too_large")
-		return
-	}
 
 	ev := Event{Tx: tx, MatchedIndices: indices}
 	if sub.Filter != nil {
@@ -191,7 +196,25 @@ func (b *Broadcaster) dispatchEvent(tx wal.Tx, sub *Subscriber, indices []int) {
 			filtered = append(filtered, ch)
 		}
 		if len(filtered) == 0 {
-			return
+			return 0 // silent drop — no metric, no Drop() (INVARIANT #3)
+		}
+		// D-02: cap is post-filter (delivered count), not pre-filter (candidate count).
+		// Counting pre-filter would falsely drop narrow-whitelist subscribers on large txs.
+		if len(filtered) > capLimit {
+			b.metrics.TxDropped("tx_too_large").Inc()
+			sub.Drop("tx_too_large")
+			channel := sub.Schema() + "." + sub.Table()
+			if sub.Kind() == KindExact {
+				channel = channel + ":" + sub.PK()
+			}
+			b.log.Warn().
+				Str("subscriber_id", sub.ID()).
+				Str("channel", channel).
+				Int("filtered_count", len(filtered)).
+				Int("limit", capLimit).
+				Str("commit_lsn", tx.CommitLSN.String()).
+				Msg("subscriber dropped: tx_too_large")
+			return 0
 		}
 		subTx := tx
 		subTx.Changes = filtered
@@ -200,6 +223,26 @@ func (b *Broadcaster) dispatchEvent(tx wal.Tx, sub *Subscriber, indices []int) {
 			newIdx[i] = i
 		}
 		ev = Event{Tx: subTx, MatchedIndices: newIdx}
+	} else {
+		// nil-Filter fast path: ev.Tx.Changes shares backing array with tx.Changes
+		// (no clone — Pitfall 3 / TestRouteTxNilFilterUnchangedFastPath).
+		// Cap still applies on the full index count (Pitfall 2).
+		if len(indices) > capLimit {
+			b.metrics.TxDropped("tx_too_large").Inc()
+			sub.Drop("tx_too_large")
+			channel := sub.Schema() + "." + sub.Table()
+			if sub.Kind() == KindExact {
+				channel = channel + ":" + sub.PK()
+			}
+			b.log.Warn().
+				Str("subscriber_id", sub.ID()).
+				Str("channel", channel).
+				Int("change_count", len(indices)).
+				Int("limit", capLimit).
+				Str("commit_lsn", tx.CommitLSN.String()).
+				Msg("subscriber dropped: tx_too_large")
+			return 0
+		}
 	}
 
 	frame, overflow := b.enc.Encode(ev)
@@ -211,7 +254,7 @@ func (b *Broadcaster) dispatchEvent(tx wal.Tx, sub *Subscriber, indices []int) {
 			Str("commit_lsn", tx.CommitLSN.String()).
 			Int("matched_changes", len(ev.MatchedIndices)).
 			Msg("subscriber dropped: tx_too_large (payload cap)")
-		return
+		return 0
 	}
 
 	if !sub.send(frame) {
@@ -222,8 +265,10 @@ func (b *Broadcaster) dispatchEvent(tx wal.Tx, sub *Subscriber, indices []int) {
 			Str("reason", "slow_consumer").
 			Str("commit_lsn", tx.CommitLSN.String()).
 			Msg("subscriber dropped: slow_consumer")
-		return
+		return 0
 	}
+
+	return len(ev.MatchedIndices) // D-03: delivered change count for TxFanOutWork
 }
 
 func (b *Broadcaster) Metrics() *metrics.Registry { return b.metrics }
