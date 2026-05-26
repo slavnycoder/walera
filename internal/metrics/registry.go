@@ -253,14 +253,14 @@ func newRouterMetrics(r *Registry) {
 	})
 	r.txFanOutWork = prometheus.NewHistogram(prometheus.HistogramOpts{
 		Name: "walera_tx_fan_out_work",
-		Help: "Per-transaction delivered-change fan-out work (Σ post-filter delivered changes across eligible subscribers). Observe-only metric (D-03); no hard global cap — the per-subscriber post-filter MaxChangesPerTx cap is the protective control.",
+		Help: "Per-transaction delivered-change fan-out work (Σ post-filter delivered changes across eligible subscribers). Observe-only; the per-subscriber post-filter MaxChangesPerTx cap is the protective control.",
 		// Buckets extend the walera_routing_fan_out tail to 50000 because
 		// work = changes × subscribers can exceed pure fan-out counts.
 		Buckets: []float64{1, 5, 25, 100, 500, 2500, 10000, 50000},
 	})
 	r.coBeyondAnchorTotal = prometheus.NewCounter(prometheus.CounterOpts{
 		Name: "walera_co_tx_beyond_anchor_total",
-		Help: "Cumulative delivered changes that a subscriber received from a matched transaction beyond their own anchor-matched key(s) — the incremental volume added by whole-transaction delivery. Observe-only (D-03); complements walera_tx_fan_out_work.",
+		Help: "Cumulative delivered changes that a subscriber received from a matched transaction beyond their own anchor-matched key(s) — the incremental volume added by whole-transaction delivery. Observe-only; complements walera_tx_fan_out_work.",
 	})
 	r.routingIndexSize = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "walera_routing_index_size",

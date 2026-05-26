@@ -175,7 +175,7 @@ func (b *Broadcaster) matchWildcard(key string) []*Subscriber {
 
 // mergeMatches builds the per-tx eligibility set: a subscriber is eligible once any
 // change in the tx matches its exact or wildcard key. The map[*Subscriber]struct{}
-// inherently deduplicates multiple matches (INVARIANT #1; TXN-01/TXN-04).
+// inherently deduplicates multiple matches.
 func (b *Broadcaster) mergeMatches(tx wal.Tx, eligible map[*Subscriber]struct{}) {
 	for _, ch := range tx.Changes {
 		for _, sub := range b.matchExact(ch.Key()) {

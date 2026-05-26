@@ -955,11 +955,11 @@ func equalInts(a, b []int) bool {
 	return true
 }
 
-// TestBroadcaster_WholeTransactionEligibility (TXN-01):
+// TestBroadcaster_WholeTransactionEligibility:
 // A subscriber to todo_lists:42 becomes eligible for the whole tx once
 // the todo_lists:42 UPDATE matches. The tx also contains a tasks:99 INSERT.
 // Under per-tx semantics the subscriber must receive BOTH changes (not only
-// the anchor change). This FAILS against the old per-change code.
+// the anchor change).
 func TestBroadcaster_WholeTransactionEligibility(t *testing.T) {
 	t.Parallel()
 
@@ -980,12 +980,11 @@ func TestBroadcaster_WholeTransactionEligibility(t *testing.T) {
 	)
 	sendTx(t, txCh, tx)
 
-	// Subscriber must receive an event (TXN-01: eligible once anchor matches).
+	// Subscriber must receive an event once the anchor matches.
 	ev := drainOne(t, sub, 200*time.Millisecond)
 
-	// Under the new per-tx semantics the event must contain BOTH changes
-	// (indices 0 and 1) because the subscriber is eligible for the whole tx.
-	// The old per-change code only delivers index 0 (todo_lists:42 anchor).
+	// Event must contain BOTH changes (indices 0 and 1) because the
+	// subscriber is eligible for the whole tx.
 	if got, want := len(ev.MatchedIndices), 2; got != want {
 		t.Errorf("MatchedIndices length: got %d; want %d (both tx changes expected)", got, want)
 	}
@@ -1003,11 +1002,9 @@ func TestBroadcaster_WholeTransactionEligibility(t *testing.T) {
 	<-done
 }
 
-// TestBroadcaster_CoTxWhitelistedDelivery (TXN-02):
-// Same tx as TXN-01. A subscriber Filter admits both todo_lists and tasks changes.
+// TestBroadcaster_CoTxWhitelistedDelivery:
+// A subscriber Filter admits both todo_lists and tasks changes from the same tx.
 // The single delivered Event must contain BOTH changes (not only the anchor change).
-// Under the old per-change code, only the matched todo_lists:42 change is dispatched
-// so tasks:99 is dropped before the Filter even runs.
 func TestBroadcaster_CoTxWhitelistedDelivery(t *testing.T) {
 	t.Parallel()
 
@@ -1029,8 +1026,7 @@ func TestBroadcaster_CoTxWhitelistedDelivery(t *testing.T) {
 
 	ev := drainOne(t, sub, 200*time.Millisecond)
 
-	// Both changes must appear in the delivered event (TXN-02).
-	// The old per-change code only delivers todo_lists:42 (1 change).
+	// Both changes must appear in the delivered event.
 	if got, want := len(ev.Tx.Changes), 2; got != want {
 		t.Errorf("ev.Tx.Changes length: got %d; want %d (both changes must be delivered)", got, want)
 	}
@@ -1047,14 +1043,14 @@ func TestBroadcaster_CoTxWhitelistedDelivery(t *testing.T) {
 		t.Error("delivered event missing todo_lists change")
 	}
 	if !tables["tasks"] {
-		t.Error("delivered event missing co-transactional tasks change (TXN-02 failure)")
+		t.Error("delivered event missing co-transactional tasks change")
 	}
 }
 
-// TestBroadcaster_SingleEventPerSubDedup (TXN-04):
+// TestBroadcaster_SingleEventPerSubDedup:
 // A wildcard subscriber on todo_lists is matched by multiple changes in one tx.
 // The subscriber must receive exactly ONE event containing all changes in commit order.
-// The eligible-set (map[*Subscriber]struct{}) deduplicates multiple matches to one dispatch.
+// The eligible-set deduplicates multiple matches to one dispatch.
 func TestBroadcaster_SingleEventPerSubDedup(t *testing.T) {
 	t.Parallel()
 
@@ -1071,7 +1067,7 @@ func TestBroadcaster_SingleEventPerSubDedup(t *testing.T) {
 	)
 	b.routeTx(tx)
 
-	// Exactly one event (TXN-04: dedup via eligible set).
+	// Exactly one event: dedup via eligible set.
 	ev := drainOne(t, sub, 200*time.Millisecond)
 	expectNoFrame(t, sub, 50*time.Millisecond)
 
@@ -1084,9 +1080,9 @@ func TestBroadcaster_SingleEventPerSubDedup(t *testing.T) {
 	}
 }
 
-// TestBroadcaster_NonMatchingTxNoDelivery (TXN-05):
+// TestBroadcaster_NonMatchingTxNoDelivery:
 // Subscriber to todo_lists:42; tx touches only tasks table.
-// No event must be sent (assert send never called).
+// No event must be sent.
 func TestBroadcaster_NonMatchingTxNoDelivery(t *testing.T) {
 	t.Parallel()
 
@@ -1100,7 +1096,7 @@ func TestBroadcaster_NonMatchingTxNoDelivery(t *testing.T) {
 	)
 	b.routeTx(tx)
 
-	// No event must be delivered (TXN-05).
+	// No event must be delivered.
 	expectNoFrame(t, sub, 100*time.Millisecond)
 
 	for _, reason := range []string{"slow_consumer", "tx_too_large"} {

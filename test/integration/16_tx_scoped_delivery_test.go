@@ -8,25 +8,24 @@ import (
 	"time"
 )
 
-// Test16TxScopedDelivery proves ROADMAP Phase 1 criteria 1-4 end-to-end
+// Test16TxScopedDelivery exercises transaction-scoped delivery end-to-end
 // through the real WAL pipeline (pgoutput logical replication → broadcaster →
 // SSE encoder).  Tables todo_lists and tasks are defined in
 // testdata/002_tx_scoped_tables.sql and published via cdc_sse_streamer.
 //
-// Criteria mapping:
+// Sub-scenarios:
 //
-//	criterion 1 (TXN-02): co-transactional tasks change arrives in the same
-//	                       single event as the todo_lists anchor change.
-//	criterion 2 (TXN-03): non-whitelisted tasks changes (including PK-only
-//	                       DELETE) are absent from the delivered event.
-//	criterion 3 (TXN-04): multiply-matched subscriber receives exactly one
-//	                       ordered event with all changes.
-//	criterion 4 (TXN-05): subscriber whose anchor entity is absent from a tx
-//	                       receives no event.
+//  1. co-transactional tasks change arrives in the same single event as the
+//     todo_lists anchor change.
+//  2. non-whitelisted tasks changes (including PK-only DELETE) are absent from
+//     the delivered event.
+//  3. multiply-matched subscriber receives exactly one ordered event with all
+//     changes.
+//  4. subscriber whose anchor entity is absent from a tx receives no event.
 func Test16TxScopedDelivery(t *testing.T) {
 	t.Parallel()
 
-	// Sub-scenario 1 — Criterion 1 (TXN-02)
+	// Sub-scenario 1: co-tx tasks delivered with anchor.
 	// A subscriber to todo_lists/42 whose whitelist includes both todo_lists
 	// and tasks receives the tasks INSERT in the SAME single event as the
 	// todo_lists UPDATE.
@@ -79,7 +78,7 @@ func Test16TxScopedDelivery(t *testing.T) {
 
 		// Must arrive as ONE event.
 		if len(ev.Changes) != 2 {
-			t.Fatalf("criterion 1: expected 2 changes in one event, got %d (raw=%+v)", len(ev.Changes), ev.Changes)
+			t.Fatalf("co-tx anchor:expected 2 changes in one event, got %d (raw=%+v)", len(ev.Changes), ev.Changes)
 		}
 
 		// Both tables must be represented.
@@ -88,14 +87,14 @@ func Test16TxScopedDelivery(t *testing.T) {
 			tables[c.Table] = struct{}{}
 		}
 		if _, ok := tables["todo_lists"]; !ok {
-			t.Errorf("criterion 1: todo_lists change missing from event (changes=%+v)", ev.Changes)
+			t.Errorf("co-tx anchor:todo_lists change missing from event (changes=%+v)", ev.Changes)
 		}
 		if _, ok := tables["tasks"]; !ok {
-			t.Errorf("criterion 1: tasks change missing from event (changes=%+v)", ev.Changes)
+			t.Errorf("co-tx anchor:tasks change missing from event (changes=%+v)", ev.Changes)
 		}
 	})
 
-	// Sub-scenario 2 — Criterion 2 (TXN-03)
+	// Sub-scenario 2: non-whitelisted tasks change must not leak.
 	// A subscriber whose whitelist excludes tasks receives only the todo_lists
 	// change; no tasks change leaks through.
 	t.Run("NonWhitelistedTasksNotDelivered", func(t *testing.T) {
@@ -143,19 +142,19 @@ func Test16TxScopedDelivery(t *testing.T) {
 
 		// Exactly ONE change — the todo_lists update; tasks must be absent.
 		if len(ev.Changes) != 1 {
-			t.Fatalf("criterion 2: expected 1 change, got %d (raw=%+v)", len(ev.Changes), ev.Changes)
+			t.Fatalf("whitelist filter:expected 1 change, got %d (raw=%+v)", len(ev.Changes), ev.Changes)
 		}
 		if ev.Changes[0].Table != "todo_lists" {
-			t.Errorf("criterion 2: expected todo_lists change, got table=%q", ev.Changes[0].Table)
+			t.Errorf("whitelist filter:expected todo_lists change, got table=%q", ev.Changes[0].Table)
 		}
 		for _, c := range ev.Changes {
 			if c.Table == "tasks" {
-				t.Errorf("criterion 2: tasks change leaked through whitelist: %+v", c)
+				t.Errorf("whitelist filter:tasks change leaked through whitelist: %+v", c)
 			}
 		}
 	})
 
-	// Sub-scenario 3 — Criterion 2 / D-07 delete-no-leak (TXN-03)
+	// Sub-scenario 3: delete on non-whitelisted table must not leak.
 	// A tx that updates todo_lists:44 AND DELETEs a tasks row must not deliver
 	// any tasks change (not even a PK-only DELETE) to a subscriber whose
 	// whitelist excludes tasks.
@@ -223,7 +222,7 @@ func Test16TxScopedDelivery(t *testing.T) {
 		}
 	})
 
-	// Sub-scenario 4 — Criterion 3 (TXN-04)
+	// Sub-scenario 4: multiple matches collapse into a single ordered event.
 	// A wildcard subscriber on todo_lists/all matched by multiple todo_lists
 	// changes in one tx receives exactly ONE event with all changes in commit
 	// order; no duplicates.
@@ -264,15 +263,15 @@ func Test16TxScopedDelivery(t *testing.T) {
 
 		// Exactly ONE event with exactly 3 changes in commit order.
 		if len(ev.Changes) != 3 {
-			t.Fatalf("criterion 3: expected 3 changes in one event, got %d (raw=%+v)", len(ev.Changes), ev.Changes)
+			t.Fatalf("multi-match dedup:expected 3 changes in one event, got %d (raw=%+v)", len(ev.Changes), ev.Changes)
 		}
 		wantPKs := []string{"101", "102", "103"}
 		for i, c := range ev.Changes {
 			if c.PK != wantPKs[i] {
-				t.Errorf("criterion 3: change[%d].pk = %q, want %q", i, c.PK, wantPKs[i])
+				t.Errorf("multi-match dedup:change[%d].pk = %q, want %q", i, c.PK, wantPKs[i])
 			}
 			if c.Table != "todo_lists" {
-				t.Errorf("criterion 3: change[%d].table = %q, want %q", i, c.Table, "todo_lists")
+				t.Errorf("multi-match dedup:change[%d].table = %q, want %q", i, c.Table, "todo_lists")
 			}
 		}
 
@@ -280,14 +279,14 @@ func Test16TxScopedDelivery(t *testing.T) {
 		select {
 		case extra := <-events:
 			if extra.Type == "tx" {
-				t.Errorf("criterion 3: unexpected second tx event: %+v", extra)
+				t.Errorf("multi-match dedup:unexpected second tx event: %+v", extra)
 			}
 		case <-time.After(500 * time.Millisecond):
 			// OK — only one event delivered.
 		}
 	})
 
-	// Sub-scenario 5 — Criterion 4 (TXN-05)
+	// Sub-scenario 5: non-matching tx delivers no event.
 	// A subscriber on todo_lists/45 receives no event when a transaction
 	// touches only tasks (todo_lists:45 is absent from the tx).
 	t.Run("NonMatchingTxNoEvent", func(t *testing.T) {
@@ -320,10 +319,10 @@ func Test16TxScopedDelivery(t *testing.T) {
 		select {
 		case ev := <-events:
 			if ev.Type == "tx" {
-				t.Fatalf("criterion 4: unexpected event delivered (subscriber not in tx): %+v", ev)
+				t.Fatalf("non-matching tx:unexpected event delivered (subscriber not in tx): %+v", ev)
 			}
 		case err := <-errCh:
-			t.Fatalf("criterion 4: client error: %v", err)
+			t.Fatalf("non-matching tx:client error: %v", err)
 		case <-time.After(500 * time.Millisecond):
 			// OK — nothing delivered to a non-matching subscriber.
 		}
