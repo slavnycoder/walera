@@ -8,6 +8,93 @@ import (
 	dto "github.com/prometheus/client_model/go"
 )
 
+// TestRegistry_TxFanOutWork_PreTouched asserts that walera_tx_fan_out_work is
+// present in Gather() output from a freshly constructed Registry (pre-touch
+// confirmed — no gap from t=0) and that TxFanOutWork() returns a non-nil
+// prometheus.Histogram on which Observe can be called.
+func TestRegistry_TxFanOutWork_PreTouched(t *testing.T) {
+	t.Parallel()
+	r := New()
+
+	h := r.TxFanOutWork()
+	if h == nil {
+		t.Fatal("TxFanOutWork() returned nil")
+	}
+	// Verify the accessor returns a usable histogram (should not panic).
+	h.Observe(42)
+
+	mfs, err := r.Gatherer().Gather()
+	if err != nil {
+		t.Fatalf("Gather: %v", err)
+	}
+	var found *dto.MetricFamily
+	for _, mf := range mfs {
+		if mf.GetName() == "walera_tx_fan_out_work" {
+			found = mf
+			break
+		}
+	}
+	if found == nil {
+		t.Fatal("walera_tx_fan_out_work not in Gather() output — pre-touch or registration missing")
+	}
+
+	// The series must be present even before any caller-driven Observe (pre-touch).
+	// After our Observe(42) above the histogram should have at least one sample.
+	ms := found.GetMetric()
+	if len(ms) == 0 {
+		t.Fatal("walera_tx_fan_out_work: no Metric children")
+	}
+	if ms[0].GetHistogram() == nil {
+		t.Fatal("walera_tx_fan_out_work: not a Histogram")
+	}
+}
+
+// TestRegistry_TxFanOutWork_Buckets asserts the histogram uses the expected
+// extended bucket set aligned with the plan spec (tail extended to 50000 to
+// cover work = changes × subscribers which can exceed pure fan-out).
+func TestRegistry_TxFanOutWork_Buckets(t *testing.T) {
+	t.Parallel()
+	r := New()
+
+	mfs, err := r.Gatherer().Gather()
+	if err != nil {
+		t.Fatalf("Gather: %v", err)
+	}
+	var found *dto.MetricFamily
+	for _, mf := range mfs {
+		if mf.GetName() == "walera_tx_fan_out_work" {
+			found = mf
+			break
+		}
+	}
+	if found == nil {
+		t.Fatal("walera_tx_fan_out_work not in Gather() output")
+	}
+	ms := found.GetMetric()
+	if len(ms) == 0 {
+		t.Fatal("walera_tx_fan_out_work: no Metric children")
+	}
+	h := ms[0].GetHistogram()
+	if h == nil {
+		t.Fatal("walera_tx_fan_out_work: not a Histogram")
+	}
+
+	want := []float64{1, 5, 25, 100, 500, 2500, 10000, 50000}
+	got := make([]float64, 0, len(h.GetBucket()))
+	for _, b := range h.GetBucket() {
+		got = append(got, b.GetUpperBound())
+	}
+	if len(got) != len(want) {
+		t.Fatalf("walera_tx_fan_out_work bucket count: got %d %v; want %d %v",
+			len(got), got, len(want), want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("walera_tx_fan_out_work bucket[%d]: got %v; want %v", i, got[i], want[i])
+		}
+	}
+}
+
 func TestRegistry_GatherIncludesAllMetrics(t *testing.T) {
 	t.Parallel()
 
@@ -66,6 +153,7 @@ func TestRegistry_GatherIncludesAllMetrics(t *testing.T) {
 		"walera_subscriber_queue_depth",
 		"walera_subscribers_active",
 		"walera_tx_dropped_total",
+		"walera_tx_fan_out_work",
 		"walera_wal_decode_duration_seconds",
 		"walera_wal_lsn_lag_bytes",
 		"walera_wal_standby_ack_failures_total",
