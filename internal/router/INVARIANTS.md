@@ -49,12 +49,14 @@ Pre-sweep archaeology anchor: commit `de6b665` (pre-SWEEP-02 HEAD).
    `dispatchEvent`). `RoutingFanOut` reflects the post-merge eligible
    subscriber count; `TxFanOutWork` (D-03) is observed after the
    dispatch loop with Σ delivered changes across all eligible
-   subscribers and is observed only when `len(eligible) > 0`; the
+   subscribers and is observed only when `totalDelivered > 0` (a matched tx
+   whose eligible subscribers were all dropped records no histogram sample —
+   the registry pre-touch already seeds the series at t=0); the
    `lookupTimer` defer brackets the merge + dispatch as one atomic
    measurement window. `CoBeyondAnchorTotal` (D-01/SAFE-02) is the
    beyond-anchor counter accumulated across the dispatch loop from the
    second return value of `dispatchEvent` and observed only when
-   `len(eligible) > 0` (Pitfall 3) — alongside `TxFanOutWork`.
+   `totalBeyondAnchor > 0` — alongside `TxFanOutWork`.
 
 5. **Sticky-reason atomic.Pointer in Subscriber.** `reasonPtr
    atomic.Pointer[string]` is written by `Drop` BEFORE `cancel` so any
