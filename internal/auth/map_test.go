@@ -71,9 +71,15 @@ func TestMapFilter_AllChangedColumnsHiddenIsSilentDrop(t *testing.T) {
 		PK: "42", PKCol: "id",
 		Changed: map[string]any{"name": "Alice"},
 	}
-	_, drop := m.Filter(c)
+	out, drop := m.Filter(c)
 	if !drop {
 		t.Fatal("drop=false; want true (hidden-update-only with PK absent → silent drop)")
+	}
+	if out.Changed != nil {
+		t.Errorf("out.Changed=%v; want nil (must not leak on drop=true)", out.Changed)
+	}
+	if out.Data != nil {
+		t.Errorf("out.Data=%v; want nil (must not leak on drop=true)", out.Data)
 	}
 }
 
@@ -86,9 +92,15 @@ func TestMapFilter_PKAloneInChangedIsSilentDrop(t *testing.T) {
 		PK: "42", PKCol: "id",
 		Changed: map[string]any{"id": "42", "secret": "redacted"},
 	}
-	_, drop := m.Filter(c)
+	out, drop := m.Filter(c)
 	if !drop {
 		t.Fatal("drop=false; want true (only PK survives after filter → silent drop)")
+	}
+	if out.Changed != nil {
+		t.Errorf("out.Changed=%v; want nil (must not leak on drop=true)", out.Changed)
+	}
+	if out.Data != nil {
+		t.Errorf("out.Data=%v; want nil (must not leak on drop=true)", out.Data)
 	}
 }
 
@@ -101,9 +113,15 @@ func TestMapFilter_PGEmitsAllColumnsHiddenUpdateIsSilentDrop(t *testing.T) {
 		PK: "88", PKCol: "id",
 		Changed: map[string]any{"id": "88", "email": "old@x", "name": "NewName"},
 	}
-	_, drop := m.Filter(c)
+	out, drop := m.Filter(c)
 	if !drop {
 		t.Fatal("drop=false; want true (PG-emits-all-cols update with PK-only whitelist must drop)")
+	}
+	if out.Changed != nil {
+		t.Errorf("out.Changed=%v; want nil (must not leak on drop=true)", out.Changed)
+	}
+	if out.Data != nil {
+		t.Errorf("out.Data=%v; want nil (must not leak on drop=true)", out.Data)
 	}
 }
 
