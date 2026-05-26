@@ -9,16 +9,19 @@ Pre-sweep archaeology anchor: commit `de6b665` (pre-SWEEP-02 HEAD).
 ## Concurrency
 
 1. **mergeMatches out-param signature.** `mergeMatches` takes
-   `matched map[*Subscriber][]int` as an in-out parameter rather than
-   returning the map; the caller pre-allocates
-   `matched := make(map[*Subscriber][]int, 8)` on its own stack frame
-   (`router.go` inside `routeTx`). This prevents heap-escape that would
-   breach the ≤3% allocs/op BENCH-02 gate (DECOMP-06 sub-shape
-   `exact_10` / `wildcard_100`). The per-tx subscriber-set accumulation
-   invariant (doc.go #2 — one Event per subscriber per tx) is preserved
-   by this signature shape: every matched-change pair lands in the same
-   map keyed by `*Subscriber`, regardless of how many `tx.Changes` it
-   matches.
+   `eligible map[*Subscriber]struct{}` as an in-out parameter rather
+   than returning the map; the caller pre-allocates
+   `eligible := make(map[*Subscriber]struct{}, 8)` on its own stack
+   frame (`router.go` inside `routeTx`). This prevents heap-escape that
+   would breach the ≤3% allocs/op BENCH-02 gate (DECOMP-06 sub-shape
+   `exact_10` / `wildcard_100`). The eligible-set shape inherently
+   deduplicates multiple per-change hits for the same subscriber (a
+   second `eligible[sub] = struct{}{}` is a no-op), so doc.go #2
+   (one Event per subscriber per tx) is preserved without extra dedup
+   logic inside `mergeMatches`. `routeTx` allocates `fullIndices`
+   once per tx (one `make([]int, len(tx.Changes))`) and passes it
+   read-only to each sequential `dispatchEvent` call, eliminating the
+   per-subscriber-per-change `append` allocation of the prior shape.
 
 2. **tx_dropped_total{reason="multi_root"} pre-touch.** Pre-touched
    ONLY in `router.New` via `b.metrics.TxDropped("multi_root").Add(0)`.
@@ -38,12 +41,16 @@ Pre-sweep archaeology anchor: commit `de6b665` (pre-SWEEP-02 HEAD).
    `tx_too_large`. No other call sites Increment these counters in
    the router package.
 
-4. **routeTx stack-frame ownership.** The `lookupTimer` defer +
-   `RoutingFanOut().Observe(float64(len(matched)))` MUST stay in
-   `routeTx`'s stack frame (not lifted into `mergeMatches`), so the
-   fan-out histogram observation reflects the post-merge subscriber
-   count and the lookup timer brackets the merge + dispatch as one
-   atomic measurement window.
+4. **routeTx stack-frame ownership.** The `lookupTimer` defer,
+   `RoutingFanOut().Observe(float64(len(eligible)))`, and
+   `TxFanOutWork().Observe(float64(totalDelivered))` MUST all stay in
+   `routeTx`'s stack frame (not lifted into `mergeMatches` or
+   `dispatchEvent`). `RoutingFanOut` reflects the post-merge eligible
+   subscriber count; `TxFanOutWork` (D-03) is observed after the
+   dispatch loop with Σ delivered changes across all eligible
+   subscribers and is observed only when `len(eligible) > 0`; the
+   `lookupTimer` defer brackets the merge + dispatch as one atomic
+   measurement window.
 
 5. **Sticky-reason atomic.Pointer in Subscriber.** `reasonPtr
    atomic.Pointer[string]` is written by `Drop` BEFORE `cancel` so any
