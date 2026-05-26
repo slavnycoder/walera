@@ -192,3 +192,60 @@ func TestParseMap_RejectsMalformedJSON(t *testing.T) {
 		t.Fatal("ParseWhitelist: expected error for malformed JSON, got nil")
 	}
 }
+
+// TestMapFilter_DeleteNonWhitelistedTableDropped locks in the D-07 / TXN-03 delete-leak gate:
+// under whole-transaction delivery, every change in a matched tx reaches Filter for every
+// eligible subscriber — including DELETE, INSERT, and UPDATE on tables absent from the whitelist.
+// The absent-table !ok early-return at map.go:38-41 must drop all ops with no PK or row-content leakage.
+func TestMapFilter_DeleteNonWhitelistedTableDropped(t *testing.T) {
+	t.Parallel()
+
+	// Whitelist covers only todo_lists; the `tasks` table is intentionally absent.
+	m := mkMap("u1", map[string][]string{"todo_lists": {"id", "title"}})
+
+	tests := []struct {
+		name string
+		c    wal.Change
+	}{
+		{
+			name: "OpDelete on non-whitelisted table",
+			c: wal.Change{
+				Schema: "public", Table: "tasks", Op: wal.OpDelete,
+				PK: "99", PKCol: "id",
+			},
+		},
+		{
+			name: "OpInsert on non-whitelisted table",
+			c: wal.Change{
+				Schema: "public", Table: "tasks", Op: wal.OpInsert,
+				PK: "99", PKCol: "id",
+				Data: map[string]any{"id": "99", "title": "Buy milk"},
+			},
+		},
+		{
+			name: "OpUpdate on non-whitelisted table",
+			c: wal.Change{
+				Schema: "public", Table: "tasks", Op: wal.OpUpdate,
+				PK: "99", PKCol: "id",
+				Changed: map[string]any{"id": "99", "title": "Buy milk"},
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			out, drop := m.Filter(tc.c)
+			if !drop {
+				t.Fatalf("%s: drop=false; want true (tasks not in whitelist — must not leak)", tc.name)
+			}
+			// Even if a caller ignored drop, no row content must leak.
+			if out.Data != nil {
+				t.Errorf("%s: out.Data=%v; want nil (no row-content leakage when drop=true)", tc.name, out.Data)
+			}
+			if out.Changed != nil {
+				t.Errorf("%s: out.Changed=%v; want nil (no row-content leakage when drop=true)", tc.name, out.Changed)
+			}
+		})
+	}
+}
