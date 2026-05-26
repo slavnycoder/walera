@@ -119,6 +119,7 @@ func TestRegistry_GatherIncludesAllMetrics(t *testing.T) {
 	r.PGConnectionStatus().Set(0)
 
 	r.WALStandbyACKFailures().Inc()
+	r.PoolWorkerDirtySubs("0").Set(0)
 
 	mfs, err := r.Gatherer().Gather()
 	if err != nil {
@@ -144,6 +145,7 @@ func TestRegistry_GatherIncludesAllMetrics(t *testing.T) {
 
 		"walera_pool_drain_batch_size",
 		"walera_pool_drain_duration_seconds",
+		"walera_pool_worker_dirty_subs",
 		"walera_route_lookup_duration_seconds",
 		"walera_routing_fan_out",
 		"walera_routing_index_size",
