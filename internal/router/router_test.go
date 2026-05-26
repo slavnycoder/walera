@@ -497,9 +497,12 @@ func TestBroadcaster_ExactAndWildcardSameTx_SingleEventPerSub(t *testing.T) {
 	)
 	sendTx(t, txCh, tx)
 
+	// Under per-tx semantics: exact subscriber to users:42 becomes eligible for the
+	// whole tx (anchor match at index 0); with nil Filter (no whitelist), the full
+	// index set [0,1,2] is delivered — the same as the wildcard subscriber (Pitfall 5).
 	exactEv := drainOne(t, exact, 200*time.Millisecond)
-	if got, want := exactEv.MatchedIndices, []int{0}; !equalInts(got, want) {
-		t.Errorf("exact MatchedIndices: got %v; want %v", got, want)
+	if got, want := exactEv.MatchedIndices, []int{0, 1, 2}; !equalInts(got, want) {
+		t.Errorf("exact MatchedIndices: got %v; want %v (per-tx: full tx delivered once eligible)", got, want)
 	}
 
 	wildEv := drainOne(t, wild, 200*time.Millisecond)
@@ -946,4 +949,334 @@ func equalInts(a, b []int) bool {
 		}
 	}
 	return true
+}
+
+// TestBroadcaster_WholeTransactionEligibility (TXN-01):
+// A subscriber to todo_lists:42 becomes eligible for the whole tx once
+// the todo_lists:42 UPDATE matches. The tx also contains a tasks:99 INSERT.
+// Under per-tx semantics the subscriber must receive BOTH changes (not only
+// the anchor change). This FAILS against the old per-change code.
+func TestBroadcaster_WholeTransactionEligibility(t *testing.T) {
+	t.Parallel()
+
+	b, reg := mkBroadcaster(10000)
+	sub := mkExactSub("public", "todo_lists", "42", 0, 4)
+	recordedFor(t, sub).useEncoder(b.enc.(*stubEncoder))
+	b.Register(sub)
+
+	txCh := make(chan wal.Tx, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done, _ := runIngest(b, ctx, txCh)
+
+	// Tx contains both the anchor change and a co-transactional change.
+	tx := mkTx(pglogrepl.LSN(0x1000), 100,
+		mkChange(wal.OpUpdate, "public", "todo_lists", "42"),
+		mkChange(wal.OpInsert, "public", "tasks", "99"),
+	)
+	sendTx(t, txCh, tx)
+
+	// Subscriber must receive an event (TXN-01: eligible once anchor matches).
+	ev := drainOne(t, sub, 200*time.Millisecond)
+
+	// Under the new per-tx semantics the event must contain BOTH changes
+	// (indices 0 and 1) because the subscriber is eligible for the whole tx.
+	// The old per-change code only delivers index 0 (todo_lists:42 anchor).
+	if got, want := len(ev.MatchedIndices), 2; got != want {
+		t.Errorf("MatchedIndices length: got %d; want %d (both tx changes expected)", got, want)
+	}
+	if !equalInts(ev.MatchedIndices, []int{0, 1}) {
+		t.Errorf("MatchedIndices: got %v; want [0 1] (full tx in commit order)", ev.MatchedIndices)
+	}
+
+	for _, reason := range []string{"slow_consumer", "tx_too_large", "multi_root"} {
+		if v := gatherCounter(t, reg, "walera_tx_dropped_total", "reason", reason); v != 0 {
+			t.Errorf("tx_dropped_total{reason=%s}: got %v; want 0", reason, v)
+		}
+	}
+
+	cancel()
+	<-done
+}
+
+// TestBroadcaster_CoTxWhitelistedDelivery (TXN-02):
+// Same tx as TXN-01. A subscriber Filter admits both todo_lists and tasks changes.
+// The single delivered Event must contain BOTH changes (not only the anchor change).
+// Under the old per-change code, only the matched todo_lists:42 change is dispatched
+// so tasks:99 is dropped before the Filter even runs.
+func TestBroadcaster_CoTxWhitelistedDelivery(t *testing.T) {
+	t.Parallel()
+
+	b, _ := mkBroadcaster(10000)
+	sub := mkExactSub("public", "todo_lists", "42", 0, 4)
+	recordedFor(t, sub).useEncoder(b.enc.(*stubEncoder))
+
+	// Filter admits all changes (drop=false for every change).
+	sub.Filter = func(c wal.Change, _ pglogrepl.LSN) (wal.Change, bool) {
+		return c, false // admit everything
+	}
+	b.Register(sub)
+
+	tx := mkTx(pglogrepl.LSN(0x1010), 101,
+		mkChange(wal.OpUpdate, "public", "todo_lists", "42"),
+		mkChange(wal.OpInsert, "public", "tasks", "99"),
+	)
+	b.routeTx(tx)
+
+	ev := drainOne(t, sub, 200*time.Millisecond)
+
+	// Both changes must appear in the delivered event (TXN-02).
+	// The old per-change code only delivers todo_lists:42 (1 change).
+	if got, want := len(ev.Tx.Changes), 2; got != want {
+		t.Errorf("ev.Tx.Changes length: got %d; want %d (both changes must be delivered)", got, want)
+	}
+	if got, want := len(ev.MatchedIndices), 2; got != want {
+		t.Errorf("ev.MatchedIndices length: got %d; want %d", got, want)
+	}
+
+	// Verify both tables appear in the delivered changes.
+	tables := make(map[string]bool)
+	for _, ch := range ev.Tx.Changes {
+		tables[ch.Table] = true
+	}
+	if !tables["todo_lists"] {
+		t.Error("delivered event missing todo_lists change")
+	}
+	if !tables["tasks"] {
+		t.Error("delivered event missing co-transactional tasks change (TXN-02 failure)")
+	}
+}
+
+// TestBroadcaster_SingleEventPerSubDedup (TXN-04):
+// A wildcard subscriber on todo_lists is matched by multiple changes in one tx.
+// The subscriber must receive exactly ONE event containing all changes in commit order.
+// The eligible-set (map[*Subscriber]struct{}) deduplicates multiple matches to one dispatch.
+func TestBroadcaster_SingleEventPerSubDedup(t *testing.T) {
+	t.Parallel()
+
+	b, _ := mkBroadcaster(10000)
+	// Wildcard subscriber so multiple changes in the tx match.
+	sub := mkWildcardSub("public", "todo_lists", 0, 8)
+	recordedFor(t, sub).useEncoder(b.enc.(*stubEncoder))
+	b.Register(sub)
+
+	tx := mkTx(pglogrepl.LSN(0x1020), 102,
+		mkChange(wal.OpUpdate, "public", "todo_lists", "42"),
+		mkChange(wal.OpUpdate, "public", "todo_lists", "43"),
+		mkChange(wal.OpUpdate, "public", "todo_lists", "44"),
+	)
+	b.routeTx(tx)
+
+	// Exactly one event (TXN-04: dedup via eligible set).
+	ev := drainOne(t, sub, 200*time.Millisecond)
+	expectNoFrame(t, sub, 50*time.Millisecond)
+
+	// All three changes delivered in commit order.
+	if got, want := len(ev.MatchedIndices), 3; got != want {
+		t.Errorf("MatchedIndices length: got %d; want %d", got, want)
+	}
+	if !equalInts(ev.MatchedIndices, []int{0, 1, 2}) {
+		t.Errorf("MatchedIndices: got %v; want [0 1 2] (commit order)", ev.MatchedIndices)
+	}
+}
+
+// TestBroadcaster_NonMatchingTxNoDelivery (TXN-05):
+// Subscriber to todo_lists:42; tx touches only tasks table.
+// No event must be sent (assert send never called).
+func TestBroadcaster_NonMatchingTxNoDelivery(t *testing.T) {
+	t.Parallel()
+
+	b, reg := mkBroadcaster(10000)
+	sub := mkExactSub("public", "todo_lists", "42", 0, 4)
+	b.Register(sub)
+
+	tx := mkTx(pglogrepl.LSN(0x1030), 103,
+		mkChange(wal.OpInsert, "public", "tasks", "1"),
+		mkChange(wal.OpInsert, "public", "tasks", "2"),
+	)
+	b.routeTx(tx)
+
+	// No event must be delivered (TXN-05).
+	expectNoFrame(t, sub, 100*time.Millisecond)
+
+	for _, reason := range []string{"slow_consumer", "tx_too_large"} {
+		if v := gatherCounter(t, reg, "walera_tx_dropped_total", "reason", reason); v != 0 {
+			t.Errorf("tx_dropped_total{reason=%s}: got %v; want 0", reason, v)
+		}
+	}
+}
+
+// TestBroadcaster_TxTooLarge_PostFilterCap (SAFE-01 / D-02):
+// Filter admits more than cap changes → Drop("tx_too_large"), TxDropped incremented.
+// cap=3; tx has 5 changes all admitted by Filter → subscriber dropped.
+func TestBroadcaster_TxTooLarge_PostFilterCap(t *testing.T) {
+	t.Parallel()
+
+	b, reg := mkBroadcaster(3) // cap = 3
+	sub := mkWildcardSub("public", "todo_lists", 0, 16)
+
+	// Filter admits all changes (no drop).
+	sub.Filter = func(c wal.Change, _ pglogrepl.LSN) (wal.Change, bool) {
+		return c, false
+	}
+	b.Register(sub)
+
+	tx := mkTx(pglogrepl.LSN(0x1040), 104,
+		mkChange(wal.OpUpdate, "public", "todo_lists", "1"),
+		mkChange(wal.OpUpdate, "public", "todo_lists", "2"),
+		mkChange(wal.OpUpdate, "public", "todo_lists", "3"),
+		mkChange(wal.OpUpdate, "public", "todo_lists", "4"),
+		mkChange(wal.OpUpdate, "public", "todo_lists", "5"),
+	)
+	b.routeTx(tx)
+
+	// Subscriber must be dropped (5 post-filter changes > cap 3).
+	select {
+	case <-sub.Done():
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("subscriber not dropped within 500ms (post-filter cap)")
+	}
+	if got, want := sub.Reason(), "tx_too_large"; got != want {
+		t.Errorf("Reason: got %q; want %q", got, want)
+	}
+	if v := gatherCounter(t, reg, "walera_tx_dropped_total", "reason", "tx_too_large"); v != 1 {
+		t.Errorf("tx_dropped_total{reason=tx_too_large}: got %v; want 1", v)
+	}
+}
+
+// TestBroadcaster_TxTooLarge_PreFilterNoFalsePositive (SAFE-01 / D-02):
+// Regression-critical: tx has more changes than cap but Filter admits only <=cap changes.
+// The subscriber must NOT be dropped; it receives only the whitelisted changes.
+// The old pre-filter cap (checking len(indices) before the filter) would falsely drop
+// this subscriber. This FAILS against the old code.
+func TestBroadcaster_TxTooLarge_PreFilterNoFalsePositive(t *testing.T) {
+	t.Parallel()
+
+	const cap = 3
+	b, reg := mkBroadcaster(cap)
+	sub := mkExactSub("public", "todo_lists", "42", 0, 4)
+	recordedFor(t, sub).useEncoder(b.enc.(*stubEncoder))
+
+	// Filter only admits todo_lists changes; drops everything else.
+	sub.Filter = func(c wal.Change, _ pglogrepl.LSN) (wal.Change, bool) {
+		if c.Table == "todo_lists" {
+			return c, false // admit
+		}
+		return c, true // drop non-todo_lists
+	}
+	b.Register(sub)
+
+	// Tx has 5 changes total (> cap=3), but only 2 pass the filter (< cap=3).
+	// Old code: len(indices)=5 > cap=3 → drop subscriber (false positive).
+	// New code: len(filtered)=2 <= cap=3 → deliver without drop.
+	tx := mkTx(pglogrepl.LSN(0x1050), 105,
+		mkChange(wal.OpUpdate, "public", "todo_lists", "42"), // passes filter
+		mkChange(wal.OpInsert, "public", "tasks", "1"),       // dropped by filter
+		mkChange(wal.OpInsert, "public", "tasks", "2"),       // dropped by filter
+		mkChange(wal.OpInsert, "public", "tasks", "3"),       // dropped by filter
+		mkChange(wal.OpUpdate, "public", "todo_lists", "42"), // passes filter
+	)
+	b.routeTx(tx)
+
+	// Subscriber must NOT be dropped.
+	ev := drainOne(t, sub, 200*time.Millisecond)
+	if sub.Reason() != "" {
+		t.Errorf("subscriber was unexpectedly dropped: reason=%q", sub.Reason())
+	}
+	// Only 2 changes pass the filter.
+	if got, want := len(ev.Tx.Changes), 2; got != want {
+		t.Errorf("ev.Tx.Changes length: got %d; want %d (only whitelisted changes)", got, want)
+	}
+	if v := gatherCounter(t, reg, "walera_tx_dropped_total", "reason", "tx_too_large"); v != 0 {
+		t.Errorf("tx_dropped_total{reason=tx_too_large}: got %v; want 0 (no false-positive drop)", v)
+	}
+}
+
+// TestBroadcaster_TxFanOutWork_ObservedPerTx (SAFE-01 / D-03):
+// After routing a tx with 2 eligible wildcard subscribers each receiving 3 changes,
+// TxFanOutWork histogram is observed once more (one observation per tx with non-zero work).
+// The old code does not observe TxFanOutWork in routeTx at all; this test FAILS.
+func TestBroadcaster_TxFanOutWork_ObservedPerTx(t *testing.T) {
+	t.Parallel()
+
+	b, reg := mkBroadcaster(10000)
+
+	// Two wildcard subscribers on todo_lists (K=2).
+	sub1 := mkWildcardSub("public", "todo_lists", 0, 8)
+	sub2 := mkWildcardSub("public", "todo_lists", 0, 8)
+	b.Register(sub1)
+	b.Register(sub2)
+
+	// Capture histogram sample count before routing (registry pre-touch adds 1).
+	countBefore := gatherHistogramCount(t, reg, "walera_tx_fan_out_work")
+
+	// Tx with 3 changes matching both subscribers (M=3, total work = 2*3 = 6).
+	tx := mkTx(pglogrepl.LSN(0x1060), 106,
+		mkChange(wal.OpUpdate, "public", "todo_lists", "1"),
+		mkChange(wal.OpUpdate, "public", "todo_lists", "2"),
+		mkChange(wal.OpUpdate, "public", "todo_lists", "3"),
+	)
+	b.routeTx(tx)
+
+	// Drain both subscribers to ensure dispatch completed.
+	_ = drainOne(t, sub1, 200*time.Millisecond)
+	_ = drainOne(t, sub2, 200*time.Millisecond)
+
+	// TxFanOutWork must have been observed once more (one Observe() call per tx).
+	countAfter := gatherHistogramCount(t, reg, "walera_tx_fan_out_work")
+	if countAfter != countBefore+1 {
+		t.Errorf("walera_tx_fan_out_work SampleCount: got %d; want %d (one observation per routed tx)",
+			countAfter, countBefore+1)
+	}
+}
+
+// TestBroadcaster_FanOutRaceStress (SAFE-01 race):
+// Many subscribers + large tx routed under -race with no data race.
+// All routing occurs in the single routeTx goroutine (WAL ingest goroutine).
+// fullIndices is read-only across sequential dispatchEvent calls; no new goroutines.
+func TestBroadcaster_FanOutRaceStress(t *testing.T) {
+	t.Parallel()
+
+	const (
+		nSubscribers = 50
+		nChanges     = 20
+		nTxns        = 10
+	)
+
+	b, _ := mkBroadcaster(10000)
+
+	// Register many wildcard subscribers.
+	subs := make([]*Subscriber, nSubscribers)
+	for i := range subs {
+		subs[i] = mkWildcardSub("public", "todo_lists", 0, nChanges*nTxns+8)
+		b.Register(subs[i])
+	}
+
+	txCh := make(chan wal.Tx, nTxns)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done, _ := runIngest(b, ctx, txCh)
+
+	// Send nTxns transactions each with nChanges changes.
+	for txIdx := range nTxns {
+		changes := make([]wal.Change, nChanges)
+		for j := range changes {
+			changes[j] = mkChange(wal.OpUpdate, "public", "todo_lists", "42")
+		}
+		lsn := pglogrepl.LSN(uint64(0x2000) + uint64(txIdx))
+		sendTx(t, txCh, mkTx(lsn, uint32(200+txIdx), changes...))
+	}
+
+	// Drain all subscribers (nTxns events per subscriber).
+	for _, sub := range subs {
+		for range nTxns {
+			_ = drainOne(t, sub, 500*time.Millisecond)
+		}
+	}
+
+	cancel()
+	<-done
+
+	// If -race detected a data race the test binary would have already panicked.
+	// Reaching here confirms no race was detected.
 }
