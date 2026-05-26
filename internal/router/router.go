@@ -136,10 +136,8 @@ func (b *Broadcaster) routeTx(tx wal.Tx) {
 		return
 	}
 
-	// fullIndices covers the whole tx; dispatchEvent's filter loop is the sole
-	// delivery gate (per-change whitelist). Allocated once and shared read-only
-	// across sequential dispatch calls — no goroutine spawned in dispatchEvent
-	// (SAFE-01; INVARIANT #3 drop sites stay in dispatchEvent).
+	// fullIndices is allocated once and shared read-only across the sequential
+	// dispatch loop (SAFE-01: no goroutine spawned in dispatchEvent).
 	fullIndices := make([]int, len(tx.Changes))
 	for i := range fullIndices {
 		fullIndices[i] = i
@@ -152,11 +150,9 @@ func (b *Broadcaster) routeTx(tx wal.Tx) {
 		totalDelivered += int64(delivered)
 		totalBeyondAnchor += int64(beyondAnchor)
 	}
-	// Observe fan-out work and beyond-anchor counter once per tx
-	// (INVARIANT #4: stays in routeTx frame). Guard on >0 so a matched tx
-	// whose eligible subscribers were all dropped (slow-consumer / tx-too-large)
-	// does not inflate the histogram SampleCount / counter with empty work —
-	// the registry pre-touch already seeds both series at t=0.
+	// Guard on >0 so a matched tx whose eligible subscribers were all dropped
+	// does not inflate the histogram/counter with empty work — registry
+	// pre-touch already seeds both series at t=0 (INVARIANT #4).
 	if totalDelivered > 0 {
 		b.metrics.TxFanOutWork().Observe(float64(totalDelivered))
 	}
@@ -173,8 +169,8 @@ func (b *Broadcaster) matchWildcard(key string) []*Subscriber {
 	return b.wildcard.Lookup(key)
 }
 
-// mergeMatches builds the per-tx eligibility set: a subscriber is eligible once any
-// change in the tx matches its exact or wildcard key. The map[*Subscriber]struct{}
+// mergeMatches builds the per-tx eligibility set: a subscriber becomes eligible
+// once any change in the tx matches its exact or wildcard key. The set shape
 // inherently deduplicates multiple matches.
 func (b *Broadcaster) mergeMatches(tx wal.Tx, eligible map[*Subscriber]struct{}) {
 	for _, ch := range tx.Changes {
@@ -187,12 +183,12 @@ func (b *Broadcaster) mergeMatches(tx wal.Tx, eligible map[*Subscriber]struct{})
 	}
 }
 
-// dispatchEvent applies the subscriber's whitelist filter to the full tx index set,
-// enforces the post-filter MaxChangesPerTx cap, encodes, and sends.
-// Returns (delivered, beyondAnchor): delivered is the count of post-filter changes sent
-// (0 on any drop or silent skip); beyondAnchor is the count of delivered changes whose
-// routing key does NOT match the subscriber's own anchor key.
-// All Drop call sites remain exclusively inside this function (INVARIANT #3).
+// dispatchEvent applies the subscriber's whitelist filter to the full tx index
+// set, enforces the post-filter MaxChangesPerTx cap, encodes, and sends.
+// Returns (delivered, beyondAnchor): delivered counts post-filter changes sent
+// (0 on any drop or silent skip); beyondAnchor counts delivered changes whose
+// routing key differs from the subscriber's own anchor key.
+// All Drop call sites must stay inside this function (INVARIANT #3).
 func (b *Broadcaster) dispatchEvent(tx wal.Tx, sub *Subscriber, indices []int) (int, int) {
 	if tx.CommitLSN <= sub.StartLSN() {
 		return 0, 0
@@ -213,8 +209,8 @@ func (b *Broadcaster) dispatchEvent(tx wal.Tx, sub *Subscriber, indices []int) (
 		if len(filtered) == 0 {
 			return 0, 0 // silent drop — no metric, no Drop() (INVARIANT #3)
 		}
-		// Cap is post-filter (delivered count), not pre-filter (candidate count).
-		// Counting pre-filter would falsely drop narrow-whitelist subscribers on large txs.
+		// Cap is post-filter, not pre-filter: pre-filter would falsely drop
+		// narrow-whitelist subscribers on large txs.
 		if len(filtered) > capLimit {
 			b.metrics.TxDropped("tx_too_large").Inc()
 			sub.Drop("tx_too_large")
@@ -239,9 +235,8 @@ func (b *Broadcaster) dispatchEvent(tx wal.Tx, sub *Subscriber, indices []int) (
 		}
 		ev = Event{Tx: subTx, MatchedIndices: newIdx}
 	} else {
-		// nil-Filter fast path: ev.Tx.Changes shares backing array with tx.Changes
-		// (no clone; see TestRouteTxNilFilterUnchangedFastPath).
-		// Cap still applies on the full index count.
+		// nil-Filter fast path: ev.Tx.Changes shares the input backing array
+		// (TestRouteTxNilFilterUnchangedFastPath pins this — no clone).
 		if len(indices) > capLimit {
 			b.metrics.TxDropped("tx_too_large").Inc()
 			sub.Drop("tx_too_large")
@@ -283,31 +278,28 @@ func (b *Broadcaster) dispatchEvent(tx wal.Tx, sub *Subscriber, indices []int) (
 		return 0, 0
 	}
 
-	// Compute beyond-anchor delta from the post-filter event.
-	// Branch on sub.Kind() to use the correct key form:
-	//   KindExact:    anchor = "schema.table:pk"   → compare ch.Key()
-	//   KindWildcard: anchor = "schema.table"       → compare ch.WildcardKey()
-	var anchorKey string
-	if sub.Kind() == KindExact {
-		anchorKey = sub.Schema() + "." + sub.Table() + ":" + sub.PK()
-	} else {
-		anchorKey = sub.Schema() + "." + sub.Table()
+	// Beyond-anchor delta: count delivered changes whose routing key differs
+	// from the subscriber's anchor. KindExact compares ch.Key() against
+	// "schema.table:pk"; KindWildcard compares ch.WildcardKey() against
+	// "schema.table".
+	isExact := sub.Kind() == KindExact
+	anchorKey := sub.Schema() + "." + sub.Table()
+	if isExact {
+		anchorKey += ":" + sub.PK()
 	}
 	var beyondAnchor int
 	for _, idx := range ev.MatchedIndices {
 		ch := ev.Tx.Changes[idx]
-		var routingKey string
-		if sub.Kind() == KindExact {
+		routingKey := ch.WildcardKey()
+		if isExact {
 			routingKey = ch.Key()
-		} else {
-			routingKey = ch.WildcardKey()
 		}
 		if routingKey != anchorKey {
 			beyondAnchor++
 		}
 	}
 
-	return len(ev.MatchedIndices), beyondAnchor // delivered count + beyond-anchor delta
+	return len(ev.MatchedIndices), beyondAnchor
 }
 
 func (b *Broadcaster) Metrics() *metrics.Registry { return b.metrics }
