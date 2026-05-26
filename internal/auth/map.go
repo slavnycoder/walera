@@ -33,7 +33,10 @@ func (m *Whitelist) Allowed(table, column string) bool {
 
 func (m *Whitelist) Filter(c wal.Change) (wal.Change, bool) {
 	if m == nil {
-		return c, true
+		sanitized := c
+		sanitized.Data = nil
+		sanitized.Changed = nil
+		return sanitized, true
 	}
 	cols, ok := m.Tables[c.Table]
 	if !ok {
@@ -78,8 +81,10 @@ func (m *Whitelist) Filter(c wal.Change) (wal.Change, bool) {
 			}
 		}
 		if !keptNonPK {
-
-			return c, true
+			sanitized := c
+			sanitized.Data = nil
+			sanitized.Changed = nil
+			return sanitized, true
 		}
 		return out, false
 
@@ -87,7 +92,10 @@ func (m *Whitelist) Filter(c wal.Change) (wal.Change, bool) {
 		return out, false
 
 	default:
-		return c, true
+		sanitized := c
+		sanitized.Data = nil
+		sanitized.Changed = nil
+		return sanitized, true
 	}
 }
 
