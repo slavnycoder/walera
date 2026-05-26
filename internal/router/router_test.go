@@ -1234,6 +1234,150 @@ func TestBroadcaster_TxFanOutWork_ObservedPerTx(t *testing.T) {
 	}
 }
 
+// gatherCounterNoLabel reads a no-label counter value from the registry by metric family name.
+func gatherCounterNoLabel(t *testing.T, reg *metrics.Registry, name string) float64 {
+	t.Helper()
+	families, err := reg.Gatherer().Gather()
+	if err != nil {
+		t.Fatalf("Gather: %v", err)
+	}
+	for _, fam := range families {
+		if fam.GetName() != name {
+			continue
+		}
+		ms := fam.GetMetric()
+		if len(ms) == 0 {
+			return 0
+		}
+		return ms[0].GetCounter().GetValue()
+	}
+	return 0
+}
+
+// TestBroadcaster_CoBeyondAnchorCounter covers the three SAFE-02 sub-cases:
+//
+// 1. "exact co-tx": exact subscriber whitelisted for anchor + co-tx table receives both
+// in one tx → beyond-anchor delta = 1.
+//
+// 2. "exact anchor-only": exact subscriber whose tx delivers only the anchor-keyed change
+// → beyond-anchor delta = 0.
+//
+// 3. "wildcard single-table": wildcard subscriber receiving a tx where all changes share
+// the subscribed table's WildcardKey → beyond-anchor delta = 0 (every change matches the
+// anchor key for a wildcard sub).
+//
+// 4. "wildcard multi-table": wildcard subscriber receiving a tx with 1 change on the
+// subscribed table + N-1 changes on OTHER tables (distinct WildcardKeys) → delta = N-1.
+func TestBroadcaster_CoBeyondAnchorCounter(t *testing.T) {
+	t.Parallel()
+
+	t.Run("exact co-tx", func(t *testing.T) {
+		t.Parallel()
+		b, reg := mkBroadcaster(10000)
+
+		sub := mkExactSub("public", "todo_lists", "42", 0, 4)
+		// Filter admits both todo_lists and tasks changes.
+		sub.Filter = func(c wal.Change, _ pglogrepl.LSN) (wal.Change, bool) {
+			return c, false // admit all
+		}
+		b.Register(sub)
+
+		before := gatherCounterNoLabel(t, reg, "walera_co_tx_beyond_anchor_total")
+
+		// Tx: anchor change (todo_lists:42) + 1 co-tx change (tasks:99).
+		tx := mkTx(pglogrepl.LSN(0x3000), 300,
+			mkChange(wal.OpUpdate, "public", "todo_lists", "42"),
+			mkChange(wal.OpInsert, "public", "tasks", "99"),
+		)
+		b.routeTx(tx)
+
+		_ = drainOne(t, sub, 200*time.Millisecond)
+
+		after := gatherCounterNoLabel(t, reg, "walera_co_tx_beyond_anchor_total")
+		if delta := after - before; delta != 1 {
+			t.Errorf("beyond-anchor delta for exact co-tx: got %v; want 1", delta)
+		}
+	})
+
+	t.Run("exact anchor-only", func(t *testing.T) {
+		t.Parallel()
+		b, reg := mkBroadcaster(10000)
+
+		sub := mkExactSub("public", "todo_lists", "42", 0, 4)
+		b.Register(sub)
+
+		before := gatherCounterNoLabel(t, reg, "walera_co_tx_beyond_anchor_total")
+
+		// Tx: only the anchor change, no co-tx changes.
+		tx := mkTx(pglogrepl.LSN(0x3001), 301,
+			mkChange(wal.OpUpdate, "public", "todo_lists", "42"),
+		)
+		b.routeTx(tx)
+
+		_ = drainOne(t, sub, 200*time.Millisecond)
+
+		after := gatherCounterNoLabel(t, reg, "walera_co_tx_beyond_anchor_total")
+		if delta := after - before; delta != 0 {
+			t.Errorf("beyond-anchor delta for exact anchor-only: got %v; want 0", delta)
+		}
+	})
+
+	t.Run("wildcard single-table", func(t *testing.T) {
+		t.Parallel()
+		b, reg := mkBroadcaster(10000)
+
+		// Wildcard subscriber on public.todo_lists — anchor WildcardKey = "public.todo_lists".
+		sub := mkWildcardSub("public", "todo_lists", 0, 8)
+		b.Register(sub)
+
+		before := gatherCounterNoLabel(t, reg, "walera_co_tx_beyond_anchor_total")
+
+		// All changes share the subscribed table's WildcardKey → every delivered
+		// change equals the anchor key → delta = 0.
+		tx := mkTx(pglogrepl.LSN(0x3002), 302,
+			mkChange(wal.OpUpdate, "public", "todo_lists", "1"),
+			mkChange(wal.OpUpdate, "public", "todo_lists", "2"),
+			mkChange(wal.OpUpdate, "public", "todo_lists", "3"),
+		)
+		b.routeTx(tx)
+
+		_ = drainOne(t, sub, 200*time.Millisecond)
+
+		after := gatherCounterNoLabel(t, reg, "walera_co_tx_beyond_anchor_total")
+		if delta := after - before; delta != 0 {
+			t.Errorf("beyond-anchor delta for wildcard single-table: got %v; want 0", delta)
+		}
+	})
+
+	t.Run("wildcard multi-table", func(t *testing.T) {
+		t.Parallel()
+		b, reg := mkBroadcaster(10000)
+
+		// Wildcard subscriber on public.todo_lists (nil Filter — admits all tables).
+		sub := mkWildcardSub("public", "todo_lists", 0, 8)
+		b.Register(sub)
+
+		before := gatherCounterNoLabel(t, reg, "walera_co_tx_beyond_anchor_total")
+
+		// Tx: 1 change on the subscribed table (WildcardKey = "public.todo_lists") +
+		// 2 changes on OTHER tables (distinct WildcardKeys) → delta = 2.
+		tx := mkTx(pglogrepl.LSN(0x3003), 303,
+			mkChange(wal.OpUpdate, "public", "todo_lists", "42"), // anchor WildcardKey
+			mkChange(wal.OpInsert, "public", "tasks", "99"),      // beyond anchor
+			mkChange(wal.OpInsert, "public", "tags", "7"),        // beyond anchor
+		)
+		b.routeTx(tx)
+
+		_ = drainOne(t, sub, 200*time.Millisecond)
+
+		after := gatherCounterNoLabel(t, reg, "walera_co_tx_beyond_anchor_total")
+		// 2 changes have WildcardKey != "public.todo_lists" → delta = 2.
+		if delta := after - before; delta != 2 {
+			t.Errorf("beyond-anchor delta for wildcard multi-table: got %v; want 2", delta)
+		}
+	})
+}
+
 // TestBroadcaster_FanOutRaceStress (SAFE-01 race):
 // Many subscribers + large tx routed under -race with no data race.
 // All routing occurs in the single routeTx goroutine (WAL ingest goroutine).

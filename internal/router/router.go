@@ -143,12 +143,17 @@ func (b *Broadcaster) routeTx(tx wal.Tx) {
 	}
 
 	var totalDelivered int64
+	var totalBeyondAnchor int64
 	for sub := range eligible {
-		totalDelivered += int64(b.dispatchEvent(tx, sub, fullIndices))
+		delivered, beyondAnchor := b.dispatchEvent(tx, sub, fullIndices)
+		totalDelivered += int64(delivered)
+		totalBeyondAnchor += int64(beyondAnchor)
 	}
-	// D-03: observe fan-out work once per tx (INVARIANT #4: stays in routeTx frame).
+	// D-03: observe fan-out work and beyond-anchor counter once per tx
+	// (INVARIANT #4: stays in routeTx frame).
 	if len(eligible) > 0 {
 		b.metrics.TxFanOutWork().Observe(float64(totalDelivered))
+		b.metrics.CoBeyondAnchorTotal().Add(float64(totalBeyondAnchor))
 	}
 }
 
@@ -176,11 +181,13 @@ func (b *Broadcaster) mergeMatches(tx wal.Tx, eligible map[*Subscriber]struct{})
 
 // dispatchEvent applies the subscriber's whitelist filter to the full tx index set,
 // enforces the post-filter MaxChangesPerTx cap (D-02), encodes, and sends.
-// Returns the count of delivered changes (0 on any drop or silent skip).
+// Returns (delivered, beyondAnchor): delivered is the count of post-filter changes sent
+// (0 on any drop or silent skip); beyondAnchor is the count of delivered changes whose
+// routing key does NOT match the subscriber's own anchor key (SAFE-02 / D-03).
 // All Drop call sites remain exclusively inside this function (INVARIANT #3).
-func (b *Broadcaster) dispatchEvent(tx wal.Tx, sub *Subscriber, indices []int) int {
+func (b *Broadcaster) dispatchEvent(tx wal.Tx, sub *Subscriber, indices []int) (int, int) {
 	if tx.CommitLSN <= sub.StartLSN() {
-		return 0
+		return 0, 0
 	}
 
 	capLimit := b.cfg.MaxChangesPerTx
@@ -196,7 +203,7 @@ func (b *Broadcaster) dispatchEvent(tx wal.Tx, sub *Subscriber, indices []int) i
 			filtered = append(filtered, ch)
 		}
 		if len(filtered) == 0 {
-			return 0 // silent drop — no metric, no Drop() (INVARIANT #3)
+			return 0, 0 // silent drop — no metric, no Drop() (INVARIANT #3)
 		}
 		// D-02: cap is post-filter (delivered count), not pre-filter (candidate count).
 		// Counting pre-filter would falsely drop narrow-whitelist subscribers on large txs.
@@ -214,7 +221,7 @@ func (b *Broadcaster) dispatchEvent(tx wal.Tx, sub *Subscriber, indices []int) i
 				Int("limit", capLimit).
 				Str("commit_lsn", tx.CommitLSN.String()).
 				Msg("subscriber dropped: tx_too_large")
-			return 0
+			return 0, 0
 		}
 		subTx := tx
 		subTx.Changes = filtered
@@ -241,7 +248,7 @@ func (b *Broadcaster) dispatchEvent(tx wal.Tx, sub *Subscriber, indices []int) i
 				Int("limit", capLimit).
 				Str("commit_lsn", tx.CommitLSN.String()).
 				Msg("subscriber dropped: tx_too_large")
-			return 0
+			return 0, 0
 		}
 	}
 
@@ -254,7 +261,7 @@ func (b *Broadcaster) dispatchEvent(tx wal.Tx, sub *Subscriber, indices []int) i
 			Str("commit_lsn", tx.CommitLSN.String()).
 			Int("matched_changes", len(ev.MatchedIndices)).
 			Msg("subscriber dropped: tx_too_large (payload cap)")
-		return 0
+		return 0, 0
 	}
 
 	if !sub.send(frame) {
@@ -265,10 +272,34 @@ func (b *Broadcaster) dispatchEvent(tx wal.Tx, sub *Subscriber, indices []int) i
 			Str("reason", "slow_consumer").
 			Str("commit_lsn", tx.CommitLSN.String()).
 			Msg("subscriber dropped: slow_consumer")
-		return 0
+		return 0, 0
 	}
 
-	return len(ev.MatchedIndices) // D-03: delivered change count for TxFanOutWork
+	// Compute beyond-anchor delta from the POST-FILTER event (Pitfall 2 / D-03).
+	// Branch on sub.Kind() to use the correct key form (Pitfall 1):
+	//   KindExact:    anchor = "schema.table:pk"   → compare ch.Key()
+	//   KindWildcard: anchor = "schema.table"       → compare ch.WildcardKey()
+	var anchorKey string
+	if sub.Kind() == KindExact {
+		anchorKey = sub.Schema() + "." + sub.Table() + ":" + sub.PK()
+	} else {
+		anchorKey = sub.Schema() + "." + sub.Table()
+	}
+	var beyondAnchor int
+	for _, idx := range ev.MatchedIndices {
+		ch := ev.Tx.Changes[idx]
+		var routingKey string
+		if sub.Kind() == KindExact {
+			routingKey = ch.Key()
+		} else {
+			routingKey = ch.WildcardKey()
+		}
+		if routingKey != anchorKey {
+			beyondAnchor++
+		}
+	}
+
+	return len(ev.MatchedIndices), beyondAnchor // D-03: delivered count + beyond-anchor delta
 }
 
 func (b *Broadcaster) Metrics() *metrics.Registry { return b.metrics }

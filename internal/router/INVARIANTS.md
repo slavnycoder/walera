@@ -42,15 +42,19 @@ Pre-sweep archaeology anchor: commit `de6b665` (pre-SWEEP-02 HEAD).
    the router package.
 
 4. **routeTx stack-frame ownership.** The `lookupTimer` defer,
-   `RoutingFanOut().Observe(float64(len(eligible)))`, and
-   `TxFanOutWork().Observe(float64(totalDelivered))` MUST all stay in
-   `routeTx`'s stack frame (not lifted into `mergeMatches` or
+   `RoutingFanOut().Observe(float64(len(eligible)))`,
+   `TxFanOutWork().Observe(float64(totalDelivered))`, and
+   `CoBeyondAnchorTotal().Add(float64(totalBeyondAnchor))` MUST all
+   stay in `routeTx`'s stack frame (not lifted into `mergeMatches` or
    `dispatchEvent`). `RoutingFanOut` reflects the post-merge eligible
    subscriber count; `TxFanOutWork` (D-03) is observed after the
    dispatch loop with Σ delivered changes across all eligible
    subscribers and is observed only when `len(eligible) > 0`; the
    `lookupTimer` defer brackets the merge + dispatch as one atomic
-   measurement window.
+   measurement window. `CoBeyondAnchorTotal` (D-01/SAFE-02) is the
+   beyond-anchor counter accumulated across the dispatch loop from the
+   second return value of `dispatchEvent` and observed only when
+   `len(eligible) > 0` (Pitfall 3) — alongside `TxFanOutWork`.
 
 5. **Sticky-reason atomic.Pointer in Subscriber.** `reasonPtr
    atomic.Pointer[string]` is written by `Drop` BEFORE `cancel` so any
