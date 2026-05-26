@@ -33,20 +33,14 @@ func (m *Whitelist) Allowed(table, column string) bool {
 
 func (m *Whitelist) Filter(c wal.Change) (wal.Change, bool) {
 	if m == nil {
-		sanitized := c
-		sanitized.Data = nil
-		sanitized.Changed = nil
-		return sanitized, true
+		return droppedChange(), true
 	}
 	cols, ok := m.Tables[c.Table]
 	if !ok {
-		// Absent-table gate (D-07 / TXN-03): drop all ops for tables not in the whitelist,
-		// including PK-only OpDelete events. Clear Data and Changed so no row content leaks
-		// even if a caller mistakenly ignores drop=true.
-		sanitized := c
-		sanitized.Data = nil
-		sanitized.Changed = nil
-		return sanitized, true
+		// Absent-table gate: drop all ops for tables not in the whitelist,
+		// including PK-only OpDelete events. Return a zero change so no table, row key,
+		// or row content leaks even if a caller mistakenly ignores drop=true.
+		return droppedChange(), true
 	}
 
 	out := c
@@ -81,10 +75,7 @@ func (m *Whitelist) Filter(c wal.Change) (wal.Change, bool) {
 			}
 		}
 		if !keptNonPK {
-			sanitized := c
-			sanitized.Data = nil
-			sanitized.Changed = nil
-			return sanitized, true
+			return droppedChange(), true
 		}
 		return out, false
 
@@ -92,11 +83,12 @@ func (m *Whitelist) Filter(c wal.Change) (wal.Change, bool) {
 		return out, false
 
 	default:
-		sanitized := c
-		sanitized.Data = nil
-		sanitized.Changed = nil
-		return sanitized, true
+		return droppedChange(), true
 	}
+}
+
+func droppedChange() wal.Change {
+	return wal.Change{}
 }
 
 type wireMap struct {

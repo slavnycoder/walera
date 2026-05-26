@@ -14,14 +14,15 @@ import (
 // testdata/002_tx_scoped_tables.sql and published via cdc_sse_streamer.
 //
 // Criteria mapping:
-//   criterion 1 (TXN-02): co-transactional tasks change arrives in the same
-//                          single event as the todo_lists anchor change.
-//   criterion 2 (TXN-03): non-whitelisted tasks changes (including PK-only
-//                          DELETE) are absent from the delivered event.
-//   criterion 3 (TXN-04): multiply-matched subscriber receives exactly one
-//                          ordered event with all changes.
-//   criterion 4 (TXN-05): subscriber whose anchor entity is absent from a tx
-//                          receives no event.
+//
+//	criterion 1 (TXN-02): co-transactional tasks change arrives in the same
+//	                       single event as the todo_lists anchor change.
+//	criterion 2 (TXN-03): non-whitelisted tasks changes (including PK-only
+//	                       DELETE) are absent from the delivered event.
+//	criterion 3 (TXN-04): multiply-matched subscriber receives exactly one
+//	                       ordered event with all changes.
+//	criterion 4 (TXN-05): subscriber whose anchor entity is absent from a tx
+//	                       receives no event.
 func Test16TxScopedDelivery(t *testing.T) {
 	t.Parallel()
 

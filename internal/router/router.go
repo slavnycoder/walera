@@ -132,11 +132,14 @@ func (b *Broadcaster) routeTx(tx wal.Tx) {
 	b.mergeMatches(tx, eligible)
 
 	b.metrics.RoutingFanOut().Observe(float64(len(eligible)))
+	if len(eligible) == 0 {
+		return
+	}
 
 	// fullIndices covers the whole tx; dispatchEvent's filter loop is the sole
 	// delivery gate (per-change whitelist). Allocated once and shared read-only
 	// across sequential dispatch calls — no goroutine spawned in dispatchEvent
-	// (Pitfall 7 / SAFE-01; INVARIANT #3 drop sites stay in dispatchEvent).
+	// (SAFE-01; INVARIANT #3 drop sites stay in dispatchEvent).
 	fullIndices := make([]int, len(tx.Changes))
 	for i := range fullIndices {
 		fullIndices[i] = i
@@ -149,7 +152,7 @@ func (b *Broadcaster) routeTx(tx wal.Tx) {
 		totalDelivered += int64(delivered)
 		totalBeyondAnchor += int64(beyondAnchor)
 	}
-	// D-03: observe fan-out work and beyond-anchor counter once per tx
+	// Observe fan-out work and beyond-anchor counter once per tx
 	// (INVARIANT #4: stays in routeTx frame). Guard on >0 so a matched tx
 	// whose eligible subscribers were all dropped (slow-consumer / tx-too-large)
 	// does not inflate the histogram SampleCount / counter with empty work —
@@ -185,10 +188,10 @@ func (b *Broadcaster) mergeMatches(tx wal.Tx, eligible map[*Subscriber]struct{})
 }
 
 // dispatchEvent applies the subscriber's whitelist filter to the full tx index set,
-// enforces the post-filter MaxChangesPerTx cap (D-02), encodes, and sends.
+// enforces the post-filter MaxChangesPerTx cap, encodes, and sends.
 // Returns (delivered, beyondAnchor): delivered is the count of post-filter changes sent
 // (0 on any drop or silent skip); beyondAnchor is the count of delivered changes whose
-// routing key does NOT match the subscriber's own anchor key (SAFE-02 / D-03).
+// routing key does NOT match the subscriber's own anchor key.
 // All Drop call sites remain exclusively inside this function (INVARIANT #3).
 func (b *Broadcaster) dispatchEvent(tx wal.Tx, sub *Subscriber, indices []int) (int, int) {
 	if tx.CommitLSN <= sub.StartLSN() {
@@ -210,7 +213,7 @@ func (b *Broadcaster) dispatchEvent(tx wal.Tx, sub *Subscriber, indices []int) (
 		if len(filtered) == 0 {
 			return 0, 0 // silent drop — no metric, no Drop() (INVARIANT #3)
 		}
-		// D-02: cap is post-filter (delivered count), not pre-filter (candidate count).
+		// Cap is post-filter (delivered count), not pre-filter (candidate count).
 		// Counting pre-filter would falsely drop narrow-whitelist subscribers on large txs.
 		if len(filtered) > capLimit {
 			b.metrics.TxDropped("tx_too_large").Inc()
@@ -237,8 +240,8 @@ func (b *Broadcaster) dispatchEvent(tx wal.Tx, sub *Subscriber, indices []int) (
 		ev = Event{Tx: subTx, MatchedIndices: newIdx}
 	} else {
 		// nil-Filter fast path: ev.Tx.Changes shares backing array with tx.Changes
-		// (no clone — Pitfall 3 / TestRouteTxNilFilterUnchangedFastPath).
-		// Cap still applies on the full index count (Pitfall 2).
+		// (no clone; see TestRouteTxNilFilterUnchangedFastPath).
+		// Cap still applies on the full index count.
 		if len(indices) > capLimit {
 			b.metrics.TxDropped("tx_too_large").Inc()
 			sub.Drop("tx_too_large")
@@ -280,8 +283,8 @@ func (b *Broadcaster) dispatchEvent(tx wal.Tx, sub *Subscriber, indices []int) (
 		return 0, 0
 	}
 
-	// Compute beyond-anchor delta from the POST-FILTER event (Pitfall 2 / D-03).
-	// Branch on sub.Kind() to use the correct key form (Pitfall 1):
+	// Compute beyond-anchor delta from the post-filter event.
+	// Branch on sub.Kind() to use the correct key form:
 	//   KindExact:    anchor = "schema.table:pk"   → compare ch.Key()
 	//   KindWildcard: anchor = "schema.table"       → compare ch.WildcardKey()
 	var anchorKey string
@@ -304,7 +307,7 @@ func (b *Broadcaster) dispatchEvent(tx wal.Tx, sub *Subscriber, indices []int) (
 		}
 	}
 
-	return len(ev.MatchedIndices), beyondAnchor // D-03: delivered count + beyond-anchor delta
+	return len(ev.MatchedIndices), beyondAnchor // delivered count + beyond-anchor delta
 }
 
 func (b *Broadcaster) Metrics() *metrics.Registry { return b.metrics }

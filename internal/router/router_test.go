@@ -503,7 +503,7 @@ func TestBroadcaster_ExactAndWildcardSameTx_SingleEventPerSub(t *testing.T) {
 
 	// Under per-tx semantics: exact subscriber to users:42 becomes eligible for the
 	// whole tx (anchor match at index 0); with nil Filter (no whitelist), the full
-	// index set [0,1,2] is delivered — the same as the wildcard subscriber (Pitfall 5).
+	// index set [0,1,2] is delivered — the same as the wildcard subscriber.
 	exactEv := drainOne(t, exact, 200*time.Millisecond)
 	if got, want := exactEv.MatchedIndices, []int{0, 1, 2}; !equalInts(got, want) {
 		t.Errorf("exact MatchedIndices: got %v; want %v (per-tx: full tx delivered once eligible)", got, want)
@@ -1110,7 +1110,7 @@ func TestBroadcaster_NonMatchingTxNoDelivery(t *testing.T) {
 	}
 }
 
-// TestBroadcaster_TxTooLarge_PostFilterCap (SAFE-01 / D-02):
+// TestBroadcaster_TxTooLarge_PostFilterCap:
 // Filter admits more than cap changes → Drop("tx_too_large"), TxDropped incremented.
 // cap=3; tx has 5 changes all admitted by Filter → subscriber dropped.
 func TestBroadcaster_TxTooLarge_PostFilterCap(t *testing.T) {
@@ -1148,7 +1148,7 @@ func TestBroadcaster_TxTooLarge_PostFilterCap(t *testing.T) {
 	}
 }
 
-// TestBroadcaster_TxTooLarge_PreFilterNoFalsePositive (SAFE-01 / D-02):
+// TestBroadcaster_TxTooLarge_PreFilterNoFalsePositive:
 // Regression-critical: tx has more changes than cap but Filter admits only <=cap changes.
 // The subscriber must NOT be dropped; it receives only the whitelisted changes.
 // The old pre-filter cap (checking len(indices) before the filter) would falsely drop
@@ -1196,7 +1196,7 @@ func TestBroadcaster_TxTooLarge_PreFilterNoFalsePositive(t *testing.T) {
 	}
 }
 
-// TestBroadcaster_TxFanOutWork_ObservedPerTx (SAFE-01 / D-03):
+// TestBroadcaster_TxFanOutWork_ObservedPerTx:
 // After routing a tx with 2 eligible wildcard subscribers each receiving 3 changes,
 // TxFanOutWork histogram is observed once more (one observation per tx with non-zero work).
 // The old code does not observe TxFanOutWork in routeTx at all; this test FAILS.

@@ -194,8 +194,9 @@ info "===== SC1: compose substrate (postgres + mock-auth healthy) ====="
 sc1_ok=1
 
 # SC1.a — compose config lists both services.
-if docker compose -f "${COMPOSE_FILE}" config --services 2>/dev/null | grep -Fxq postgres \
-  && docker compose -f "${COMPOSE_FILE}" config --services 2>/dev/null | grep -Fxq mock-auth; then
+compose_services="$(docker compose -f "${COMPOSE_FILE}" config --services 2>/dev/null || true)"
+if [[ $'\n'"${compose_services}"$'\n' == *$'\npostgres\n'* ]] \
+  && [[ $'\n'"${compose_services}"$'\n' == *$'\nmock-auth\n'* ]]; then
   pass "SC1.a compose config lists services: postgres + mock-auth"
 else
   fail "SC1.a compose config missing postgres and/or mock-auth"

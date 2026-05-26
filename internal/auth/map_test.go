@@ -21,6 +21,13 @@ func mkMap(userID string, tables map[string][]string) *Whitelist {
 	return m
 }
 
+func assertDroppedChangeSanitized(t *testing.T, name string, out wal.Change) {
+	t.Helper()
+	if out.Schema != "" || out.Table != "" || out.Op != "" || out.PK != "" || out.PKCol != "" || out.Data != nil || out.Changed != nil {
+		t.Errorf("%s: dropped change leaked identity/content: got %+v; want zero Change", name, out)
+	}
+}
+
 func TestMapFilter_PreservesPK(t *testing.T) {
 	t.Parallel()
 
@@ -81,6 +88,7 @@ func TestMapFilter_AllChangedColumnsHiddenIsSilentDrop(t *testing.T) {
 	if out.Data != nil {
 		t.Errorf("out.Data=%v; want nil (must not leak on drop=true)", out.Data)
 	}
+	assertDroppedChangeSanitized(t, t.Name(), out)
 }
 
 func TestMapFilter_PKAloneInChangedIsSilentDrop(t *testing.T) {
@@ -102,6 +110,7 @@ func TestMapFilter_PKAloneInChangedIsSilentDrop(t *testing.T) {
 	if out.Data != nil {
 		t.Errorf("out.Data=%v; want nil (must not leak on drop=true)", out.Data)
 	}
+	assertDroppedChangeSanitized(t, t.Name(), out)
 }
 
 func TestMapFilter_PGEmitsAllColumnsHiddenUpdateIsSilentDrop(t *testing.T) {
@@ -123,6 +132,7 @@ func TestMapFilter_PGEmitsAllColumnsHiddenUpdateIsSilentDrop(t *testing.T) {
 	if out.Data != nil {
 		t.Errorf("out.Data=%v; want nil (must not leak on drop=true)", out.Data)
 	}
+	assertDroppedChangeSanitized(t, t.Name(), out)
 }
 
 func TestMapFilter_DeleteUntouched(t *testing.T) {
@@ -153,10 +163,11 @@ func TestMapFilter_TableNotInMapReturnsDrop(t *testing.T) {
 		PK: "9", PKCol: "id",
 		Data: map[string]any{"id": "9"},
 	}
-	_, drop := m.Filter(c)
+	out, drop := m.Filter(c)
 	if !drop {
 		t.Fatal("drop=false; want true (orders not in whitelist)")
 	}
+	assertDroppedChangeSanitized(t, t.Name(), out)
 }
 
 func TestParseMap_ValidJSON(t *testing.T) {
@@ -211,7 +222,7 @@ func TestParseMap_RejectsMalformedJSON(t *testing.T) {
 	}
 }
 
-// TestMapFilter_DeleteNonWhitelistedTableDropped locks in the D-07 / TXN-03 delete-leak gate:
+// TestMapFilter_DeleteNonWhitelistedTableDropped locks in the absent-table delete-leak gate:
 // under whole-transaction delivery, every change in a matched tx reaches Filter for every
 // eligible subscriber — including DELETE, INSERT, and UPDATE on tables absent from the whitelist.
 // The absent-table !ok early-return at map.go:38-41 must drop all ops with no PK or row-content leakage.
@@ -264,6 +275,22 @@ func TestMapFilter_DeleteNonWhitelistedTableDropped(t *testing.T) {
 			if out.Changed != nil {
 				t.Errorf("%s: out.Changed=%v; want nil (no row-content leakage when drop=true)", tc.name, out.Changed)
 			}
+			assertDroppedChangeSanitized(t, tc.name, out)
 		})
 	}
+}
+
+func TestMapFilter_NilMapReturnsZeroChangeOnDrop(t *testing.T) {
+	t.Parallel()
+
+	var m *Whitelist
+	c := wal.Change{
+		Schema: "public", Table: "users", Op: wal.OpDelete,
+		PK: "42", PKCol: "id",
+	}
+	out, drop := m.Filter(c)
+	if !drop {
+		t.Fatal("drop=false; want true (nil map is conservative)")
+	}
+	assertDroppedChangeSanitized(t, t.Name(), out)
 }
