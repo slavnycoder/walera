@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-05-27
+
+### Changed
+
+- Applied `gofmt` to `test/integration/15_large_tx_test.go` (trailing
+  newline removed). No functional changes.
+
 ## [1.0.0] - 2026-05-25
 
 Initial public release of Walera: PostgreSQL CDC over SSE with
