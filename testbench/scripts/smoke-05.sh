@@ -21,8 +21,9 @@
 #
 #   SC2: `docker compose -f testbench/docker-compose.yml exec postgres psql -c
 #        "SHOW wal_level"` returns `logical`; `cdc_sse_streamer` publication
-#        exists and includes `orders`, `devices`, `articles`, `line_items` (and
-#        only those demo tables) with `REPLICA IDENTITY DEFAULT`.
+#        exists and includes the six depth-4 chain tables (`orders`, `devices`,
+#        `articles`, `line_items`, `line_item_options`, `option_audits`) with
+#        `REPLICA IDENTITY DEFAULT`.
 #
 #   SC3: From a sibling container on the compose network, `curl -H
 #        'Authorization: Bearer demo-alice'
@@ -264,11 +265,11 @@ else
   sc2_ok=0
 fi
 
-# SC2.c — publication includes exactly the four demo tables (no extras).
+# SC2.c — publication includes exactly the six depth-4 chain tables (no extras).
 pubtables="$(psql_q "SELECT tablename FROM pg_publication_tables WHERE pubname='cdc_sse_streamer' ORDER BY tablename" || true)"
-expected_tables=$'articles\ndevices\nline_items\norders'
+expected_tables=$'articles\ndevices\nline_item_options\nline_items\noption_audits\norders'
 if [[ "${pubtables}" == "${expected_tables}" ]]; then
-  pass "SC2.c publication tables = [articles, devices, line_items, orders] (exactly the four demo tables)"
+  pass "SC2.c publication tables = [articles, devices, line_item_options, line_items, option_audits, orders] (exactly the six depth-4 chain tables)"
 else
   fail "SC2.c publication table list mismatch"
   echo "      expected:"
@@ -278,12 +279,12 @@ else
   sc2_ok=0
 fi
 
-# SC2.d — \dt lists the four demo tables (idempotency check; catches a
+# SC2.d — \dt lists the six depth-4 chain tables (idempotency check; catches a
 # migration-skip scenario where the publication is correct but the tables
 # never landed).
-tbls="$(psql_q "SELECT tablename FROM pg_tables WHERE schemaname='public' AND tablename IN ('articles','devices','line_items','orders') ORDER BY tablename" || true)"
+tbls="$(psql_q "SELECT tablename FROM pg_tables WHERE schemaname='public' AND tablename IN ('articles','devices','line_items','line_item_options','option_audits','orders') ORDER BY tablename" || true)"
 if [[ "${tbls}" == "${expected_tables}" ]]; then
-  pass "SC2.d public schema contains all four demo tables"
+  pass "SC2.d public schema contains all six depth-4 chain tables"
 else
   fail "SC2.d public schema missing one or more demo tables"
   echo "      actual: ${tbls}"
