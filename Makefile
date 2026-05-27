@@ -127,7 +127,7 @@ sse-stress:
 # single -race test (TestPoolSlowClientIsolationStress) at -count=100.
 # Both are wired into the scheduled flake-detect workflow.
 sse-soak:
-	go test -count=100 ./internal/sse
+	go test -timeout=30m -count=100 ./internal/sse
 
 # wal-stress runs the wal package under the race detector with a count=10
 # soak budget. Lower than sse-stress (-count=100) because the wal package's
