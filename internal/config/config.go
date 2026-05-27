@@ -75,6 +75,8 @@ var multiLevelEnvKeys = map[string]string{
 	"auth.breaker_failure_rate_threshold": "auth.breaker.failure_rate_threshold",
 	"auth.breaker_stale_refresh_jitter":   "auth.breaker.stale_refresh_jitter",
 	"auth.breaker_window_buckets":         "auth.breaker.window_buckets",
+	"auth.signing_secret":                 "auth.signing.secret",
+	"auth.signing_kid":                    "auth.signing.kid",
 
 	"wal.bootstrap_create_roles": "wal.bootstrap.create_roles",
 	"wal.bootstrap_mode":         "wal.bootstrap.mode",
