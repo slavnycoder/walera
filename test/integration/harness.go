@@ -143,6 +143,9 @@ auth:
   default_ttl_seconds: 1
   health_channel: _health
   request_timeout: 2s
+  signing:
+    secret: %q
+    kid: %q
   breaker:
     window_buckets: 30
     bucket_seconds: 1
@@ -166,7 +169,7 @@ metrics:
 shutdown:
   deadline: 5s
   drain_deadline: 4s
-`, pgDSN, addr, writeTimeoutLine, mockAuthURL)
+`, pgDSN, addr, writeTimeoutLine, mockAuthURL, IntegrationSigningSecret, IntegrationSigningKid)
 
 	cfgFile := filepath.Join(t.TempDir(), "walera-test.yaml")
 	if err := os.WriteFile(cfgFile, []byte(cfg), 0o644); err != nil {
