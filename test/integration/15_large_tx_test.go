@@ -205,4 +205,3 @@ func TestLargeTransactionBackpressure(t *testing.T) {
 		t.Logf("walera_wal_lsn_lag_bytes (in-process sampler) = %v", metric)
 	}
 }
-
