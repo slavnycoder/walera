@@ -95,7 +95,7 @@ func (h *Handler) headersAndPreamble(
 	authSub = auth.NewSubscriber(
 		auth.SubscriberConfig{
 			InitialMap: hs.authMap,
-			Token:      hs.token,
+			UserID:     hs.userID,
 			Channel:    channelStr,
 			DefaultTTL: ttl,
 		},

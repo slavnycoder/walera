@@ -62,11 +62,19 @@ these are local to their respective files and need no cross-file anchor.)_
    data). Anchor: `map.go:Filter` (~line 50, switch on `c.Op`) (pre-sweep
    de6b665).
 
-6. **Tokens never logged.** Bearer credentials are passed only as a function
-   parameter to `Client.Permissions` and written only to the `Authorization`
-   header. They are NEVER assigned to local variables beyond the header set
-   call. NEVER captured into struct fields beyond `Subscriber.token`
-   (unexported, never read by any log statement). The CI grep gate
-   `! grep -nE 'Str\(.*[Tt]oken|Str\(.*Authorization' internal/auth/client.go`
-   enforces this discipline at build time. Anchor: `client.go:Permissions`
-   header-set block (~line 167) (pre-sweep de6b665).
+6. **Bearer tokens never persisted beyond handshake.** The user's bearer
+   credential is read once in `internal/sse/auth.go:runHandshake` and passed
+   directly to `Client.OpenSession` as a function parameter. As soon as
+   `OpenSession` returns, `r.Header.Del("Authorization")` and the local
+   `token` variable are cleared in the same scope — the bearer is not
+   captured into any struct field, logged, or otherwise retained. All
+   subsequent refresh requests for that subscriber are authenticated via
+   `RefreshPermissions` using HMAC-SHA256 over the durable identity
+   `(user_id, channel, ts, nonce)` with the service-wide
+   `auth.signing.secret`; the bearer plays no further role. The CI grep
+   gate `! grep -nE 'Str\(.*[Tt]oken|Str\(.*Authorization' internal/auth/client.go`
+   enforces zero-log discipline at build time. Anchors:
+   `internal/sse/auth.go:runHandshake` (OpenSession call site),
+   `internal/auth/client.go:OpenSession`,
+   `internal/auth/client.go:RefreshPermissions`,
+   `internal/auth/signing.go:Signer`.

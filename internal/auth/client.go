@@ -10,7 +10,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"net/url"
 	"regexp"
 	"sync"
 	"time"
@@ -133,107 +132,6 @@ func newHTTPClient(cfg Config) *http.Client {
 	return &http.Client{
 		Timeout:   cfg.RequestTimeout,
 		Transport: t,
-	}
-}
-
-func (c *Client) Permissions(ctx context.Context, token, channel, requestID string) (*Whitelist, error) {
-	start := time.Now()
-	defer func() {
-		c.mc.AuthRequestDuration().Observe(time.Since(start).Seconds())
-	}()
-
-	u := c.base + "/auth/permissions?channel=" + url.QueryEscape(channel)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
-	if err != nil {
-		c.mc.AuthRequests("unavailable").Inc()
-		c.bk.RecordResult(false)
-		return nil, &ErrUnavailable{Cause: err}
-	}
-	if token != "" {
-		req.Header.Set("Authorization", "Bearer "+token)
-	}
-	if !validOutboundRequestID(requestID) {
-		var buf [16]byte
-		if _, err := rand.Read(buf[:]); err != nil {
-			panic("auth: crypto/rand.Read failed: " + err.Error())
-		}
-		substitute := hex.EncodeToString(buf[:])
-		c.log.Warn().
-			Int("invalid_len", len(requestID)).
-			Str("invalid_id_truncated", truncateForLog(requestID, 16)).
-			Str("substitute_id", substitute).
-			Msg("auth: outbound X-Request-ID failed validation; substituting fresh ID")
-		requestID = substitute
-	}
-	req.Header.Set("X-Request-ID", requestID)
-	req.Header.Set("Accept", "application/json")
-
-	resp, err := c.hc.Do(req)
-	if err != nil {
-		c.mc.AuthRequests("unavailable").Inc()
-		c.bk.RecordResult(false)
-		c.log.Warn().
-			Str("auth_request_id", requestID).
-			Err(err).
-			Msg("auth: HTTP dispatch failed")
-		return nil, &ErrUnavailable{Cause: err}
-	}
-	defer resp.Body.Close() //nolint:errcheck
-
-	body, readErr := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
-	if readErr != nil {
-		c.mc.AuthRequests("unavailable").Inc()
-		c.bk.RecordResult(false)
-		c.log.Warn().
-			Str("auth_request_id", requestID).
-			Int("status", resp.StatusCode).
-			Err(readErr).
-			Msg("auth: response body read failed")
-		return nil, &ErrUnavailable{Cause: readErr}
-	}
-
-	switch {
-	case resp.StatusCode == http.StatusOK:
-		m, err := ParseWhitelist(body)
-		if err != nil {
-			c.mc.AuthRequests("unavailable").Inc()
-			c.bk.RecordResult(false)
-			c.log.Warn().
-				Str("auth_request_id", requestID).
-				Int("status", resp.StatusCode).
-				Err(err).
-				Msg("auth: response parse failed")
-			return nil, &ErrUnavailable{Cause: fmt.Errorf("decode: %w", err)}
-		}
-		c.mc.AuthRequests("ok").Inc()
-		c.bk.RecordResult(true)
-		return m, nil
-
-	case resp.StatusCode == http.StatusUnauthorized:
-		c.mc.AuthRequests("unauthorized").Inc()
-		c.bk.RecordResult(true)
-		return nil, &ErrUnauthorized{Body: body}
-
-	case resp.StatusCode == http.StatusForbidden:
-		c.mc.AuthRequests("forbidden").Inc()
-		c.bk.RecordResult(true)
-		return nil, &ErrForbidden{Body: body}
-
-	case resp.StatusCode == http.StatusNotFound:
-		c.mc.AuthRequests("not_found").Inc()
-		c.bk.RecordResult(true)
-		return nil, &ErrNotFound{Body: body}
-
-	default:
-		c.mc.AuthRequests("unavailable").Inc()
-		c.bk.RecordResult(false)
-		c.log.Warn().
-			Str("auth_request_id", requestID).
-			Int("status", resp.StatusCode).
-			Msg("auth: unexpected backend status")
-		return nil, &ErrUnavailable{
-			Cause: fmt.Errorf("auth backend returned %d", resp.StatusCode),
-		}
 	}
 }
 
@@ -434,13 +332,19 @@ func (c *Client) doAndDecode(req *http.Request, requestID string) (*Whitelist, e
 	}
 }
 
+// CheckAuth verifies that the auth backend is reachable AND that the
+// configured walera_secret is accepted by it. A successful sentinel
+// RefreshPermissions(user_id="_health") proves three things at once:
+// backend reachability, HMAC secret freshness, and refresh-path health.
+// Non-success statuses 401/403/404 from the backend still count as
+// "reachable" — only network errors and 5xx are treated as unavailable.
 func (c *Client) CheckAuth(ctx context.Context) error {
 	var buf [16]byte
 	if _, err := rand.Read(buf[:]); err != nil {
 		panic("auth: crypto/rand.Read failed: " + err.Error())
 	}
 	id := "health-" + hex.EncodeToString(buf[:])
-	_, err := c.Permissions(ctx, "", "_health", id)
+	_, err := c.RefreshPermissions(ctx, HealthSentinelUserID, HealthSentinelUserID, id)
 	if err == nil {
 		return nil
 	}

@@ -18,7 +18,7 @@ func validSubscriberConfig() SubscriberConfig {
 			Tables:     map[string]map[string]struct{}{"orders": {"id": struct{}{}}},
 			TTLSeconds: 60,
 		},
-		Token:      "tok",
+		UserID:     "u1",
 		Channel:    "public.orders:1",
 		DefaultTTL: 60 * time.Second,
 	}

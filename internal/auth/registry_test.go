@@ -38,7 +38,7 @@ func newRegistrySubscriber(t *testing.T, _ string) (*Subscriber, *atomic.Int64, 
 		SubscriberConfig{
 			InitialMap: makeMap(t, 100, "id"),
 			Channel:    "public.orders:1",
-			Token:      "test-token",
+			UserID:     "user-1",
 			DefaultTTL: 60 * time.Second,
 		},
 		SubscriberDeps{
