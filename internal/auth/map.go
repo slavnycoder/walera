@@ -17,6 +17,11 @@ type Whitelist struct {
 	TTLSeconds int
 
 	RefreshLSN pglogrepl.LSN
+
+	// InitialData is the raw JSON value the auth backend wants delivered to
+	// the client as the first SSE frame after handshake. nil when the backend
+	// omits the field (default — no initial payload).
+	InitialData json.RawMessage
 }
 
 func (m *Whitelist) Allowed(table, column string) bool {
@@ -87,9 +92,10 @@ func (m *Whitelist) Filter(c wal.Change) (wal.Change, bool) {
 }
 
 type wireMap struct {
-	UserID     string              `json:"user_id"`
-	Tables     map[string][]string `json:"tables"`
-	TTLSeconds int                 `json:"ttl_seconds"`
+	UserID      string              `json:"user_id"`
+	Tables      map[string][]string `json:"tables"`
+	TTLSeconds  int                 `json:"ttl_seconds"`
+	InitialData json.RawMessage     `json:"initial_data,omitempty"`
 }
 
 func ParseWhitelist(body []byte) (*Whitelist, error) {
@@ -102,9 +108,10 @@ func ParseWhitelist(body []byte) (*Whitelist, error) {
 	}
 
 	m := &Whitelist{
-		UserID:     w.UserID,
-		TTLSeconds: w.TTLSeconds,
-		Tables:     make(map[string]map[string]struct{}, len(w.Tables)),
+		UserID:      w.UserID,
+		TTLSeconds:  w.TTLSeconds,
+		Tables:      make(map[string]map[string]struct{}, len(w.Tables)),
+		InitialData: w.InitialData,
 	}
 	for tbl, cols := range w.Tables {
 		set := make(map[string]struct{}, len(cols))

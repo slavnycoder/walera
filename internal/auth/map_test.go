@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/walera/walera/internal/wal"
@@ -211,6 +212,38 @@ func TestParseMap_IgnoresLegacyRootsField(t *testing.T) {
 	}
 	if _, ok := m.Tables["users"]; !ok {
 		t.Fatal("Tables[users] missing")
+	}
+}
+
+func TestParseMap_InitialDataPresent(t *testing.T) {
+	t.Parallel()
+	body := []byte(`{"user_id":"u1","tables":{"users":["id"]},"initial_data":{"foo":1,"bar":"baz"}}`)
+	m, err := ParseWhitelist(body)
+	if err != nil {
+		t.Fatalf("ParseWhitelist: %v", err)
+	}
+	if len(m.InitialData) == 0 {
+		t.Fatalf("InitialData: got empty; want non-empty raw JSON")
+	}
+
+	var got map[string]any
+	if err := json.Unmarshal(m.InitialData, &got); err != nil {
+		t.Fatalf("InitialData round-trip: %v", err)
+	}
+	if got["foo"].(float64) != 1 || got["bar"].(string) != "baz" {
+		t.Errorf("InitialData round-trip mismatch: %+v", got)
+	}
+}
+
+func TestParseMap_InitialDataAbsent(t *testing.T) {
+	t.Parallel()
+	body := []byte(`{"user_id":"u1","tables":{"users":["id"]}}`)
+	m, err := ParseWhitelist(body)
+	if err != nil {
+		t.Fatalf("ParseWhitelist: %v", err)
+	}
+	if m.InitialData != nil {
+		t.Errorf("InitialData: got %s; want nil (absent field)", string(m.InitialData))
 	}
 }
 

@@ -129,6 +129,42 @@ func (e *Encoder) EncodeError(reason string) []byte {
 	return out
 }
 
+// EncodeInitialData emits the auth-supplied startup payload as a single
+// `event: initial_data` SSE frame. The raw JSON is compacted to strip any
+// embedded whitespace/newlines that would otherwise break SSE framing.
+// Returns (nil, false) when raw is empty or the JSON literal `null`, so
+// the caller can skip the write without special-casing absent payloads.
+// Returns (nil, true) when the encoded frame exceeds maxPayloadBytes.
+func (e *Encoder) EncodeInitialData(raw json.RawMessage) ([]byte, bool) {
+	if len(raw) == 0 {
+		return nil, false
+	}
+	if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return nil, false
+	}
+
+	buf := e.bufPool.Get().(*bytes.Buffer)
+	defer func() {
+		buf.Reset()
+		e.bufPool.Put(buf)
+	}()
+
+	buf.WriteString("event: initial_data\ndata: ")
+	if err := json.Compact(buf, raw); err != nil {
+
+		return nil, false
+	}
+	buf.WriteString("\n\n")
+
+	if e.maxPayloadBytes > 0 && buf.Len() > e.maxPayloadBytes {
+		return nil, true
+	}
+
+	out := make([]byte, buf.Len())
+	copy(out, buf.Bytes())
+	return out, false
+}
+
 func (e *Encoder) EncodeHeartbeat() []byte {
 	return heartbeatBytes
 }
