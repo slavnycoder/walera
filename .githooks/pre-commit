@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
-# Refuse commits that include any path under .planning/.
-# History was purged on 2026-05-21; .planning/ is gitignored and must stay out of git.
-# Bypass (intentional re-commit): git commit --no-verify
+# Pre-commit guards:
+#   1. Refuse commits that include any path under .planning/.
+#      History was purged on 2026-05-21; .planning/ is gitignored and must
+#      stay out of git.
+#   2. Refuse commits whose staged .go files are not gofmt-clean.
+# Bypass (intentional override): git commit --no-verify
 
 set -euo pipefail
 
@@ -12,4 +15,29 @@ if [[ -n "$staged" ]]; then
     printf '  %s\n' $staged >&2
     printf '\n.planning/ is gitignored and was purged from history; use --no-verify to override.\n' >&2
     exit 1
+fi
+
+# gofmt gate: check formatting on every staged Go source file.
+# Vendored / generated paths are exempt — they live outside our authorship.
+# NOTE: gofmt reads filesystem contents, not the staged blob, so a partially
+# staged file (`git add` then edited) is checked against the working copy.
+# This matches standard Go pre-commit conventions; commit fully or stash.
+go_staged=$(git diff --cached --name-only --diff-filter=ACMR -z \
+    | tr '\0' '\n' \
+    | grep -E '\.go$' \
+    | grep -Ev '^(vendor/|.*\.pb\.go$|.*_generated\.go$)' || true)
+
+if [[ -n "$go_staged" ]]; then
+    if ! command -v gofmt >/dev/null 2>&1; then
+        printf 'pre-commit: gofmt not found in PATH; skipping fmt check.\n' >&2
+    else
+        unformatted=$(printf '%s\n' "$go_staged" | xargs gofmt -l 2>/dev/null || true)
+        if [[ -n "$unformatted" ]]; then
+            printf 'pre-commit: gofmt issues in staged files:\n' >&2
+            printf '  %s\n' $unformatted >&2
+            printf '\nRun:  gofmt -w %s\n' "$(echo $unformatted | tr '\n' ' ')" >&2
+            printf 'Then: git add <files> && git commit\n' >&2
+            exit 1
+        fi
+    fi
 fi
