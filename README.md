@@ -224,6 +224,57 @@ See [Delivery semantics](./docs/delivery-semantics.md) for the
 complete specification and
 [ADR 0001](./docs/adr/0001-delivery-semantics.md) for the rationale.
 
+### Writer-side discipline
+
+Transaction-scoped delivery makes the Postgres transaction the unit of
+authorization. The broker is **not** FK-aware: it groups changes by
+commit boundary and filters by the per-user table/field whitelist —
+nothing else. To keep co-transactional delivery from leaking changes
+between unrelated entities, the writer side (your application code,
+jobs, migrations) MUST follow these rules:
+
+1. **One root row per transaction.** Any commit that mutates a root
+   table (a table users subscribe to by `entity_name:id`) must touch
+   **exactly one** PK of that root table. Bulk operations across
+   multiple roots — e.g. `UPDATE todo_lists SET reordered_at = now()`
+   over many rows — MUST be split into one transaction per root,
+   typically by looping in the application layer.
+
+2. **Co-write children with their root, and only their root.** When a
+   transaction modifies child rows (rows that hang off a root via FK —
+   `tasks.todo_list_id`, `transactions.wallet_id`, …), the same
+   transaction MUST also touch the corresponding root row (`UPDATE
+   <root> SET updated_at = now() WHERE id = <root_pk>`). The root
+   touch is the routing anchor; without it, subscribers do not see the
+   child change at all.
+
+3. **Never mix children of different roots in one transaction.** A
+   commit that writes children of two different roots — even with
+   their respective root rows touched — leaks across subscribers and
+   is **not** detected by the broker today. This is the most subtle
+   failure mode: if you must update tasks that belong to two
+   different todo_lists, split the commit.
+
+Rule 1 is **broker-enforced**. A transaction that touches >1 distinct
+PK of a subscriber's anchor table is silently dropped for that
+subscriber (counter
+`walera_tx_dropped_total{reason="multi_root"}` increments, a warn-level
+log is emitted, and the connection stays open — clients recover via
+the primary-API resync pattern above). This applies to both exact
+(`entity/<id>`) and wildcard (`entity/all`) subscriptions. The Prometheus
+alert in `deploy/prometheus/alerts.yaml` pages on any non-zero rate.
+
+Rule 3 is **caller-enforced**. Walera cannot distinguish "child of my
+root" from "child of someone else's root" without an FK-aware scope
+declaration, which is out of scope for the current model. If your
+workload requires this stricter isolation, please file an issue.
+
+If `walera_tx_dropped_total{reason="multi_root"}` increments in
+production, treat it as a backend bug — find the writer that bundled
+multiple roots and split its transaction. Continuing to violate the
+discipline causes silent event loss for the affected subscribers
+(the next product-API fetch papers over it, but freshness suffers).
+
 ## Operational notes
 
 Walera targets a single Kubernetes pod per environment with 2 CPU /

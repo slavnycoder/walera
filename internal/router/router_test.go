@@ -456,18 +456,18 @@ func TestBroadcaster_WildcardFanOut_MultiChange(t *testing.T) {
 
 	tx := mkTx(pglogrepl.LSN(0x200), 2,
 		mkChange(wal.OpInsert, "public", "users", "1"),
-		mkChange(wal.OpInsert, "public", "users", "2"),
-		mkChange(wal.OpInsert, "public", "users", "3"),
+		mkChange(wal.OpUpdate, "public", "users", "1"),
 		mkChange(wal.OpInsert, "public", "orders", "999"),
 	)
 	sendTx(t, txCh, tx)
 
 	ev := drainOne(t, sub, 200*time.Millisecond)
 	// Under per-tx semantics: wildcard subscriber on users becomes eligible once
-	// any users change matches; fullIndices covers the whole tx [0,1,2,3] including
-	// the orders:999 change. With nil Filter (no whitelist), all 4 changes are
-	// delivered. A whitelist-equipped Filter would gate out orders if desired.
-	want := []int{0, 1, 2, 3}
+	// any users change matches; fullIndices covers the whole tx [0,1,2] including
+	// the orders:999 change. With nil Filter (no whitelist), all 3 changes are
+	// delivered. The tx touches only one users PK ("1"), so the multi_root guard
+	// does not fire — multiple changes for the SAME anchor PK are normal.
+	want := []int{0, 1, 2}
 	if got := ev.MatchedIndices; !equalInts(got, want) {
 		t.Errorf("MatchedIndices: got %v; want %v", got, want)
 	}
@@ -494,16 +494,16 @@ func TestBroadcaster_ExactAndWildcardSameTx_SingleEventPerSub(t *testing.T) {
 	defer cancel()
 	done, _ := runIngest(b, ctx, txCh)
 
+	// Tx touches a single anchor PK ("42") with three changes — multi_root guard
+	// does not fire, both subscribers receive one event with all three changes.
+	// (Multi-PK same-table txs are covered by TestBroadcaster_MultiRoot_*.)
 	tx := mkTx(pglogrepl.LSN(0x300), 3,
 		mkChange(wal.OpInsert, "public", "users", "42"),
-		mkChange(wal.OpInsert, "public", "users", "99"),
-		mkChange(wal.OpInsert, "public", "users", "100"),
+		mkChange(wal.OpUpdate, "public", "users", "42"),
+		mkChange(wal.OpUpdate, "public", "users", "42"),
 	)
 	sendTx(t, txCh, tx)
 
-	// Under per-tx semantics: exact subscriber to users:42 becomes eligible for the
-	// whole tx (anchor match at index 0); with nil Filter (no whitelist), the full
-	// index set [0,1,2] is delivered — the same as the wildcard subscriber.
 	exactEv := drainOne(t, exact, 200*time.Millisecond)
 	if got, want := exactEv.MatchedIndices, []int{0, 1, 2}; !equalInts(got, want) {
 		t.Errorf("exact MatchedIndices: got %v; want %v (per-tx: full tx delivered once eligible)", got, want)
@@ -606,10 +606,13 @@ func TestBroadcaster_TxTooLarge_WildcardCap(t *testing.T) {
 	defer cancel()
 	done, _ := runIngest(b, ctx, txCh)
 
+	// All changes target the same anchor PK so the multi_root guard does NOT
+	// trip — the test isolates the post-filter cap path; three changes for
+	// users:1 exceed cap=2 → tx_too_large drop.
 	tx := mkTx(pglogrepl.LSN(0x500), 5,
 		mkChange(wal.OpInsert, "public", "users", "1"),
-		mkChange(wal.OpInsert, "public", "users", "2"),
-		mkChange(wal.OpInsert, "public", "users", "3"),
+		mkChange(wal.OpUpdate, "public", "users", "1"),
+		mkChange(wal.OpUpdate, "public", "users", "1"),
 	)
 	sendTx(t, txCh, tx)
 
@@ -831,9 +834,11 @@ func TestRouteTxFilterPartialKept(t *testing.T) {
 	}
 	b.Register(sub)
 
+	// Two changes for the same anchor PK keep the multi_root guard out of
+	// the way — this test exercises the Filter-clone path.
 	tx := mkTx(pglogrepl.LSN(0x200), 2,
 		mkChange(wal.OpInsert, "public", "users", "1"),
-		mkChange(wal.OpInsert, "public", "users", "2"),
+		mkChange(wal.OpUpdate, "public", "users", "1"),
 	)
 	b.routeTx(tx)
 
@@ -1095,10 +1100,13 @@ func TestBroadcaster_SingleEventPerSubDedup(t *testing.T) {
 	recordedFor(t, sub).useEncoder(b.enc.(*stubEncoder))
 	b.Register(sub)
 
+	// All three changes target the same anchor PK so the multi_root guard
+	// does not fire — dedup is about a single subscriber matching multiple
+	// rows of the same tx, not about cross-root delivery.
 	tx := mkTx(pglogrepl.LSN(0x1020), 102,
 		mkChange(wal.OpUpdate, "public", "todo_lists", "42"),
-		mkChange(wal.OpUpdate, "public", "todo_lists", "43"),
-		mkChange(wal.OpUpdate, "public", "todo_lists", "44"),
+		mkChange(wal.OpUpdate, "public", "todo_lists", "42"),
+		mkChange(wal.OpUpdate, "public", "todo_lists", "42"),
 	)
 	b.routeTx(tx)
 
@@ -1156,12 +1164,15 @@ func TestBroadcaster_TxTooLarge_PostFilterCap(t *testing.T) {
 	}
 	b.Register(sub)
 
+	// All five changes target the same anchor PK so the multi_root guard
+	// does not pre-empt the post-filter cap path — the test isolates the
+	// cap-overflow drop.
 	tx := mkTx(pglogrepl.LSN(0x1040), 104,
-		mkChange(wal.OpUpdate, "public", "todo_lists", "1"),
-		mkChange(wal.OpUpdate, "public", "todo_lists", "2"),
-		mkChange(wal.OpUpdate, "public", "todo_lists", "3"),
-		mkChange(wal.OpUpdate, "public", "todo_lists", "4"),
-		mkChange(wal.OpUpdate, "public", "todo_lists", "5"),
+		mkChange(wal.OpUpdate, "public", "todo_lists", "42"),
+		mkChange(wal.OpUpdate, "public", "todo_lists", "42"),
+		mkChange(wal.OpUpdate, "public", "todo_lists", "42"),
+		mkChange(wal.OpUpdate, "public", "todo_lists", "42"),
+		mkChange(wal.OpUpdate, "public", "todo_lists", "42"),
 	)
 	b.routeTx(tx)
 
@@ -1246,10 +1257,12 @@ func TestBroadcaster_TxFanOutWork_ObservedPerTx(t *testing.T) {
 	countBefore := gatherHistogramCount(t, reg, "walera_tx_fan_out_work")
 
 	// Tx with 3 changes matching both subscribers (M=3, total work = 2*3 = 6).
+	// All three changes target the same anchor PK so the multi_root guard
+	// stays out of the way of the fan-out-work observation.
 	tx := mkTx(pglogrepl.LSN(0x1060), 106,
 		mkChange(wal.OpUpdate, "public", "todo_lists", "1"),
-		mkChange(wal.OpUpdate, "public", "todo_lists", "2"),
-		mkChange(wal.OpUpdate, "public", "todo_lists", "3"),
+		mkChange(wal.OpUpdate, "public", "todo_lists", "1"),
+		mkChange(wal.OpUpdate, "public", "todo_lists", "1"),
 	)
 	b.routeTx(tx)
 
@@ -1364,11 +1377,12 @@ func TestBroadcaster_CoBeyondAnchorCounter(t *testing.T) {
 		before := gatherCounterNoLabel(t, reg, "walera_co_tx_beyond_anchor_total")
 
 		// All changes share the subscribed table's WildcardKey → every delivered
-		// change equals the anchor key → delta = 0.
+		// change equals the anchor key → delta = 0. Single PK keeps the
+		// multi_root guard out of this test's scope.
 		tx := mkTx(pglogrepl.LSN(0x3002), 302,
 			mkChange(wal.OpUpdate, "public", "todo_lists", "1"),
-			mkChange(wal.OpUpdate, "public", "todo_lists", "2"),
-			mkChange(wal.OpUpdate, "public", "todo_lists", "3"),
+			mkChange(wal.OpUpdate, "public", "todo_lists", "1"),
+			mkChange(wal.OpUpdate, "public", "todo_lists", "1"),
 		)
 		b.routeTx(tx)
 
@@ -1511,5 +1525,180 @@ func TestRouteTxSchemaScoped_NilFilterStripsCrossSchema(t *testing.T) {
 	}
 	if reflect.ValueOf(ev.Tx.Changes).Pointer() != reflect.ValueOf(tx.Changes).Pointer() {
 		t.Error("ev.Tx.Changes should still share backing array with tx.Changes (only indices rescoped)")
+	}
+}
+
+// TestBroadcaster_MultiRoot_ExactDropsOnTwoPKs:
+// Exact subscriber on todo_lists:42 must NOT receive a tx that touches both
+// todo_lists:42 and todo_lists:99 in one commit. Per spec §1.6, this is a
+// writer-side discipline violation; the broker drops the tx for this
+// subscriber, increments tx_dropped_total{reason="multi_root"}, but keeps
+// the connection alive (no sub.Drop, no Reason set).
+func TestBroadcaster_MultiRoot_ExactDropsOnTwoPKs(t *testing.T) {
+	t.Parallel()
+
+	b, reg := mkBroadcaster(10000)
+	sub := mkExactSub("public", "todo_lists", "42", 0, 4)
+	b.Register(sub)
+
+	tx := mkTx(pglogrepl.LSN(0x4000), 400,
+		mkChange(wal.OpUpdate, "public", "todo_lists", "42"),
+		mkChange(wal.OpUpdate, "public", "todo_lists", "99"),
+	)
+	b.routeTx(tx)
+
+	expectNoFrame(t, sub, 100*time.Millisecond)
+
+	if v := gatherCounter(t, reg, "walera_tx_dropped_total", "reason", "multi_root"); v != 1 {
+		t.Errorf("tx_dropped_total{reason=multi_root}: got %v; want 1", v)
+	}
+	if got := sub.Reason(); got != "" {
+		t.Errorf("Reason: got %q; want empty (multi_root must not disconnect the subscriber)", got)
+	}
+	select {
+	case <-sub.Done():
+		t.Error("subscriber unexpectedly disconnected on multi_root")
+	default:
+	}
+}
+
+// TestBroadcaster_MultiRoot_WildcardDropsOnTwoPKs:
+// Wildcard subscribers are the primary signal of writer-side bulk-operation
+// bugs (spec §4.4). Same per-subscriber drop semantics as exact.
+func TestBroadcaster_MultiRoot_WildcardDropsOnTwoPKs(t *testing.T) {
+	t.Parallel()
+
+	b, reg := mkBroadcaster(10000)
+	sub := mkWildcardSub("public", "todo_lists", 0, 8)
+	b.Register(sub)
+
+	tx := mkTx(pglogrepl.LSN(0x4010), 401,
+		mkChange(wal.OpInsert, "public", "todo_lists", "1"),
+		mkChange(wal.OpInsert, "public", "todo_lists", "2"),
+	)
+	b.routeTx(tx)
+
+	expectNoFrame(t, sub, 100*time.Millisecond)
+
+	if v := gatherCounter(t, reg, "walera_tx_dropped_total", "reason", "multi_root"); v != 1 {
+		t.Errorf("tx_dropped_total{reason=multi_root}: got %v; want 1", v)
+	}
+	if got := sub.Reason(); got != "" {
+		t.Errorf("Reason: got %q; want empty (multi_root must not disconnect the subscriber)", got)
+	}
+}
+
+// TestBroadcaster_MultiRoot_SamePKMultipleChangesAllowed:
+// Multiple changes for the SAME anchor PK in one tx (e.g., INSERT then UPDATE
+// of users:42, or any "bump updated_at" pattern) is normal — the guard counts
+// distinct PKs, not changes.
+func TestBroadcaster_MultiRoot_SamePKMultipleChangesAllowed(t *testing.T) {
+	t.Parallel()
+
+	b, reg := mkBroadcaster(10000)
+	sub := mkExactSub("public", "todo_lists", "42", 0, 4)
+	recordedFor(t, sub).useEncoder(b.enc.(*stubEncoder))
+	b.Register(sub)
+
+	tx := mkTx(pglogrepl.LSN(0x4020), 402,
+		mkChange(wal.OpInsert, "public", "todo_lists", "42"),
+		mkChange(wal.OpUpdate, "public", "todo_lists", "42"),
+		mkChange(wal.OpUpdate, "public", "todo_lists", "42"),
+	)
+	b.routeTx(tx)
+
+	ev := drainOne(t, sub, 200*time.Millisecond)
+	if got, want := len(ev.MatchedIndices), 3; got != want {
+		t.Errorf("MatchedIndices length: got %d; want %d", got, want)
+	}
+	if v := gatherCounter(t, reg, "walera_tx_dropped_total", "reason", "multi_root"); v != 0 {
+		t.Errorf("tx_dropped_total{reason=multi_root}: got %v; want 0 (same PK is not multi-root)", v)
+	}
+}
+
+// TestBroadcaster_MultiRoot_ChildOfOtherTableNotGuarded:
+// The multi_root guard counts distinct PKs of the SUBSCRIBER's anchor table
+// only. It does NOT inspect FK relationships between tables — a tx that
+// touches todo_lists:42 + tasks(todo_list_id=99) is delivered. Closing this
+// cross-table leak requires writer-side discipline (one root per tx,
+// including its children), documented in README.
+func TestBroadcaster_MultiRoot_ChildOfOtherTableNotGuarded(t *testing.T) {
+	t.Parallel()
+
+	b, reg := mkBroadcaster(10000)
+	sub := mkExactSub("public", "todo_lists", "42", 0, 4)
+	recordedFor(t, sub).useEncoder(b.enc.(*stubEncoder))
+	b.Register(sub)
+
+	tx := mkTx(pglogrepl.LSN(0x4030), 403,
+		mkChange(wal.OpUpdate, "public", "todo_lists", "42"),
+		mkChange(wal.OpInsert, "public", "tasks", "777"),
+	)
+	b.routeTx(tx)
+
+	ev := drainOne(t, sub, 200*time.Millisecond)
+	if got, want := len(ev.MatchedIndices), 2; got != want {
+		t.Errorf("MatchedIndices length: got %d; want %d (child-of-other-root leak is writer-side discipline, not broker-enforced)", got, want)
+	}
+	if v := gatherCounter(t, reg, "walera_tx_dropped_total", "reason", "multi_root"); v != 0 {
+		t.Errorf("tx_dropped_total{reason=multi_root}: got %v; want 0 (guard scoped to anchor table)", v)
+	}
+}
+
+// TestBroadcaster_MultiRoot_OneCounterPerSubscriber:
+// Each eligible subscriber gets its own multi_root drop; the counter
+// increments per (tx, subscriber) pair, not per tx (spec §8.2).
+func TestBroadcaster_MultiRoot_OneCounterPerSubscriber(t *testing.T) {
+	t.Parallel()
+
+	b, reg := mkBroadcaster(10000)
+	a := mkExactSub("public", "todo_lists", "42", 0, 4)
+	c := mkExactSub("public", "todo_lists", "99", 0, 4)
+	b.Register(a)
+	b.Register(c)
+
+	tx := mkTx(pglogrepl.LSN(0x4040), 404,
+		mkChange(wal.OpUpdate, "public", "todo_lists", "42"),
+		mkChange(wal.OpUpdate, "public", "todo_lists", "99"),
+	)
+	b.routeTx(tx)
+
+	expectNoFrame(t, a, 50*time.Millisecond)
+	expectNoFrame(t, c, 50*time.Millisecond)
+
+	if v := gatherCounter(t, reg, "walera_tx_dropped_total", "reason", "multi_root"); v != 2 {
+		t.Errorf("tx_dropped_total{reason=multi_root}: got %v; want 2 (one per matched subscriber)", v)
+	}
+}
+
+// TestBroadcaster_MultiRoot_NextTxStillDelivered:
+// After a multi_root drop, the subscriber's connection stays open and the
+// next well-formed tx is delivered normally.
+func TestBroadcaster_MultiRoot_NextTxStillDelivered(t *testing.T) {
+	t.Parallel()
+
+	b, reg := mkBroadcaster(10000)
+	sub := mkExactSub("public", "todo_lists", "42", 0, 4)
+	recordedFor(t, sub).useEncoder(b.enc.(*stubEncoder))
+	b.Register(sub)
+
+	bad := mkTx(pglogrepl.LSN(0x4050), 405,
+		mkChange(wal.OpUpdate, "public", "todo_lists", "42"),
+		mkChange(wal.OpUpdate, "public", "todo_lists", "99"),
+	)
+	b.routeTx(bad)
+	expectNoFrame(t, sub, 50*time.Millisecond)
+
+	good := mkTx(pglogrepl.LSN(0x4051), 406,
+		mkChange(wal.OpUpdate, "public", "todo_lists", "42"),
+	)
+	b.routeTx(good)
+
+	ev := drainOne(t, sub, 200*time.Millisecond)
+	if got, want := len(ev.MatchedIndices), 1; got != want {
+		t.Errorf("MatchedIndices length: got %d; want %d", got, want)
+	}
+	if v := gatherCounter(t, reg, "walera_tx_dropped_total", "reason", "multi_root"); v != 1 {
+		t.Errorf("tx_dropped_total{reason=multi_root}: got %v; want 1", v)
 	}
 }

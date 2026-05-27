@@ -23,15 +23,22 @@ Pre-sweep archaeology anchor: commit `de6b665` (pre-SWEEP-02 HEAD).
    read-only to each sequential `dispatchEvent` call, eliminating the
    per-subscriber-per-change `append` allocation of the prior shape.
 
-2. **tx_dropped_total{reason="multi_root"} pre-touch.** Pre-touched
-   ONLY in `router.New` via `b.metrics.TxDropped("multi_root").Add(0)`.
-   No `.Inc()` or `.Add(` for `"multi_root"` exists anywhere else in
-   the package. The code path is unreachable by construction — every
-   channel's table IS its root in the current pipeline (no multi-root
-   entity hierarchy) — but the series is pre-touched at construction
-   so `Gather()` always shows the sentinel from t=0. See doc.go
-   invariant 7 (paragraph after the numbered list in `router.go`'s
-   former file-header invariants block).
+2. **tx_dropped_total{reason="multi_root"} call sites.** Pre-touched
+   in `router.New` via `b.metrics.TxDropped("multi_root").Add(0)`. The
+   only `.Inc()` site is the multi-root guard inside
+   `(*Broadcaster).dispatchEvent`, which fires when a tx contains >1
+   distinct PK for the subscriber's anchor `(schema, table)` pair
+   (helper: `hasMultipleAnchorRoots`). Multi-root drop is **per-subscriber
+   tx drop, not a disconnect**: only the counter is incremented and a
+   warning is logged. `sub.Drop()` is NOT called — the connection stays
+   open and the next well-formed tx is delivered normally. Clients
+   resync from the primary API on their own. This is the stricter form
+   of spec §1.6: it fires for BOTH exact and wildcard subscribers (a tx
+   that touches `todo_lists:42` and `todo_lists:99` is dropped for an
+   exact subscriber on `todo_lists:42`, not only for wildcard
+   `todo_lists/all`). The cross-table child-of-other-root case
+   (e.g. `todo_lists:42 + tasks(todo_list_id=99)`) is **not** broker-
+   enforced — see README's Writer-side discipline section.
 
 3. **slow_consumer / tx_too_large drop sites.** Both reasons drive
    `sub.Drop(reason)` + `metrics.TxDropped(reason).Inc()` exclusively

@@ -223,9 +223,9 @@ func Test16TxScopedDelivery(t *testing.T) {
 	})
 
 	// Sub-scenario 4: multiple matches collapse into a single ordered event.
-	// A wildcard subscriber on todo_lists/all matched by multiple todo_lists
-	// changes in one tx receives exactly ONE event with all changes in commit
-	// order; no duplicates.
+	// A wildcard subscriber on todo_lists/all matched by multiple changes
+	// for the SAME root row receives exactly ONE event with all changes in
+	// commit order. (Multi-PK shapes are tested by MultiRootSameTableDropped.)
 	t.Run("MultipleMatchesSingleEvent", func(t *testing.T) {
 		t.Parallel()
 		h := NewHarness(t)
@@ -243,17 +243,17 @@ func Test16TxScopedDelivery(t *testing.T) {
 		events, errCh, closeFn := h.Client.Connect(ctx, "todo_lists/all", "tok-4")
 		defer closeFn()
 
-		// A single transaction that inserts three todo_lists rows.
+		// A single transaction that touches one root row three times.
 		if err := h.PG.ExecBatch(ctx,
 			[]string{
 				"INSERT INTO todo_lists (id, title) VALUES ($1, $2)",
-				"INSERT INTO todo_lists (id, title) VALUES ($1, $2)",
-				"INSERT INTO todo_lists (id, title) VALUES ($1, $2)",
+				"UPDATE todo_lists SET title = $2 WHERE id = $1",
+				"UPDATE todo_lists SET title = $2 WHERE id = $1",
 			},
 			[][]any{
 				{101, "alpha"},
-				{102, "beta"},
-				{103, "gamma"},
+				{101, "beta"},
+				{101, "gamma"},
 			},
 		); err != nil {
 			t.Fatalf("multi-change tx: %v", err)
@@ -265,10 +265,13 @@ func Test16TxScopedDelivery(t *testing.T) {
 		if len(ev.Changes) != 3 {
 			t.Fatalf("multi-match dedup:expected 3 changes in one event, got %d (raw=%+v)", len(ev.Changes), ev.Changes)
 		}
-		wantPKs := []string{"101", "102", "103"}
+		wantOps := []string{"insert", "update", "update"}
 		for i, c := range ev.Changes {
-			if c.PK != wantPKs[i] {
-				t.Errorf("multi-match dedup:change[%d].pk = %q, want %q", i, c.PK, wantPKs[i])
+			if c.PK != "101" {
+				t.Errorf("multi-match dedup:change[%d].pk = %q, want %q", i, c.PK, "101")
+			}
+			if c.Op != wantOps[i] {
+				t.Errorf("multi-match dedup:change[%d].op = %q, want %q", i, c.Op, wantOps[i])
 			}
 			if c.Table != "todo_lists" {
 				t.Errorf("multi-match dedup:change[%d].table = %q, want %q", i, c.Table, "todo_lists")
@@ -283,6 +286,179 @@ func Test16TxScopedDelivery(t *testing.T) {
 			}
 		case <-time.After(500 * time.Millisecond):
 			// OK — only one event delivered.
+		}
+	})
+
+	// Sub-scenario 6: writer-side discipline — multi-root drop.
+	// A transaction that touches two different root rows of the subscriber's
+	// anchor table violates the one-root-per-tx discipline (spec §1.6, README
+	// "Writer-side discipline"). The broker must drop the tx for the
+	// subscriber — counter walera_tx_dropped_total{reason="multi_root"}
+	// increments and no event is delivered — but MUST NOT disconnect the
+	// subscriber. A subsequent well-formed tx is delivered normally.
+	t.Run("MultiRootSameTableDropped", func(t *testing.T) {
+		t.Parallel()
+		h := NewHarness(t)
+		h.Auth.SetMap(
+			"tok-6", "usr-6",
+			[]string{"todo_lists"},
+			map[string][]string{
+				"todo_lists": {"id", "title"},
+			},
+		)
+
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+
+		events, errCh, closeFn := h.Client.Connect(ctx, "todo_lists/46", "tok-6")
+		defer closeFn()
+
+		// Seed the anchor row in a separate (single-root) tx so the connection
+		// is fully wired before the discipline-violation tx arrives.
+		if err := h.PG.Exec(ctx,
+			"INSERT INTO todo_lists (id, title) VALUES ($1, $2)",
+			46, "initial",
+		); err != nil {
+			t.Fatalf("seed anchor: %v", err)
+		}
+		seed := readTxEvent(ctx, t, h, events, errCh)
+		if len(seed.Changes) != 1 || seed.Changes[0].PK != "46" {
+			t.Fatalf("seed event mismatch: %+v", seed.Changes)
+		}
+
+		metricsURL := h.Binary.BaseURL() + "/metrics"
+		baseline, err := scrapeMetric(ctx, metricsURL, `walera_tx_dropped_total{reason="multi_root"}`)
+		if err != nil {
+			t.Fatalf("scrape baseline multi_root: %v", err)
+		}
+
+		// Discipline violation: two distinct roots in one tx.
+		if err := h.PG.ExecBatch(ctx,
+			[]string{
+				"UPDATE todo_lists SET title = $1 WHERE id = $2",
+				"INSERT INTO todo_lists (id, title) VALUES ($1, $2)",
+			},
+			[][]any{
+				{"updated-46", 46},
+				{146, "other-root"},
+			},
+		); err != nil {
+			t.Fatalf("multi-root tx: %v", err)
+		}
+
+		if _, err := waitForMetric(ctx, t, metricsURL,
+			`walera_tx_dropped_total{reason="multi_root"}`,
+			func(v float64) bool { return v > baseline },
+			3*time.Second, 50*time.Millisecond,
+		); err != nil {
+			t.Fatalf("multi_root counter did not increment: %v", err)
+		}
+
+		// No tx event must reach the subscriber from the bad tx.
+		select {
+		case ev := <-events:
+			if ev.Type == "tx" {
+				t.Fatalf("multi_root:unexpected tx event delivered (writer-side violation): %+v", ev)
+			}
+		case err := <-errCh:
+			t.Fatalf("multi_root:subscriber unexpectedly errored: %v (must NOT disconnect on multi_root)", err)
+		case <-time.After(500 * time.Millisecond):
+			// OK — silently dropped, subscriber stays connected.
+		}
+
+		// Follow-up well-formed tx is delivered normally — confirms the
+		// connection survived the drop.
+		if err := h.PG.Exec(ctx,
+			"UPDATE todo_lists SET title = $1 WHERE id = $2",
+			"after-violation", 46,
+		); err != nil {
+			t.Fatalf("post-violation update: %v", err)
+		}
+		post := readTxEvent(ctx, t, h, events, errCh)
+		if len(post.Changes) != 1 || post.Changes[0].PK != "46" {
+			t.Fatalf("post-violation event mismatch: %+v", post.Changes)
+		}
+	})
+
+	// Sub-scenario 7: baseline — child-of-other-root leak.
+	// The broker's multi_root guard is scoped to the subscriber's anchor
+	// table: it cannot detect that a child row belongs to a different root.
+	// A tx that touches todo_lists:47 (the subscriber's anchor) AND a tasks
+	// row whose todo_list_id points to a DIFFERENT todo_list is delivered.
+	// Closing this is a writer-side responsibility (see README): any tx
+	// changing a child row MUST also touch only the corresponding root row.
+	// This test locks in the current behavior so the discipline contract is
+	// observable from CI; if/when a stricter row-scope is introduced, this
+	// assertion will need updating.
+	t.Run("ChildOfOtherRootLeaksByDiscipline", func(t *testing.T) {
+		t.Parallel()
+		h := NewHarness(t)
+		h.Auth.SetMap(
+			"tok-7", "usr-7",
+			[]string{"todo_lists", "tasks"},
+			map[string][]string{
+				"todo_lists": {"id", "title"},
+				"tasks":      {"id", "title", "todo_list_id"},
+			},
+		)
+
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+
+		events, errCh, closeFn := h.Client.Connect(ctx, "todo_lists/47", "tok-7")
+		defer closeFn()
+
+		// Seed: own root 47 and another root 99 (in separate txs).
+		if err := h.PG.Exec(ctx,
+			"INSERT INTO todo_lists (id, title) VALUES ($1, $2)",
+			47, "own",
+		); err != nil {
+			t.Fatalf("seed own root: %v", err)
+		}
+		_ = readTxEvent(ctx, t, h, events, errCh) // consume seed
+		if err := h.PG.Exec(ctx,
+			"INSERT INTO todo_lists (id, title) VALUES ($1, $2)",
+			99, "other",
+		); err != nil {
+			t.Fatalf("seed other root: %v", err)
+		}
+
+		// Co-write: touch own root + a tasks row attached to the OTHER root,
+		// all in one tx. The broker's anchor-scoped guard counts only
+		// todo_lists PKs → 1 distinct PK → no multi_root drop. The tasks row
+		// for the other root leaks through whitelist.
+		if err := h.PG.ExecBatch(ctx,
+			[]string{
+				"UPDATE todo_lists SET title = $1 WHERE id = $2",
+				"INSERT INTO tasks (todo_list_id, title) VALUES ($1, $2)",
+			},
+			[][]any{
+				{"own-updated", 47},
+				{99, "task of other root"},
+			},
+		); err != nil {
+			t.Fatalf("co-write tx: %v", err)
+		}
+
+		ev := readTxEvent(ctx, t, h, events, errCh)
+		if len(ev.Changes) != 2 {
+			t.Fatalf("child-leak baseline:expected 2 changes (anchor + leaked child), got %d (raw=%+v)",
+				len(ev.Changes), ev.Changes)
+		}
+		var sawAnchor, sawLeakedChild bool
+		for _, c := range ev.Changes {
+			if c.Table == "todo_lists" && c.PK == "47" {
+				sawAnchor = true
+			}
+			if c.Table == "tasks" {
+				sawLeakedChild = true
+			}
+		}
+		if !sawAnchor {
+			t.Errorf("child-leak baseline:anchor change missing from event (changes=%+v)", ev.Changes)
+		}
+		if !sawLeakedChild {
+			t.Errorf("child-leak baseline:tasks change of OTHER root expected to leak (writer-side discipline test), but absent (changes=%+v)", ev.Changes)
 		}
 	})
 

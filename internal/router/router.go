@@ -219,6 +219,23 @@ func (b *Broadcaster) dispatchEvent(tx wal.Tx, sub *Subscriber, indices []int) (
 
 	capLimit := b.cfg.MaxChangesPerTx
 	subSchema := sub.Schema()
+	subTable := sub.Table()
+
+	// Multi-root guard: a tx touching >1 distinct PK of the subscriber's anchor
+	// table violates the one-root-per-tx writer-side discipline (spec §1.6).
+	// Per-subscriber tx drop: counter + log, but the connection stays open —
+	// the client resyncs from the primary API and the next well-formed tx is
+	// delivered normally. INVARIANT #2: this is the sole .Inc() site for
+	// tx_dropped_total{reason="multi_root"}.
+	if hasMultipleAnchorRoots(tx, subSchema, subTable) {
+		b.metrics.TxDropped("multi_root").Inc()
+		b.log.Warn().
+			Str("subscriber_id", sub.ID()).
+			Str("channel", subChannelKey(sub)).
+			Str("commit_lsn", tx.CommitLSN.String()).
+			Msg("subscriber tx dropped: multi_root (writer-side discipline violation)")
+		return 0, 0
+	}
 
 	ev := Event{Tx: tx, MatchedIndices: indices}
 	if sub.Filter != nil {
@@ -334,6 +351,27 @@ func (b *Broadcaster) dispatchEvent(tx wal.Tx, sub *Subscriber, indices []int) (
 	}
 
 	return len(ev.MatchedIndices), beyondAnchor
+}
+
+// hasMultipleAnchorRoots reports whether tx contains >1 distinct PK on the
+// (schema, table) anchor pair. A single-PK anchor table (one or more changes
+// for the same row) is normal; two distinct anchor PKs in the same tx signals
+// a writer-side discipline violation (spec §1.6, §4.4).
+func hasMultipleAnchorRoots(tx wal.Tx, schema, table string) bool {
+	var first string
+	for _, ch := range tx.Changes {
+		if ch.Schema != schema || ch.Table != table {
+			continue
+		}
+		if first == "" {
+			first = ch.PK
+			continue
+		}
+		if ch.PK != first {
+			return true
+		}
+	}
+	return false
 }
 
 func (b *Broadcaster) dropTxTooLarge(sub *Subscriber, commitLSN pglogrepl.LSN, countField string, count, limit int) {

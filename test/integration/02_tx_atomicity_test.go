@@ -26,32 +26,37 @@ func Test02TxAtomicity(t *testing.T) {
 	events, errCh, closeFn := h.Client.Connect(ctx, "users/all", "test-token")
 	defer closeFn()
 
+	// One transaction, multiple changes for the SAME anchor row (users:1):
+	// INSERT then two UPDATEs. Under the multi_root guard (spec §1.6) this is
+	// the only legal shape for >1 change per tx on the anchor table — multiple
+	// distinct PKs in one tx would be dropped per-subscriber as a writer-side
+	// discipline violation (see README "Writer-side discipline").
 	if err := h.PG.ExecBatch(ctx,
 		[]string{
 			"INSERT INTO users (id, email, name) VALUES ($1, $2, $3)",
-			"INSERT INTO users (id, email, name) VALUES ($1, $2, $3)",
-			"INSERT INTO users (id, email, name) VALUES ($1, $2, $3)",
+			"UPDATE users SET email = $2 WHERE id = $1",
+			"UPDATE users SET name = $2 WHERE id = $1",
 		},
 		[][]any{
 			{1, "u1@x", "Alice"},
-			{2, "u2@x", "Bob"},
-			{3, "u3@x", "Cara"},
+			{1, "u1@new"},
+			{1, "Alice2"},
 		},
 	); err != nil {
-		t.Fatalf("multi-row tx: %v", err)
+		t.Fatalf("multi-change tx: %v", err)
 	}
 
 	ev1 := readTxEvent(ctx, t, h, events, errCh)
 	if got, want := len(ev1.Changes), 3; got != want {
-		t.Fatalf("multi-row tx: expected %d changes in one Event, got %d (raw=%v)", want, got, ev1.Changes)
+		t.Fatalf("multi-change tx: expected %d changes in one Event, got %d (raw=%v)", want, got, ev1.Changes)
 	}
-	pks := []string{ev1.Changes[0].PK, ev1.Changes[1].PK, ev1.Changes[2].PK}
-	if pks[0] != "1" || pks[1] != "2" || pks[2] != "3" {
-		t.Errorf("multi-row tx pk order = %v, want [1 2 3]", pks)
-	}
+	wantOps := []string{"insert", "update", "update"}
 	for i, c := range ev1.Changes {
-		if c.Op != "insert" {
-			t.Errorf("change[%d].op = %q, want %q", i, c.Op, "insert")
+		if c.PK != "1" {
+			t.Errorf("change[%d].pk = %q, want %q (single-anchor tx)", i, c.PK, "1")
+		}
+		if c.Op != wantOps[i] {
+			t.Errorf("change[%d].op = %q, want %q", i, c.Op, wantOps[i])
 		}
 		if c.Table != "users" {
 			t.Errorf("change[%d].table = %q, want %q", i, c.Table, "users")

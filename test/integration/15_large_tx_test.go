@@ -4,10 +4,7 @@ package integration
 
 import (
 	"context"
-	"fmt"
-	"net/http"
 	"runtime"
-	"strconv"
 	"testing"
 	"time"
 
@@ -64,6 +61,23 @@ func confirmedSlotDrained(t *testing.T, p *PG, prefix string, tolerance int64, d
 	return last, false
 }
 
+// TestLargeTransactionBackpressure (WAL-05): a single Postgres transaction
+// containing 10 000 row changes flows through the WAL reader and broker
+// without unbounded memory growth, and the replication slot drains afterwards.
+//
+// Under the writer-side one-root-per-tx discipline (README "Writer-side
+// discipline"), 10 000 distinct anchor-table PKs in a single transaction is a
+// deliberate violation: the broker drops the tx per-subscriber with
+// `tx_dropped_total{reason="multi_root"}` and keeps the connection open.
+// This test exercises exactly that pathological shape and pins the
+// pipeline-level invariants that survive it:
+//
+//   - WAL reader consumes the whole tx (replication slot lag returns to ~0).
+//   - Broker assembles + routes the tx without leaking memory
+//     (heap peak ≤ 2× baseline).
+//   - The wildcard subscriber registers exactly one multi_root drop, stays
+//     connected (no `error` SSE event, no disconnect), and remains visible
+//     in `walera_subscribers_active`.
 func TestLargeTransactionBackpressure(t *testing.T) {
 
 	t.Setenv("GOMEMLIMIT", "512MiB")
@@ -90,10 +104,16 @@ func TestLargeTransactionBackpressure(t *testing.T) {
 		t.Fatalf("subscriber never registered: %v", err)
 	}
 
+	baseMultiRoot, err := scrapeMetric(ctx, metricsURL, `walera_tx_dropped_total{reason="multi_root"}`)
+	if err != nil {
+		t.Fatalf("scrape baseline multi_root: %v", err)
+	}
+
 	baseline := sampleHeapAlloc()
 
 	lagBegin, _ := querySlotLag(t, h.PG, "walera_test_")
 
+	const expectedChanges = 10000
 	insertSQL := `
         INSERT INTO users (id, email, name)
         SELECT g + 10000, 'u' || g || '@x', repeat('n', 50)
@@ -103,49 +123,59 @@ func TestLargeTransactionBackpressure(t *testing.T) {
 		t.Fatalf("large insert: %v", err)
 	}
 
-	const slowDrainSleep = 5 * time.Millisecond
-	const expectedEvents = 10000
-
-	var received int
+	// The tx is a writer-side discipline violation; no tx event must reach the
+	// subscriber. Monitor the channel for a bounded window — any tx event or
+	// errCh signal here is a regression. While waiting, sample heap during the
+	// tx-assembly window so we observe the peak rather than the post-GC floor.
+	deadline := time.Now().Add(5 * time.Second)
+	midHeap := sampleHeapAlloc()
 	var lagMid int64
-	midHeap := uint64(0)
-	midSampled := false
-
-drainLoop:
-	for received < expectedEvents {
+	for time.Now().Before(deadline) {
 		select {
 		case ev, ok := <-events:
 			if !ok {
-				break drainLoop
+				t.Fatal("events channel closed during large-tx ingest (subscriber unexpectedly disconnected)")
 			}
 			if ev.Type == "tx" {
-
-				received += countChanges(ev.Data)
+				t.Fatalf("multi_root discipline violation tx unexpectedly delivered: %s", string(ev.Data))
 			}
-			time.Sleep(slowDrainSleep)
-
-			if !midSampled && received >= expectedEvents/4 {
-				midHeap = sampleHeapAlloc()
-				if lag, ok := querySlotLag(t, h.PG, "walera_test_"); ok {
-					lagMid = lag
-				}
-				midSampled = true
+			if ev.Type == "error" {
+				t.Fatalf("subscriber received error event during multi_root drop (expected silent drop): %s", string(ev.Data))
 			}
 		case err := <-errCh:
-			t.Fatalf("client error after %d events: %v", received, err)
-		case <-ctx.Done():
-			t.Fatalf("timeout after %d/%d events; stderr:\n%s", received, expectedEvents, h.Binary.Stderr())
+			t.Fatalf("subscriber unexpectedly errored during large-tx ingest: %v (multi_root must NOT disconnect)", err)
+		case <-time.After(50 * time.Millisecond):
 		}
-	}
-
-	if !midSampled {
-
-		midHeap = sampleHeapAlloc()
-		if lag, ok := querySlotLag(t, h.PG, "walera_test_"); ok {
+		if h := sampleHeapAlloc(); h > midHeap {
+			midHeap = h
+		}
+		if lag, ok := querySlotLag(t, h.PG, "walera_test_"); ok && lag > lagMid {
 			lagMid = lag
 		}
 	}
 
+	// Multi-root drop must have fired exactly once for this subscriber.
+	mrAfter, err := waitForMetric(ctx, t, metricsURL,
+		`walera_tx_dropped_total{reason="multi_root"}`,
+		func(v float64) bool { return v >= baseMultiRoot+1 },
+		5*time.Second, 50*time.Millisecond,
+	)
+	if err != nil {
+		t.Fatalf("multi_root counter did not increment (baseline=%v): %v", baseMultiRoot, err)
+	}
+	if got := mrAfter - baseMultiRoot; got != 1 {
+		t.Errorf("multi_root delta: got %v; want 1 (one drop per matched subscriber per tx)", got)
+	}
+
+	// Subscriber must still be registered — multi_root keeps the connection.
+	if v, err := scrapeMetric(ctx, metricsURL, `walera_subscribers_active{type="wildcard"}`); err != nil {
+		t.Fatalf("scrape walera_subscribers_active: %v", err)
+	} else if v < 1 {
+		t.Errorf("walera_subscribers_active{type=wildcard} = %v after multi_root drop; want >= 1 (subscriber must stay connected)", v)
+	}
+
+	// Slot lag must drain — the WAL reader keeps consuming regardless of the
+	// per-subscriber drop.
 	lagEnd, drained := confirmedSlotDrained(t, h.PG, "walera_test_", 4*1024, 15*time.Second)
 	endHeap := sampleHeapAlloc()
 
@@ -168,45 +198,11 @@ drainLoop:
 			lagEnd, baseline, midHeap, endHeap)
 	}
 
-	t.Logf("WAL-05 PASS: HeapAlloc baseline=%d mid=%d end=%d peak=%d (bound=%d); slot lag begin=%d mid=%d end=%d",
-		baseline, midHeap, endHeap, peak, bound, lagBegin, lagMid, lagEnd)
+	t.Logf("WAL-05 PASS: %d-change multi_root tx flowed through; HeapAlloc baseline=%d mid=%d end=%d peak=%d (bound=%d); slot lag begin=%d mid=%d end=%d",
+		expectedChanges, baseline, midHeap, endHeap, peak, bound, lagBegin, lagMid, lagEnd)
 
 	if metric, err := scrapeMetric(ctx, metricsURL, "walera_wal_lsn_lag_bytes"); err == nil {
 		t.Logf("walera_wal_lsn_lag_bytes (in-process sampler) = %v", metric)
 	}
 }
 
-func countChanges(data []byte) int {
-
-	n := 0
-	depth := 0
-	inChanges := false
-	const marker = `"changes":[`
-	for i := 0; i+len(marker) <= len(data); i++ {
-		if !inChanges && string(data[i:i+len(marker)]) == marker {
-			inChanges = true
-			i += len(marker) - 1
-			continue
-		}
-		if inChanges {
-			switch data[i] {
-			case '{':
-				if depth == 0 {
-					n++
-				}
-				depth++
-			case '}':
-				depth--
-			case ']':
-				if depth == 0 {
-					return n
-				}
-			}
-		}
-	}
-	return n
-}
-
-var _ = http.StatusOK
-var _ = fmt.Sprintf
-var _ = strconv.Itoa
