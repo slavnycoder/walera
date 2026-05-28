@@ -55,11 +55,22 @@ Walera is a Go service that streams PostgreSQL row-level changes to clients over
 - **No global state.** Viper uses package-level globals (`viper.GetString()`). koanf
 - **Smaller dependency graph.** Viper pulls in `fsnotify`, `mapstructure`, and several
 - **Struct unmarshaling via `mapstructure`.** `k.Unmarshal("", &cfg)` maps the flat
-### Token-Bucket Rate Limiter: `golang.org/x/time/rate` v0.15.0
-- **Zero external dependencies.** This is a stdlib-maintained package (maintained by the
-- **`Allow()` is non-blocking, allocation-free.** LIM-01 requires per-user open rate
-- **`Reserve()` for backpressure signals.** LIM-02 needs `Retry-After` header values.
-- **LIM-01 also requires a global concurrency semaphore (50k limit).** Use a buffered
+### Token-Bucket Rate Limiter: removed
+- **Deprecated and removed.** Per-IP and per-user token-bucket rate limiting is
+  delegated to the upstream proxy (traefik / NGINX / ingress) — a load balancer
+  can enforce it uniformly across replicas and shed traffic before it consumes
+  a Goroutine. In-process, walera only keeps two admission-control primitives:
+  - **Global concurrency semaphore** (`limits.AcquireGlobal`, default 50k). A
+    buffered `chan struct{}` of `cap=GlobalConcurrent`; on overflow the SSE
+    handshake returns 503 + `Retry-After: 5`. Protects against accept-storm
+    Goroutine blowup.
+  - **Per-user concurrency counter** (`limits.AcquirePerUser`, default 10). An
+    `atomic.Int64` per `user_id` in a `sync.Map`; on overflow returns 429.
+    Protects against a single compromised token saturating the fan-out.
+- **Original spec items LIM-01 (rate limit) / LIM-02 (Retry-After signal)
+  were retired.** `golang.org/x/time/rate` is no longer imported by the
+  limits package; it remains in `go.mod` only because the writer
+  commit-loop uses `WaitN` for transactional pacing.
 ### xxHash: `cespare/xxhash/v2` v2.3.0
 - **Sharded subscription index (ROUTE-02).** The index shards on `xxhash.Sum64String(key)
 - **Zero allocation for the hot path.** `xxhash.Sum64String` takes a string directly.
@@ -90,7 +101,7 @@ Walera is a Go service that streams PostgreSQL row-level changes to clients over
 | `github.com/rs/zerolog` | `v1.35.1` | OPEN → zerolog | Structured JSON logging |
 | `github.com/knadh/koanf/v2` | `v2.3.4` | OPEN → koanf | Config (YAML + env) |
 | `github.com/cespare/xxhash/v2` | `v2.3.0` | CONFIRMED | Sharded index hashing |
-| `golang.org/x/time` | `v0.15.0` | OPEN → stdlib-ext | Token-bucket rate limiter |
+| `golang.org/x/time` | `v0.15.0` | OPEN → stdlib-ext | Writer commit-loop `WaitN` pacing (SSE rate limit was removed; see "Token-Bucket Rate Limiter") |
 ### Test Dependencies
 | Import Path | Version | Purpose |
 |-------------|---------|---------|
@@ -109,7 +120,7 @@ Walera is a Go service that streams PostgreSQL row-level changes to clients over
 | `database/sql` + any ORM (`gorm`, `ent`, `sqlx`) | There is no application-level SQL in the hot path. The admin connection runs at most a handful of queries at startup (health check, schema validation). ORMs add reflection overhead and large dep trees for zero benefit. | `pgx/v5` direct for the 2-3 admin queries |
 | Gin / Echo / Chi / Fiber (web frameworks) | The SSE handler has one route (`/sse/v1/{table}/{pk}`) and two health routes. A framework adds 5-10 ms of middleware stack, opinionated request lifecycle, and 100k+ lines of code for what amounts to `http.HandleFunc`. Spec §SSE-01 specifies `net/http` stdlib. | `net/http` stdlib with `http.NewServeMux()` (Go 1.22 pattern syntax) |
 | `github.com/spf13/viper` | Global state, `fsnotify` watcher not needed for k8s (restarts handle config changes), heavier transitive dep tree than koanf. | `koanf/v2` |
-| `go.uber.org/ratelimit` | AIMD/leaky-bucket — sleeps the caller instead of returning bool. Wrong semantics for SSE admission control (`Allow()` needed, not sleep). At v0.3.1 with sparse updates. | `golang.org/x/time/rate` |
+| `go.uber.org/ratelimit` | AIMD/leaky-bucket — sleeps the caller. Moot anyway; SSE rate limiting is no longer done in-process. | upstream proxy (traefik / NGINX / ingress) |
 | `go.uber.org/zap` | Comparable allocation performance to zerolog but more verbose API (explicit `zap.String()` fields everywhere). No allocation advantage over zerolog for this use case; zerolog is simpler for the contextual-logger-per-subscriber pattern. | `zerolog` |
 | `github.com/sony/gobreaker` (v1 or v2) for the auth breaker | v1 uses fixed-interval counter reset, not a sliding window. v2 adds bucket-period rolling window but still can't express the "bounded fail-open for existing subs / fail-closed for new opens" posture without external scaffolding. | Hand-rolled FSM in `internal/auth/breaker.go` (~120 lines) |
 | Binary pgoutput mode | Spec explicitly defers binary mode to post-MVP. Text mode is sufficient at 5k tx/s on 4 CPUs. Binary decoding adds non-trivial implementation complexity for marginal throughput gain. | `pgoutput` text mode (default in pglogrepl) |

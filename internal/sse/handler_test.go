@@ -178,12 +178,6 @@ func newTestHandler(t *testing.T, cors []string, lcfg *limits.Config) *testHandl
 		lcfg = &limits.Config{
 			GlobalConcurrent:     1024,
 			PerUserConcurrentMax: 10,
-			PerUserRatePerSecond: 100,
-			PerUserBurst:         100,
-			PreAuthRatePerSecond: 100,
-			PreAuthBurst:         100,
-			SweepInterval:        60 * time.Second,
-			SweepIdleThreshold:   5 * time.Minute,
 		}
 	}
 	lim := limits.New(*lcfg, limits.Deps{Logger: logger, Metrics: m})
@@ -749,10 +743,6 @@ func TestHandshake_GlobalSemaphoreExhausted(t *testing.T) {
 	lcfg := &limits.Config{
 		GlobalConcurrent:     1,
 		PerUserConcurrentMax: 10,
-		PerUserRatePerSecond: 100, PerUserBurst: 100,
-		PreAuthRatePerSecond: 100, PreAuthBurst: 100,
-		SweepInterval:      60 * time.Second,
-		SweepIdleThreshold: 5 * time.Minute,
 	}
 	kit := newTestHandler(t, nil, lcfg)
 	validMapBackend(kit.backend)
@@ -783,43 +773,6 @@ func TestHandshake_GlobalSemaphoreExhausted(t *testing.T) {
 	}
 	if got := kit.backend.hits.Load(); got != hits0 {
 		t.Errorf("auth backend hits delta = %d; want 0 (gate 1 must fire before gate 3)", got-hits0)
-	}
-}
-
-func TestHandshake_PreAuthRateExceeded(t *testing.T) {
-	t.Parallel()
-
-	lcfg := &limits.Config{
-		GlobalConcurrent:     1024,
-		PerUserConcurrentMax: 10,
-		PerUserRatePerSecond: 100, PerUserBurst: 100,
-		PreAuthRatePerSecond: 0.0001, PreAuthBurst: 1,
-		SweepInterval:      60 * time.Second,
-		SweepIdleThreshold: 5 * time.Minute,
-	}
-	kit := newTestHandler(t, nil, lcfg)
-	validMapBackend(kit.backend)
-	srv := newTestServer(t, kit.h)
-
-	for i := 0; i < 5; i++ {
-		_ = kit.limits.AllowPreAuthRate("127.0.0.1")
-	}
-
-	hits0 := kit.backend.hits.Load()
-	resp, err := http.DefaultClient.Do(validRequest(t, srv.URL+"/sse/v1/users/42"))
-	if err != nil {
-		t.Fatalf("Do(): %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusTooManyRequests {
-		t.Errorf("status = %d; want 429", resp.StatusCode)
-	}
-	if got := resp.Header.Get("Retry-After"); got != "1" {
-		t.Errorf("Retry-After = %q; want %q", got, "1")
-	}
-	if got := kit.backend.hits.Load(); got != hits0 {
-		t.Errorf("auth backend hits delta = %d; want 0", got-hits0)
 	}
 }
 
@@ -941,10 +894,6 @@ func TestHandshake_PerUserConcurrentExceeded(t *testing.T) {
 	lcfg := &limits.Config{
 		GlobalConcurrent:     1024,
 		PerUserConcurrentMax: 1,
-		PerUserRatePerSecond: 100, PerUserBurst: 100,
-		PreAuthRatePerSecond: 100, PreAuthBurst: 100,
-		SweepInterval:      60 * time.Second,
-		SweepIdleThreshold: 5 * time.Minute,
 	}
 	kit := newTestHandler(t, nil, lcfg)
 	validMapBackend(kit.backend)
@@ -962,50 +911,6 @@ func TestHandshake_PerUserConcurrentExceeded(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusTooManyRequests {
 		t.Errorf("status = %d; want 429", resp.StatusCode)
-	}
-}
-
-func TestHandshake_PerUserRateExceeded(t *testing.T) {
-	t.Parallel()
-	lcfg := &limits.Config{
-		GlobalConcurrent:     1024,
-		PerUserConcurrentMax: 10,
-		PerUserRatePerSecond: 0.0001, PerUserBurst: 1,
-		PreAuthRatePerSecond: 100, PreAuthBurst: 100,
-		SweepInterval:      60 * time.Second,
-		SweepIdleThreshold: 5 * time.Minute,
-	}
-	kit := newTestHandler(t, nil, lcfg)
-	validMapBackend(kit.backend)
-	srv := newTestServer(t, kit.h)
-
-	first, err := http.DefaultClient.Do(validRequest(t, srv.URL+"/sse/v1/users/42"))
-	if err != nil {
-		t.Fatalf("first Do: %v", err)
-	}
-	defer first.Body.Close()
-	if first.StatusCode != http.StatusOK {
-		t.Fatalf("first status = %d; want 200", first.StatusCode)
-	}
-	sub := kit.bc.firstSub(t)
-	defer func() {
-		sub.Drop("test")
-		_, _ = io.Copy(io.Discard, first.Body)
-	}()
-
-	resp, err := http.DefaultClient.Do(validRequest(t, srv.URL+"/sse/v1/users/42"))
-	if err != nil {
-		t.Fatalf("second Do: %v", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusTooManyRequests {
-		t.Errorf("second status = %d; want 429", resp.StatusCode)
-	}
-	if got := resp.Header.Get("Retry-After"); got != "1" {
-		t.Errorf("Retry-After = %q; want %q", got, "1")
-	}
-	if got := gatherCounterValue(t, kit.limits.Metrics(), "walera_limit_rejected_total", "kind", "per_user_rate"); got != 1 {
-		t.Errorf("limit_rejected_total{kind=per_user_rate}: got %v; want 1", got)
 	}
 }
 
@@ -1097,10 +1002,6 @@ func TestHandshake_HappyPathReleasesLimitsOnExit(t *testing.T) {
 	lcfg := &limits.Config{
 		GlobalConcurrent:     1,
 		PerUserConcurrentMax: 1,
-		PerUserRatePerSecond: 100, PerUserBurst: 100,
-		PreAuthRatePerSecond: 100, PreAuthBurst: 100,
-		SweepInterval:      60 * time.Second,
-		SweepIdleThreshold: 5 * time.Minute,
 	}
 	kit := newTestHandler(t, nil, lcfg)
 	validMapBackend(kit.backend)
@@ -1472,12 +1373,6 @@ func mkClientIPHandler(t *testing.T, proxies []string) *Handler {
 	lcfg := &limits.Config{
 		GlobalConcurrent:     100,
 		PerUserConcurrentMax: 10,
-		PerUserRatePerSecond: 100,
-		PerUserBurst:         100,
-		PreAuthRatePerSecond: 100,
-		PreAuthBurst:         100,
-		SweepInterval:        60 * time.Second,
-		SweepIdleThreshold:   5 * time.Minute,
 		TrustedProxies:       proxies,
 	}
 	kit := newTestHandler(t, nil, lcfg)

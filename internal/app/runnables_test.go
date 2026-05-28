@@ -42,8 +42,6 @@ func TestHTTPServerConstructors(t *testing.T) {
 func TestBuildRunnablesRunnableClosures(t *testing.T) {
 	cfg := newSingletonTestConfig(t)
 	cfg.HTTP.PProfAddr = "127.0.0.1:0"
-	cfg.Limits.SweepInterval = time.Second
-	cfg.Limits.SweepIdleThreshold = time.Second
 	a, cleanup, err := InitializeApp(*cfg, zerolog.Nop(), nil)
 	if err != nil {
 		t.Fatalf("InitializeApp: %v", err)
@@ -78,7 +76,7 @@ func TestBuildRunnablesRunnableClosures(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	for _, name := range []string{"auth-breaker-fsm", "limits-sweeper", "auth-stale-watcher", "router-ingest", "metrics-sampler"} {
+	for _, name := range []string{"auth-breaker-fsm", "auth-stale-watcher", "router-ingest", "metrics-sampler"} {
 		r, ok := byName[name]
 		if !ok {
 			t.Fatalf("missing runnable %q", name)

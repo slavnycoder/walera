@@ -27,10 +27,6 @@ func buildRunnables(a *App, slotName wal.SlotName) []Runnable {
 			Name: "auth-breaker-fsm",
 			Run:  func(ctx context.Context) error { a.Breaker.Run(ctx); return nil },
 		},
-		{
-			Name: "limits-sweeper",
-			Run:  func(ctx context.Context) error { a.Limits.RunSweeper(ctx); return nil },
-		},
 	}
 
 	if a.Config.Auth.DefaultTTLSeconds > 0 {

@@ -2,11 +2,9 @@ package limits
 
 import (
 	"bytes"
-	"context"
 	"net"
 	"strings"
 	"testing"
-	"time"
 
 	dto "github.com/prometheus/client_model/go"
 	"github.com/rs/zerolog"
@@ -67,12 +65,6 @@ func mkLimits(t *testing.T, globalCap, perUserCap int) *Limits {
 	return New(Config{
 		GlobalConcurrent:     globalCap,
 		PerUserConcurrentMax: perUserCap,
-		PerUserRatePerSecond: 1,
-		PerUserBurst:         2,
-		PreAuthRatePerSecond: 1,
-		PreAuthBurst:         2,
-		SweepInterval:        60 * time.Second,
-		SweepIdleThreshold:   5 * time.Minute,
 	}, Deps{Logger: zerolog.Nop(), Metrics: mc})
 }
 
@@ -84,12 +76,6 @@ func mkLimitsWithLogCapture(t *testing.T, globalCap, perUserCap int) (*Limits, *
 	return New(Config{
 		GlobalConcurrent:     globalCap,
 		PerUserConcurrentMax: perUserCap,
-		PerUserRatePerSecond: 1,
-		PerUserBurst:         2,
-		PreAuthRatePerSecond: 1,
-		PreAuthBurst:         2,
-		SweepInterval:        60 * time.Second,
-		SweepIdleThreshold:   5 * time.Minute,
 	}, Deps{Logger: logger, Metrics: mc}), &buf
 }
 
@@ -185,130 +171,13 @@ func TestLimits_ReleasePerUser_Decrements(t *testing.T) {
 	}
 }
 
-func TestLimits_AllowPreAuthRate_TokenBucket(t *testing.T) {
-	t.Parallel()
-
-	l := mkLimits(t, 100, 100)
-	if !l.AllowPreAuthRate("1.1.1.1") {
-		t.Fatal("first AllowPreAuthRate: got false; want true")
-	}
-	if !l.AllowPreAuthRate("1.1.1.1") {
-		t.Fatal("second AllowPreAuthRate: got false; want true")
-	}
-	if l.AllowPreAuthRate("1.1.1.1") {
-		t.Fatal("third AllowPreAuthRate: got true; want false (burst exhausted)")
-	}
-	if v := gatherCounter(t, l.mc, "walera_limit_rejected_total", "kind", "pre_auth_rate"); v != 1 {
-		t.Errorf("limit_rejected_total{kind=pre_auth_rate}: got %v; want 1", v)
-	}
-}
-
-func TestLimits_AllowPerUserRate_TokenBucket(t *testing.T) {
-	t.Parallel()
-	l := mkLimits(t, 100, 100)
-	if !l.AllowPerUserRate("u1") {
-		t.Fatal("first AllowPerUserRate: got false; want true")
-	}
-	if !l.AllowPerUserRate("u1") {
-		t.Fatal("second AllowPerUserRate: got false; want true")
-	}
-	if l.AllowPerUserRate("u1") {
-		t.Fatal("third AllowPerUserRate: got true; want false")
-	}
-	if v := gatherCounter(t, l.mc, "walera_limit_rejected_total", "kind", "per_user_rate"); v != 1 {
-		t.Errorf("limit_rejected_total{kind=per_user_rate}: got %v; want 1", v)
-	}
-}
-
-func TestLimits_AllowPreAuthRate_DifferentIPsIndependent(t *testing.T) {
-	t.Parallel()
-	l := mkLimits(t, 100, 100)
-	for _, ip := range []string{"1.1.1.1", "2.2.2.2"} {
-		if !l.AllowPreAuthRate(ip) {
-			t.Errorf("%s: first call got false; want true", ip)
-		}
-		if !l.AllowPreAuthRate(ip) {
-			t.Errorf("%s: second call got false; want true", ip)
-		}
-		if l.AllowPreAuthRate(ip) {
-			t.Errorf("%s: third call got true; want false", ip)
-		}
-	}
-}
-
-func TestLimits_RunSweeper_RemovesIdleEntries(t *testing.T) {
-	t.Parallel()
-	l := mkLimits(t, 100, 100)
-
-	_ = l.AllowPreAuthRate("1.1.1.1")
-	v, ok := l.preAuthRate.Load("1.1.1.1")
-	if !ok {
-		t.Fatal("seeded entry missing after AllowPreAuthRate")
-	}
-	v.(*rateEntry).lastSeen.Store(0)
-
-	l.sweep(&l.preAuthRate, time.Now().UnixNano())
-
-	if _, ok := l.preAuthRate.Load("1.1.1.1"); ok {
-		t.Fatal("idle entry survived sweep")
-	}
-}
-
-func TestLimits_RunSweeper_KeepsActiveEntries(t *testing.T) {
-	t.Parallel()
-	l := mkLimits(t, 100, 100)
-	_ = l.AllowPreAuthRate("1.1.1.1")
-
-	l.sweep(&l.preAuthRate, 0)
-	if _, ok := l.preAuthRate.Load("1.1.1.1"); !ok {
-		t.Fatal("active entry incorrectly removed by sweep")
-	}
-}
-
 func TestLimits_PreTouchesLimitRejectedSeries(t *testing.T) {
 	t.Parallel()
 	l := mkLimits(t, 100, 100)
-	for _, k := range []string{"global_concurrent", "per_user_concurrent", "pre_auth_rate", "per_user_rate"} {
+	for _, k := range []string{"global_concurrent", "per_user_concurrent"} {
 		if !gatherHasSeries(t, l.mc, "walera_limit_rejected_total", "kind", k) {
 			t.Errorf("walera_limit_rejected_total{kind=%s} missing from Gather() — pre-touch regressed", k)
 		}
-	}
-}
-
-func TestLimits_PreAuthRetryAfter_Defaults(t *testing.T) {
-	t.Parallel()
-	l := mkLimits(t, 100, 100)
-
-	if got := l.preAuthRetryAfter("never-seen"); got != time.Second {
-		t.Errorf("PreAuthRetryAfter(absent): got %s; want 1s", got)
-	}
-}
-
-func TestLimits_PerUserRateRetryAfter(t *testing.T) {
-	t.Parallel()
-	l := mkLimits(t, 100, 100)
-
-	if got := l.perUserRateRetryAfter("never-seen"); got != time.Second {
-		t.Errorf("PerUserRateRetryAfter(absent): got %s; want 1s", got)
-	}
-
-	_ = l.AllowPerUserRate("u1")
-	d := l.perUserRateRetryAfter("u1")
-	if d < 0 {
-		t.Errorf("PerUserRateRetryAfter(populated): got %s; want >= 0", d)
-	}
-}
-
-func TestLimits_PreAuthRetryAfter_Populated(t *testing.T) {
-	t.Parallel()
-	l := mkLimits(t, 100, 100)
-
-	_ = l.AllowPreAuthRate("ip1")
-	_ = l.AllowPreAuthRate("ip1")
-	_ = l.AllowPreAuthRate("ip1")
-	d := l.preAuthRetryAfter("ip1")
-	if d < 0 {
-		t.Errorf("PreAuthRetryAfter(exhausted): got %s; want >= 0", d)
 	}
 }
 
@@ -340,12 +209,6 @@ func mkLimitsWithTrustedProxies(t *testing.T, proxies []string) *Limits {
 	return New(Config{
 		GlobalConcurrent:     100,
 		PerUserConcurrentMax: 10,
-		PerUserRatePerSecond: 1,
-		PerUserBurst:         2,
-		PreAuthRatePerSecond: 1,
-		PreAuthBurst:         2,
-		SweepInterval:        60 * time.Second,
-		SweepIdleThreshold:   5 * time.Minute,
 		TrustedProxies:       proxies,
 	}, Deps{Logger: zerolog.Nop(), Metrics: mc})
 }
@@ -404,12 +267,6 @@ func TestLimits_New_SkipsMalformedCIDR(t *testing.T) {
 	l := New(Config{
 		GlobalConcurrent:     100,
 		PerUserConcurrentMax: 10,
-		PerUserRatePerSecond: 1,
-		PerUserBurst:         2,
-		PreAuthRatePerSecond: 1,
-		PreAuthBurst:         2,
-		SweepInterval:        60 * time.Second,
-		SweepIdleThreshold:   5 * time.Minute,
 		TrustedProxies:       []string{"not-a-cidr", "10.0.0.0/8"},
 	}, Deps{Logger: logger, Metrics: mc})
 	if !strings.Contains(buf.String(), "trusted_proxies entry failed to parse") {
@@ -420,45 +277,5 @@ func TestLimits_New_SkipsMalformedCIDR(t *testing.T) {
 	}
 	if l.IsTrustedProxy(net.ParseIP("203.0.113.5")) {
 		t.Error("out-of-range IP should not be trusted")
-	}
-}
-
-func TestLimits_RunSweeper_ExitsOnCtxCancel(t *testing.T) {
-	t.Parallel()
-	mc := metrics.New()
-	l := New(Config{
-		GlobalConcurrent:     10,
-		PerUserConcurrentMax: 2,
-		PerUserRatePerSecond: 1,
-		PerUserBurst:         2,
-		PreAuthRatePerSecond: 1,
-		PreAuthBurst:         2,
-		SweepInterval:        20 * time.Millisecond,
-		SweepIdleThreshold:   10 * time.Millisecond,
-	}, Deps{Logger: zerolog.Nop(), Metrics: mc})
-
-	_ = l.AllowPreAuthRate("idle.ip")
-	if v, ok := l.preAuthRate.Load("idle.ip"); ok {
-		v.(*rateEntry).lastSeen.Store(0)
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
-	go func() {
-		l.RunSweeper(ctx)
-		close(done)
-	}()
-
-	time.Sleep(60 * time.Millisecond)
-	cancel()
-
-	select {
-	case <-done:
-	case <-time.After(200 * time.Millisecond):
-		t.Fatal("RunSweeper did not exit within 200ms of ctx cancel")
-	}
-
-	if _, ok := l.preAuthRate.Load("idle.ip"); ok {
-		t.Error("idle entry not removed by RunSweeper across at least one tick")
 	}
 }

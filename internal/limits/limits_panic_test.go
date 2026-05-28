@@ -2,7 +2,6 @@ package limits
 
 import (
 	"testing"
-	"time"
 
 	"github.com/rs/zerolog"
 
@@ -20,12 +19,6 @@ func validLimitsConfig() Config {
 	return Config{
 		GlobalConcurrent:     10,
 		PerUserConcurrentMax: 2,
-		PerUserRatePerSecond: 1,
-		PerUserBurst:         2,
-		PreAuthRatePerSecond: 1,
-		PreAuthBurst:         2,
-		SweepInterval:        60 * time.Second,
-		SweepIdleThreshold:   5 * time.Minute,
 	}
 }
 

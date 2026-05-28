@@ -156,12 +156,6 @@ auth:
 limits:
   global_concurrent: 100
   per_user_concurrent: 10
-  per_user_rate_per_second: 100.0
-  per_user_burst: 100
-  pre_auth_rate_per_second: 100.0
-  pre_auth_burst: 100
-  sweep_interval: 5s
-  sweep_idle_threshold: 30s
 health:
   readyz_probe_interval: 1s
 metrics:

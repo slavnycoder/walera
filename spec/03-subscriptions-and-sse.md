@@ -15,18 +15,21 @@ Versioned via URL (`/v1/`). For incompatible changes, introduce `/v2/`.
 ```
 1. Parse URL → (table, pk_or_wildcard). Validate format.
 2. Global concurrency check. Reject with 503 + Retry-After if exceeded.
-3. Per-user rate limit (token bucket, keyed by user_id once known; for the very first check, key by IP or a coarser bucket).
-4. Auth backend call. Translate response → authMap or HTTP error.
-5. Per-user concurrent-connections check. Reject 429 if exceeded.
-6. Verify the channel's table is listed in `authMap.roots`. If absent from `tables` → 403 (`reason: "not_allowed"`); if present in `tables` but not in `roots` → 403 (`reason: "not_a_root"`). Channels target root entities only — see [§1.6](01-data-source-and-wal.md#16-entity-model).
-7. Build subscriber{
+3. Auth backend call. Translate response → authMap or HTTP error.
+   (Per-IP and per-user token-bucket rate limiting is **not** performed
+   in-process — push it onto the upstream proxy where it can apply
+   uniformly across replicas and shed traffic before it consumes a
+   Goroutine.)
+4. Per-user concurrent-connections check. Reject 429 if exceeded.
+5. Verify the channel's table is listed in `authMap.roots`. If absent from `tables` → 403 (`reason: "not_allowed"`); if present in `tables` but not in `roots` → 403 (`reason: "not_a_root"`). Channels target root entities only — see [§1.6](01-data-source-and-wal.md#16-entity-model).
+6. Build subscriber{
        ch: make(chan Event, bufferSize),
        ctx: context.WithCancel(r.Context()),
        authMap: atomic.Pointer[AuthMap]{stores fresh map},
        start_lsn: atomic.Load(&lastCommittedLSN),
        user_id, channel info, ...
    }.
-8. Write SSE response headers:
+7. Write SSE response headers:
        Status: 200 OK
        Content-Type: text/event-stream
        Cache-Control: no-cache
@@ -34,10 +37,10 @@ Versioned via URL (`/v1/`). For incompatible changes, introduce `/v2/`.
        X-Accel-Buffering: no   (disables nginx response buffering)
        <CORS headers>
    From this point, errors must be conveyed as SSE events, not HTTP status.
-9. Register subscriber in the sharded index under the shard lock.
-10. Start goroutines: writer loop, heartbeat ticker, auth refresh ticker.
-11. Block in writer loop until ctx.Done() or write error.
-12. Cleanup: deregister from index (shard lock), decrement per-user counter, stop tickers. Do NOT close sub.ch explicitly.
+8. Register subscriber in the sharded index under the shard lock.
+9. Start goroutines: writer loop, heartbeat ticker, auth refresh ticker.
+10. Block in writer loop until ctx.Done() or write error.
+11. Cleanup: deregister from index (shard lock), decrement per-user counter, stop tickers. Do NOT close sub.ch explicitly.
 ```
 
 ## 3.3. Starting from the next COMMIT

@@ -56,12 +56,6 @@ func buildRunWriterHandler(b *testing.B) (*Handler, *WriterPool) {
 	lcfg := limits.Config{
 		GlobalConcurrent:     1024,
 		PerUserConcurrentMax: 1024,
-		PerUserRatePerSecond: 1e6,
-		PerUserBurst:         1024,
-		PreAuthRatePerSecond: 1e6,
-		PreAuthBurst:         1024,
-		SweepInterval:        60 * time.Second,
-		SweepIdleThreshold:   5 * time.Minute,
 	}
 	lim := limits.New(lcfg, limits.Deps{Logger: logger, Metrics: m})
 

@@ -309,13 +309,12 @@ capacity, latency, or rate-limit budgets for a specific deployment.
 | ---------------------------------------------- | ----------------------------------------- | --------- | ---------------------------------------------------- | ------------------ |
 | `WALERA_LIMITS_GLOBAL_CONCURRENT`              | `limits.global_concurrent`                | `50000`   | Cap on in-flight SSE handshakes (pre-auth).          | `50000`            |
 | `WALERA_LIMITS_PER_USER_CONCURRENT`            | `limits.per_user_concurrent`              | `10`      | Max simultaneous SSE streams per user.               | `10`               |
-| `WALERA_LIMITS_PER_USER_RATE_PER_SECOND`       | `limits.per_user_rate_per_second`         | `5.0`     | Per-user token-bucket rate.                          | `5.0`              |
-| `WALERA_LIMITS_PER_USER_BURST`                 | `limits.per_user_burst`                   | `10`      | Per-user token-bucket burst.                         | `10`               |
-| `WALERA_LIMITS_PRE_AUTH_RATE_PER_SECOND`       | `limits.pre_auth_rate_per_second`         | `5.0`     | Per-IP token-bucket rate (pre-auth).                 | `5.0`              |
-| `WALERA_LIMITS_PRE_AUTH_BURST`                 | `limits.pre_auth_burst`                   | `10`      | Per-IP token-bucket burst (pre-auth).                | `10`               |
-| `WALERA_LIMITS_SWEEP_INTERVAL`                 | `limits.sweep_interval`                   | `60s`     | Rate-limiter GC sweep cadence.                       | `60s`              |
-| `WALERA_LIMITS_SWEEP_IDLE_THRESHOLD`           | `limits.sweep_idle_threshold`             | `5m`      | Idle-entry threshold for the sweeper.                | `5m`               |
 | `WALERA_LIMITS_TRUSTED_PROXIES`                | `limits.trusted_proxies`                  | `[]`      | CIDR allowlist for honouring `X-Forwarded-For`.      | `10.0.0.0/8`       |
+
+Walera intentionally exposes only concurrency caps. Per-IP and per-user
+token-bucket rate limiting belongs at the upstream proxy (traefik,
+NGINX, an ingress controller, etc.) where it can apply uniformly across
+replicas and shed pathological traffic before it consumes a Goroutine.
 
 #### `http.*` — SSE listener and writer pool
 

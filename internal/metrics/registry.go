@@ -207,7 +207,7 @@ func newLimitsMetrics(r *Registry) {
 	r.limitRejectedTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "walera_limit_rejected_total",
-			Help: "Admission-control rejections by kind (global_concurrent|per_user_concurrent|pre_auth_rate|per_user_rate).",
+			Help: "Admission-control rejections by kind (global_concurrent|per_user_concurrent).",
 		},
 		[]string{"kind"},
 	)

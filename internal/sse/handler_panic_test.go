@@ -46,12 +46,6 @@ func newHandlerPanicValidDeps(t *testing.T) (Config, Deps) {
 	lim := limits.New(limits.Config{
 		GlobalConcurrent:     1024,
 		PerUserConcurrentMax: 10,
-		PerUserRatePerSecond: 100,
-		PerUserBurst:         100,
-		PreAuthRatePerSecond: 100,
-		PreAuthBurst:         100,
-		SweepInterval:        time.Minute,
-		SweepIdleThreshold:   5 * time.Minute,
 	}, limits.Deps{Logger: logger, Metrics: m})
 	enc := NewEncoder(10 * 1024 * 1024)
 	pool := NewPool(PoolConfig{

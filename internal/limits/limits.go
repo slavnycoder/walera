@@ -4,18 +4,11 @@ import (
 	"net"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/rs/zerolog"
-	"golang.org/x/time/rate"
 
 	"github.com/walera/walera/internal/metrics"
 )
-
-type rateEntry struct {
-	lim      *rate.Limiter
-	lastSeen atomic.Int64
-}
 
 type Limits struct {
 	cfg Config
@@ -25,10 +18,6 @@ type Limits struct {
 	globalSem chan struct{}
 
 	perUserConcurrent sync.Map
-
-	perUserRate sync.Map
-
-	preAuthRate sync.Map
 
 	trustedProxies []*net.IPNet
 }
@@ -64,7 +53,7 @@ func New(cfg Config, deps Deps) *Limits {
 		globalSem:      make(chan struct{}, cfg.GlobalConcurrent),
 		trustedProxies: parsed,
 	}
-	for _, k := range []string{"global_concurrent", "per_user_concurrent", "pre_auth_rate", "per_user_rate"} {
+	for _, k := range []string{"global_concurrent", "per_user_concurrent"} {
 		l.mc.LimitRejected(k).Add(0)
 	}
 	return l
@@ -121,52 +110,4 @@ func (l *Limits) ReleasePerUser(userID string) {
 		return
 	}
 	v.(*atomic.Int64).Add(-1)
-}
-
-func (l *Limits) AllowPreAuthRate(clientIP string) bool {
-	v, _ := l.preAuthRate.LoadOrStore(clientIP, &rateEntry{
-		lim: rate.NewLimiter(rate.Limit(l.cfg.PreAuthRatePerSecond), l.cfg.PreAuthBurst),
-	})
-	e := v.(*rateEntry)
-	e.lastSeen.Store(time.Now().UnixNano())
-	if !e.lim.Allow() {
-		l.mc.LimitRejected("pre_auth_rate").Inc()
-		return false
-	}
-	return true
-}
-
-func (l *Limits) AllowPerUserRate(userID string) bool {
-	v, _ := l.perUserRate.LoadOrStore(userID, &rateEntry{
-		lim: rate.NewLimiter(rate.Limit(l.cfg.PerUserRatePerSecond), l.cfg.PerUserBurst),
-	})
-	e := v.(*rateEntry)
-	e.lastSeen.Store(time.Now().UnixNano())
-	if !e.lim.Allow() {
-		l.mc.LimitRejected("per_user_rate").Inc()
-		return false
-	}
-	return true
-}
-
-func (l *Limits) preAuthRetryAfter(clientIP string) time.Duration {
-	v, ok := l.preAuthRate.Load(clientIP)
-	if !ok {
-		return time.Second
-	}
-	r := v.(*rateEntry).lim.Reserve()
-	d := r.Delay()
-	r.Cancel()
-	return d
-}
-
-func (l *Limits) perUserRateRetryAfter(userID string) time.Duration {
-	v, ok := l.perUserRate.Load(userID)
-	if !ok {
-		return time.Second
-	}
-	r := v.(*rateEntry).lim.Reserve()
-	d := r.Delay()
-	r.Cancel()
-	return d
 }

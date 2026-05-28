@@ -144,10 +144,6 @@ func (h *Handler) runHandshake(w http.ResponseWriter, r *http.Request, table, ch
 
 	ip := h.clientIP(r)
 	res.clientIP = ip
-	if !h.limits.AllowPreAuthRate(ip) {
-		h.writeStatusOnlyError(w, r, http.StatusTooManyRequests, 1)
-		return res, false
-	}
 
 	authHdr := r.Header.Get("Authorization")
 	token, hasBearer := strings.CutPrefix(authHdr, "Bearer ")
@@ -185,11 +181,6 @@ func (h *Handler) runHandshake(w http.ResponseWriter, r *http.Request, table, ch
 		return res, false
 	}
 	res.perUserAcquired = true
-
-	if !h.limits.AllowPerUserRate(userID) {
-		h.writeStatusOnlyError(w, r, http.StatusTooManyRequests, 1)
-		return res, false
-	}
 
 	if _, ok := authMap.Tables[table]; !ok {
 		h.writeJSONReason(w, r, http.StatusForbidden, "not_allowed")

@@ -356,24 +356,6 @@ func TestConfigPhase3Defaults(t *testing.T) {
 	if cfg.Limits.PerUserConcurrentMax != 10 {
 		t.Errorf("Limits.PerUserConcurrentMax: got %d; want 10", cfg.Limits.PerUserConcurrentMax)
 	}
-	if cfg.Limits.PerUserRatePerSecond != 5.0 {
-		t.Errorf("Limits.PerUserRatePerSecond: got %v; want 5.0", cfg.Limits.PerUserRatePerSecond)
-	}
-	if cfg.Limits.PerUserBurst != 10 {
-		t.Errorf("Limits.PerUserBurst: got %d; want 10", cfg.Limits.PerUserBurst)
-	}
-	if cfg.Limits.PreAuthRatePerSecond != 5.0 {
-		t.Errorf("Limits.PreAuthRatePerSecond: got %v; want 5.0", cfg.Limits.PreAuthRatePerSecond)
-	}
-	if cfg.Limits.PreAuthBurst != 10 {
-		t.Errorf("Limits.PreAuthBurst: got %d; want 10", cfg.Limits.PreAuthBurst)
-	}
-	if cfg.Limits.SweepInterval != 60*time.Second {
-		t.Errorf("Limits.SweepInterval: got %s; want 60s", cfg.Limits.SweepInterval)
-	}
-	if cfg.Limits.SweepIdleThreshold != 5*time.Minute {
-		t.Errorf("Limits.SweepIdleThreshold: got %s; want 5m", cfg.Limits.SweepIdleThreshold)
-	}
 
 	if cfg.Health.ReadyzProbeInterval != 5*time.Second {
 		t.Errorf("Health.ReadyzProbeInterval: got %s; want 5s", cfg.Health.ReadyzProbeInterval)
