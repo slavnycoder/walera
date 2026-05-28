@@ -755,6 +755,86 @@ func TestSubscriber_DefaultTTLZeroIgnoresInitialMapTTL(t *testing.T) {
 	}
 }
 
+func TestSubscriber_LogRefreshError_SilentWhenTTLDisabled(t *testing.T) {
+	t.Parallel()
+
+	var buf threadSafeBuf
+	logger := zerolog.New(&buf)
+
+	s := &Subscriber{
+		Sub: newTestRouterSub(t),
+		log: logger,
+		ttl: 0,
+	}
+	s.logRefreshError(&ErrUnavailable{Cause: context.DeadlineExceeded}, 0)
+
+	if buf.Len() != 0 {
+		t.Fatalf("log output with ttl=0: got %q; want empty", buf.String())
+	}
+}
+
+func TestSubscriber_LogRefreshError_IncludesDocsURL(t *testing.T) {
+	t.Parallel()
+
+	var buf threadSafeBuf
+	logger := zerolog.New(&buf)
+
+	s := &Subscriber{
+		Sub:    newTestRouterSub(t),
+		log:    logger,
+		ttl:    60 * time.Second,
+		userID: "user-1",
+	}
+	s.logRefreshError(&ErrUnavailable{Cause: context.DeadlineExceeded}, 2)
+
+	line := buf.String()
+	if line == "" {
+		t.Fatal("expected log line; got empty buffer")
+	}
+	if !contains(line, DocsURL) {
+		t.Errorf("log missing docs URL %q: %s", DocsURL, line)
+	}
+	if !contains(line, `"result":"unavailable"`) {
+		t.Errorf("log missing result label: %s", line)
+	}
+	if !contains(line, `"attempt":2`) {
+		t.Errorf("log missing attempt counter: %s", line)
+	}
+}
+
+type threadSafeBuf struct {
+	mu  sync.Mutex
+	buf []byte
+}
+
+func (b *threadSafeBuf) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.buf = append(b.buf, p...)
+	return len(p), nil
+}
+
+func (b *threadSafeBuf) Len() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return len(b.buf)
+}
+
+func (b *threadSafeBuf) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return string(b.buf)
+}
+
+func contains(haystack, needle string) bool {
+	for i := 0; i+len(needle) <= len(haystack); i++ {
+		if haystack[i:i+len(needle)] == needle {
+			return true
+		}
+	}
+	return false
+}
+
 func TestSubscriber_SwapMap_NilFreshNoOp(t *testing.T) {
 	t.Parallel()
 

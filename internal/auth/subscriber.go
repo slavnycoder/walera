@@ -227,6 +227,7 @@ func (s *Subscriber) tryRefresh(ctx context.Context) {
 		s.swapMap(fresh)
 		return
 	}
+	s.logRefreshError(err, 0)
 
 	if isRevokedErr(err) {
 		s.Sub.Drop("auth_revoked")
@@ -238,7 +239,7 @@ func (s *Subscriber) tryRefresh(ctx context.Context) {
 		return
 	}
 
-	for _, backoff := range s.backoffs {
+	for i, backoff := range s.backoffs {
 		select {
 		case <-ctx.Done():
 			return
@@ -256,6 +257,7 @@ func (s *Subscriber) tryRefresh(ctx context.Context) {
 			s.swapMap(fresh)
 			return
 		}
+		s.logRefreshError(err, i+1)
 		if isRevokedErr(err) {
 			s.Sub.Drop("auth_revoked")
 			return
@@ -322,6 +324,24 @@ func refreshResultLabel(err error) string {
 		return "not_found"
 	}
 	return "unavailable"
+}
+
+// logRefreshError emits a warn-level entry on every failed refresh attempt
+// while the TTL feature is enabled (ttl > 0). The docs link gives on-call
+// engineers a direct pointer to the auth contract without leaking the
+// channel or permission payload.
+func (s *Subscriber) logRefreshError(err error, attempt int) {
+	if s.ttl <= 0 {
+		return
+	}
+	s.log.Warn().
+		Err(err).
+		Str("subscriber_id", s.Sub.ID()).
+		Str("user_id", s.userID).
+		Str("result", refreshResultLabel(err)).
+		Int("attempt", attempt).
+		Str("docs", DocsURL).
+		Msg("auth permission refresh failed")
 }
 
 func (s *Subscriber) recordRefreshResult(err error) {

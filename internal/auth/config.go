@@ -46,6 +46,11 @@ type BreakerConfig struct {
 	StaleRefreshJitter time.Duration `koanf:"stale_refresh_jitter"`
 }
 
+// DocsURL points operators at the auth-feature documentation. Included in
+// log lines surfaced from the periodic-refresh loop so an on-call engineer
+// can jump straight to the contract.
+const DocsURL = "https://github.com/walera/walera/blob/master/docs/auth.md"
+
 func ApplyDefaults(k *koanf.Koanf) {
 	// auth.default_ttl_seconds intentionally has no default. Setting it >0
 	// opts the deployment into periodic permission refreshes. When unset
