@@ -21,6 +21,7 @@ func writeTempYAML(t *testing.T, content string) string {
 func setPhase3RequiredEnv(t *testing.T) {
 	t.Helper()
 	t.Setenv("WALERA_AUTH_BACKEND_URL", "https://auth.example/test")
+	t.Setenv("WALERA_AUTH_SIGNING_SECRET", strings.Repeat("k", 64))
 }
 
 func TestLoad_YAMLFields(t *testing.T) {
@@ -298,6 +299,7 @@ func setPhase2RequiredEnv(t *testing.T) {
 func TestLoad_MinimalConfig(t *testing.T) {
 	t.Setenv("WALERA_DATABASE_URL", "postgres://a:b@localhost/db")
 	t.Setenv("WALERA_AUTH_BACKEND_URL", "https://auth.example/test")
+	t.Setenv("WALERA_AUTH_SIGNING_SECRET", strings.Repeat("k", 64))
 
 	cfg, err := LoadAppConfig("")
 	if err != nil {
@@ -381,6 +383,7 @@ func TestConfigPhase3Defaults(t *testing.T) {
 func TestConfigPhase3EnvOverrides(t *testing.T) {
 	setPhase2RequiredEnv(t)
 	t.Setenv("WALERA_AUTH_BACKEND_URL", "https://auth.test")
+	t.Setenv("WALERA_AUTH_SIGNING_SECRET", strings.Repeat("k", 64))
 	t.Setenv("WALERA_LIMITS_GLOBAL_CONCURRENT", "100")
 
 	cfg, err := LoadAppConfig("")
@@ -658,6 +661,7 @@ func TestLoad_PublicationName_DefaultsWhenEmpty(t *testing.T) {
 func TestLoad_SEC04_HttpsAccepted(t *testing.T) {
 	setPhase2RequiredEnv(t)
 	t.Setenv("WALERA_AUTH_BACKEND_URL", "https://auth.example/test")
+	t.Setenv("WALERA_AUTH_SIGNING_SECRET", strings.Repeat("k", 64))
 	if _, err := LoadAppConfig(""); err != nil {
 		t.Fatalf("Load() with https returned error: %v", err)
 	}
@@ -683,6 +687,7 @@ func TestLoad_SEC04_HttpsRequired_OverrideAccepts(t *testing.T) {
 	setPhase2RequiredEnv(t)
 	t.Setenv("WALERA_AUTH_BACKEND_URL", "http://auth.example/test")
 	t.Setenv("WALERA_AUTH_ALLOW_PLAINTEXT", "1")
+	t.Setenv("WALERA_AUTH_SIGNING_SECRET", strings.Repeat("k", 64))
 	if _, err := LoadAppConfig(""); err != nil {
 		t.Fatalf("Load() with override returned error: %v", err)
 	}
@@ -950,6 +955,7 @@ func Test_SEC04_HttpAuthBackend_FailsStartup(t *testing.T) {
 		setPhase2RequiredEnv(t)
 		t.Setenv("WALERA_AUTH_BACKEND_URL", "http://auth.local")
 		t.Setenv("WALERA_AUTH_ALLOW_PLAINTEXT", "1")
+		t.Setenv("WALERA_AUTH_SIGNING_SECRET", strings.Repeat("k", 64))
 		if _, err := LoadAppConfig(""); err != nil {
 			t.Fatalf("Load() with override returned unexpected error: %v", err)
 		}
@@ -960,6 +966,7 @@ func Test_SEC04_HttpAuthBackend_FailsStartup(t *testing.T) {
 		t.Setenv("WALERA_AUTH_BACKEND_URL", "https://auth.local")
 
 		t.Setenv("WALERA_AUTH_ALLOW_PLAINTEXT", "")
+		t.Setenv("WALERA_AUTH_SIGNING_SECRET", strings.Repeat("k", 64))
 		if _, err := LoadAppConfig(""); err != nil {
 			t.Fatalf("Load() with https baseline returned unexpected error: %v", err)
 		}

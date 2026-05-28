@@ -68,6 +68,10 @@ func newSubTestClient(t *testing.T, server string) (*Client, *metrics.Registry) 
 		BackendURL:     server,
 		RequestTimeout: 2 * time.Second,
 		HealthChannel:  "_health",
+		Signing: SigningConfig{
+			Secret: "kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk",
+			Kid:    "v1",
+		},
 	}
 	c := New(cfg, Deps{Logger: zerolog.Nop(), Metrics: mc})
 	return c, mc
@@ -92,7 +96,7 @@ type subscriberTestOpts struct {
 	Client     *Client
 	Breaker    breakerHook
 	InitialMap *Whitelist
-	Token      string
+	UserID     string
 	Channel    string
 	DefaultTTL time.Duration
 	Log        zerolog.Logger
@@ -110,8 +114,8 @@ func newTestSubscriber(t *testing.T, opts subscriberTestOpts) *Subscriber {
 	if opts.Channel == "" {
 		opts.Channel = "public.orders:42"
 	}
-	if opts.Token == "" {
-		opts.Token = "user-bearer-token"
+	if opts.UserID == "" {
+		opts.UserID = "user-1"
 	}
 	if opts.DefaultTTL == 0 {
 		opts.DefaultTTL = 60 * time.Second
@@ -122,7 +126,7 @@ func newTestSubscriber(t *testing.T, opts subscriberTestOpts) *Subscriber {
 	return NewSubscriber(
 		SubscriberConfig{
 			InitialMap: opts.InitialMap,
-			Token:      opts.Token,
+			UserID:     opts.UserID,
 			Channel:    opts.Channel,
 			DefaultTTL: opts.DefaultTTL,
 			Backoffs:   opts.Backoffs,
@@ -663,7 +667,7 @@ func TestSubscriber_RefreshLoop_ZeroTTLExitsCleanly(t *testing.T) {
 		SubscriberConfig{
 			InitialMap: m,
 			Channel:    "public.orders:42",
-			Token:      "test-token",
+			UserID:     "user-1",
 			DefaultTTL: 0,
 		},
 		SubscriberDeps{

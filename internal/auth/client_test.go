@@ -3,6 +3,7 @@ package auth
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -97,186 +98,166 @@ func newTestClient(t *testing.T, baseURL string, timeout time.Duration) (*Client
 	cfg := Config{
 		BackendURL:     baseURL,
 		RequestTimeout: timeout,
+		Signing: SigningConfig{
+			Secret: strings.Repeat("k", 64),
+			Kid:    "v1",
+		},
 	}
 	return New(cfg, Deps{Logger: zerolog.Nop(), Breaker: fb, Metrics: mc}), fb, mc
 }
 
 const validBody = `{"user_id":"u1","tables":{"users":["id","name"]},"ttl_seconds":60}`
 
-func TestClient_Permissions_OK(t *testing.T) {
+func TestClient_RefreshPermissions_StatusPropagation(t *testing.T) {
 	t.Parallel()
 
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if got, want := r.Header.Get("Authorization"), "Bearer good-token"; got != want {
-			t.Errorf("Authorization: got %q; want %q", got, want)
-		}
-		if got, want := r.Header.Get("X-Request-ID"), "req-1"; got != want {
-			t.Errorf("X-Request-ID: got %q; want %q", got, want)
-		}
-		if got, want := r.URL.Query().Get("channel"), "users:42"; got != want {
-			t.Errorf("query channel: got %q; want %q", got, want)
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(validBody))
-	}))
-	t.Cleanup(srv.Close)
+	cases := []struct {
+		name         string
+		status       int
+		body         string
+		wantLabel    string
+		wantReachable bool
+		check        func(t *testing.T, err error)
+	}{
+		{
+			name:          "401",
+			status:        http.StatusUnauthorized,
+			body:          "forbidden",
+			wantLabel:     "unauthorized",
+			wantReachable: true,
+			check: func(t *testing.T, err error) {
+				var ue *ErrUnauthorized
+				if !errors.As(err, &ue) {
+					t.Fatalf("err = %v (%T); want *ErrUnauthorized", err, err)
+				}
+				if string(ue.Body) != "forbidden" {
+					t.Errorf("Body = %q; want %q", ue.Body, "forbidden")
+				}
+			},
+		},
+		{
+			name:          "403",
+			status:        http.StatusForbidden,
+			body:          "nope",
+			wantLabel:     "forbidden",
+			wantReachable: true,
+			check: func(t *testing.T, err error) {
+				var fe *ErrForbidden
+				if !errors.As(err, &fe) {
+					t.Fatalf("err = %v (%T); want *ErrForbidden", err, err)
+				}
+				if string(fe.Body) != "nope" {
+					t.Errorf("Body = %q; want %q", fe.Body, "nope")
+				}
+			},
+		},
+		{
+			name:          "404",
+			status:        http.StatusNotFound,
+			body:          "missing",
+			wantLabel:     "not_found",
+			wantReachable: true,
+			check: func(t *testing.T, err error) {
+				var ne *ErrNotFound
+				if !errors.As(err, &ne) {
+					t.Fatalf("err = %v (%T); want *ErrNotFound", err, err)
+				}
+				if string(ne.Body) != "missing" {
+					t.Errorf("Body = %q; want %q", ne.Body, "missing")
+				}
+			},
+		},
+		{
+			name:          "5xx",
+			status:        http.StatusInternalServerError,
+			wantLabel:     "unavailable",
+			wantReachable: false,
+			check: func(t *testing.T, err error) {
+				var ue *ErrUnavailable
+				if !errors.As(err, &ue) {
+					t.Fatalf("err = %v (%T); want *ErrUnavailable", err, err)
+				}
+			},
+		},
+		{
+			name:          "malformed_json",
+			status:        http.StatusOK,
+			body:          "not json",
+			wantLabel:     "unavailable",
+			wantReachable: false,
+			check: func(t *testing.T, err error) {
+				var ue *ErrUnavailable
+				if !errors.As(err, &ue) {
+					t.Fatalf("err = %v; want ErrUnavailable", err)
+				}
+			},
+		},
+		{
+			name:          "invalid_shape",
+			status:        http.StatusOK,
+			body:          `{"user_id":""}`,
+			wantLabel:     "unavailable",
+			wantReachable: false,
+			check: func(t *testing.T, err error) {
+				var ue *ErrUnavailable
+				if !errors.As(err, &ue) {
+					t.Fatalf("err = %v; want ErrUnavailable", err)
+				}
+			},
+		},
+	}
 
-	c, fb, mc := newTestClient(t, srv.URL, 2*time.Second)
-	m, err := c.Permissions(context.Background(), "good-token", "users:42", "req-1")
-	if err != nil {
-		t.Fatalf("Permissions: %v", err)
-	}
-	if m.UserID != "u1" {
-		t.Errorf("UserID: got %q; want %q", m.UserID, "u1")
-	}
-	if last, ok := fb.Last(); !ok || !last {
-		t.Errorf("breaker last result: got (%v,%v); want (true,true)", last, ok)
-	}
-	if v := gatherCounter(t, mc, "walera_auth_requests_total", "result", "ok"); v != 1 {
-		t.Errorf("auth_requests_total{result=ok}: got %v; want 1", v)
-	}
-	if v := gatherHistogramSampleCount(t, mc, "walera_auth_request_duration_seconds"); v == 0 {
-		t.Errorf("auth_request_duration_seconds sample count: got 0; want >=1")
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(tc.status)
+				if tc.body != "" {
+					_, _ = w.Write([]byte(tc.body))
+				}
+			}))
+			t.Cleanup(srv.Close)
+
+			c, fb, mc := newTestClient(t, srv.URL, 2*time.Second)
+			_, err := c.RefreshPermissions(context.Background(), "u1", "users:42", "req-"+tc.name)
+			tc.check(t, err)
+
+			last, ok := fb.Last()
+			if !ok {
+				t.Fatalf("breaker not recorded")
+			}
+			if last != tc.wantReachable {
+				t.Errorf("breaker last = %v; want %v", last, tc.wantReachable)
+			}
+			if v := gatherCounter(t, mc, "walera_auth_requests_total", "result", tc.wantLabel); v != 1 {
+				t.Errorf("counter{result=%s} = %v; want 1", tc.wantLabel, v)
+			}
+		})
 	}
 }
 
-func TestClient_Permissions_ChannelURLEscaped(t *testing.T) {
-	t.Parallel()
-
-	var gotChannel string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotChannel = r.URL.Query().Get("channel")
-		_, _ = w.Write([]byte(validBody))
-	}))
-	t.Cleanup(srv.Close)
-
-	c, _, _ := newTestClient(t, srv.URL, 2*time.Second)
-	_, err := c.Permissions(context.Background(), "tok", "orders/items:99", "req-x")
-	if err != nil {
-		t.Fatalf("Permissions: %v", err)
-	}
-	if got, want := gotChannel, "orders/items:99"; got != want {
-		t.Errorf("channel after server unescape: got %q; want %q", got, want)
-	}
-}
-
-func TestClient_Permissions_401(t *testing.T) {
-	t.Parallel()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusUnauthorized)
-		_, _ = w.Write([]byte("forbidden"))
-	}))
-	t.Cleanup(srv.Close)
-
-	c, fb, mc := newTestClient(t, srv.URL, 2*time.Second)
-	_, err := c.Permissions(context.Background(), "tok", "users:42", "req-2")
-	var ue *ErrUnauthorized
-	if !errors.As(err, &ue) {
-		t.Fatalf("err: got %v (%T); want *ErrUnauthorized", err, err)
-	}
-	if string(ue.Body) != "forbidden" {
-		t.Errorf("Body: got %q; want %q", string(ue.Body), "forbidden")
-	}
-	if last, ok := fb.Last(); !ok || !last {
-		t.Errorf("breaker last result: got (%v,%v); want (true,true) (401 proves reachable)", last, ok)
-	}
-	if v := gatherCounter(t, mc, "walera_auth_requests_total", "result", "unauthorized"); v != 1 {
-		t.Errorf("auth_requests_total{result=unauthorized}: got %v; want 1", v)
-	}
-}
-
-func TestClient_Permissions_403(t *testing.T) {
-	t.Parallel()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusForbidden)
-		_, _ = w.Write([]byte("nope"))
-	}))
-	t.Cleanup(srv.Close)
-
-	c, fb, mc := newTestClient(t, srv.URL, 2*time.Second)
-	_, err := c.Permissions(context.Background(), "tok", "users:42", "req-3")
-	var fe *ErrForbidden
-	if !errors.As(err, &fe) {
-		t.Fatalf("err: got %v (%T); want *ErrForbidden", err, err)
-	}
-	if string(fe.Body) != "nope" {
-		t.Errorf("Body: got %q; want %q", string(fe.Body), "nope")
-	}
-	if last, ok := fb.Last(); !ok || !last {
-		t.Errorf("breaker last result: got (%v,%v); want (true,true)", last, ok)
-	}
-	if v := gatherCounter(t, mc, "walera_auth_requests_total", "result", "forbidden"); v != 1 {
-		t.Errorf("auth_requests_total{result=forbidden}: got %v; want 1", v)
-	}
-}
-
-func TestClient_Permissions_404(t *testing.T) {
-	t.Parallel()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusNotFound)
-		_, _ = w.Write([]byte("missing"))
-	}))
-	t.Cleanup(srv.Close)
-
-	c, fb, mc := newTestClient(t, srv.URL, 2*time.Second)
-	_, err := c.Permissions(context.Background(), "tok", "users:42", "req-4")
-	var ne *ErrNotFound
-	if !errors.As(err, &ne) {
-		t.Fatalf("err: got %v (%T); want *ErrNotFound", err, err)
-	}
-	if string(ne.Body) != "missing" {
-		t.Errorf("Body: got %q; want %q", string(ne.Body), "missing")
-	}
-	if last, ok := fb.Last(); !ok || !last {
-		t.Errorf("breaker last result: got (%v,%v); want (true,true)", last, ok)
-	}
-	if v := gatherCounter(t, mc, "walera_auth_requests_total", "result", "not_found"); v != 1 {
-		t.Errorf("auth_requests_total{result=not_found}: got %v; want 1", v)
-	}
-}
-
-func TestClient_Permissions_5xx(t *testing.T) {
-	t.Parallel()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusInternalServerError)
-	}))
-	t.Cleanup(srv.Close)
-
-	c, fb, mc := newTestClient(t, srv.URL, 2*time.Second)
-	_, err := c.Permissions(context.Background(), "tok", "users:42", "req-5")
-	var ue *ErrUnavailable
-	if !errors.As(err, &ue) {
-		t.Fatalf("err: got %v (%T); want *ErrUnavailable", err, err)
-	}
-	if last, ok := fb.Last(); !ok || last {
-		t.Errorf("breaker last result: got (%v,%v); want (false,true) (5xx = backend down)", last, ok)
-	}
-	if v := gatherCounter(t, mc, "walera_auth_requests_total", "result", "unavailable"); v != 1 {
-		t.Errorf("auth_requests_total{result=unavailable}: got %v; want 1", v)
-	}
-}
-
-func TestClient_Permissions_NetworkError(t *testing.T) {
+func TestClient_RefreshPermissions_NetworkError(t *testing.T) {
 	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {}))
 	url := srv.URL
 	srv.Close()
 
 	c, fb, mc := newTestClient(t, url, 2*time.Second)
-	_, err := c.Permissions(context.Background(), "tok", "users:42", "req-6")
+	_, err := c.RefreshPermissions(context.Background(), "u1", "users:42", "req-net")
 	var ue *ErrUnavailable
 	if !errors.As(err, &ue) {
-		t.Fatalf("err: got %v (%T); want *ErrUnavailable", err, err)
+		t.Fatalf("err = %v; want ErrUnavailable", err)
 	}
 	if last, ok := fb.Last(); !ok || last {
-		t.Errorf("breaker last result: got (%v,%v); want (false,true)", last, ok)
+		t.Errorf("breaker = (%v,%v); want (false,true)", last, ok)
 	}
 	if v := gatherCounter(t, mc, "walera_auth_requests_total", "result", "unavailable"); v != 1 {
-		t.Errorf("auth_requests_total{result=unavailable}: got %v; want 1", v)
+		t.Errorf("counter: got %v; want 1", v)
 	}
 }
 
-func TestClient_Permissions_TimeoutHonored(t *testing.T) {
+func TestClient_RefreshPermissions_TimeoutHonored(t *testing.T) {
 	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		time.Sleep(200 * time.Millisecond)
@@ -285,68 +266,45 @@ func TestClient_Permissions_TimeoutHonored(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	c, fb, _ := newTestClient(t, srv.URL, 50*time.Millisecond)
-	_, err := c.Permissions(context.Background(), "tok", "users:42", "req-7")
+	_, err := c.RefreshPermissions(context.Background(), "u1", "ch:1", "req-timeout")
 	var ue *ErrUnavailable
 	if !errors.As(err, &ue) {
-		t.Fatalf("err: got %v (%T); want *ErrUnavailable (timeout)", err, err)
+		t.Fatalf("err = %v; want ErrUnavailable (timeout)", err)
 	}
 	if last, ok := fb.Last(); !ok || last {
-		t.Errorf("breaker last result: got (%v,%v); want (false,true)", last, ok)
+		t.Errorf("breaker = (%v,%v); want (false,true)", last, ok)
 	}
 }
 
-func TestClient_Permissions_MalformedJSON(t *testing.T) {
+func TestClient_CheckAuth_ReachableViaSentinel(t *testing.T) {
 	t.Parallel()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte("not json"))
-	}))
-	t.Cleanup(srv.Close)
 
-	c, fb, mc := newTestClient(t, srv.URL, 2*time.Second)
-	_, err := c.Permissions(context.Background(), "tok", "users:42", "req-8")
-	var ue *ErrUnavailable
-	if !errors.As(err, &ue) {
-		t.Fatalf("err: got %v (%T); want *ErrUnavailable", err, err)
-	}
-	if last, ok := fb.Last(); !ok || last {
-		t.Errorf("breaker last result: got (%v,%v); want (false,true)", last, ok)
-	}
-	if v := gatherCounter(t, mc, "walera_auth_requests_total", "result", "unavailable"); v != 1 {
-		t.Errorf("auth_requests_total{result=unavailable}: got %v; want 1", v)
-	}
-}
-
-func TestClient_Permissions_InvalidShape(t *testing.T) {
-	t.Parallel()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(`{"user_id":""}`))
-	}))
-	t.Cleanup(srv.Close)
-
-	c, fb, _ := newTestClient(t, srv.URL, 2*time.Second)
-	_, err := c.Permissions(context.Background(), "tok", "users:42", "req-9")
-	var ue *ErrUnavailable
-	if !errors.As(err, &ue) {
-		t.Fatalf("err: got %v (%T); want *ErrUnavailable", err, err)
-	}
-	if last, ok := fb.Last(); !ok || last {
-		t.Errorf("breaker last result: got (%v,%v); want (false,true)", last, ok)
-	}
-}
-
-func TestClient_CheckAuth_Reachable(t *testing.T) {
-	t.Parallel()
+	var sawUserID string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if got := r.Header.Get("Authorization"); got != "" {
-			t.Errorf("Authorization = %q; want empty for health probe", got)
+		if r.URL.Path != "/auth/permissions" {
+			t.Errorf("CheckAuth hit path %q; want /auth/permissions", r.URL.Path)
 		}
-		_, _ = w.Write([]byte(validBody))
+		if got := r.Header.Get("Authorization"); got != "" {
+			t.Errorf("CheckAuth must not send Authorization; got %q", got)
+		}
+		if r.Header.Get("X-Walera-Sig") == "" {
+			t.Errorf("CheckAuth must send X-Walera-Sig")
+		}
+
+		var body refreshRequest
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		sawUserID = body.UserID
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"user_id":"_health","tables":{"_health":["id"]},"ttl_seconds":60}`))
 	}))
 	t.Cleanup(srv.Close)
 
 	c, _, _ := newTestClient(t, srv.URL, 2*time.Second)
 	if err := c.CheckAuth(context.Background()); err != nil {
-		t.Fatalf("CheckAuth: got %v; want nil", err)
+		t.Fatalf("CheckAuth: %v", err)
+	}
+	if sawUserID != HealthSentinelUserID {
+		t.Errorf("sentinel user_id = %q; want %q", sawUserID, HealthSentinelUserID)
 	}
 }
 
@@ -430,7 +388,19 @@ func TestMap_Allowed_Lookup(t *testing.T) {
 	}
 }
 
-func TestPermissions_OutboundRequestID_InvalidSubstituted(t *testing.T) {
+func newSigningOnlyClient(t *testing.T, baseURL string, logger zerolog.Logger) *Client {
+	t.Helper()
+	return New(Config{
+		BackendURL:     baseURL,
+		RequestTimeout: 2 * time.Second,
+		Signing: SigningConfig{
+			Secret: strings.Repeat("k", 64),
+			Kid:    "v1",
+		},
+	}, Deps{Logger: logger, Metrics: metrics.New()})
+}
+
+func TestRefreshPermissions_OutboundRequestID_InvalidSubstituted(t *testing.T) {
 	t.Parallel()
 
 	var buf bytes.Buffer
@@ -448,14 +418,10 @@ func TestPermissions_OutboundRequestID_InvalidSubstituted(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	c := New(Config{
-		BackendURL:     srv.URL,
-		RequestTimeout: 2 * time.Second,
-	}, Deps{Logger: logger, Metrics: metrics.New()})
-
-	_, err := c.Permissions(context.Background(), "client-tok", "users:42", "has spaces and \t tabs")
+	c := newSigningOnlyClient(t, srv.URL, logger)
+	_, err := c.RefreshPermissions(context.Background(), "u1", "users:42", "has spaces and \t tabs")
 	if err != nil {
-		t.Fatalf("Permissions returned error: %v", err)
+		t.Fatalf("RefreshPermissions: %v", err)
 	}
 
 	mu.Lock()
@@ -468,19 +434,18 @@ func TestPermissions_OutboundRequestID_InvalidSubstituted(t *testing.T) {
 	if !strings.Contains(logOut, "outbound X-Request-ID failed validation") {
 		t.Errorf("expected Warn log; got %q", logOut)
 	}
-
 	if !strings.Contains(logOut, `"invalid_len":`) {
-		t.Errorf("WR-02: Warn log missing invalid_len field; got %q", logOut)
+		t.Errorf("WR-02: missing invalid_len; got %q", logOut)
 	}
 	if !strings.Contains(logOut, `"invalid_id_truncated":`) {
-		t.Errorf("WR-02: Warn log missing invalid_id_truncated field; got %q", logOut)
+		t.Errorf("WR-02: missing invalid_id_truncated; got %q", logOut)
 	}
 	if !strings.Contains(logOut, `"substitute_id":"`+got+`"`) {
-		t.Errorf("WR-02: Warn log substitute_id field must match backend-seen ID %q; got %q", got, logOut)
+		t.Errorf("WR-02: substitute_id mismatch with backend-seen %q; got %q", got, logOut)
 	}
 }
 
-func TestPermissions_OutboundRequestID_Truncated_LogsBoundedOriginal(t *testing.T) {
+func TestRefreshPermissions_OutboundRequestID_Truncated_LogsBoundedOriginal(t *testing.T) {
 	t.Parallel()
 
 	var buf bytes.Buffer
@@ -492,24 +457,18 @@ func TestPermissions_OutboundRequestID_Truncated_LogsBoundedOriginal(t *testing.
 	}))
 	t.Cleanup(srv.Close)
 
-	c := New(Config{
-		BackendURL:     srv.URL,
-		RequestTimeout: 2 * time.Second,
-	}, Deps{Logger: logger, Metrics: metrics.New()})
-
+	c := newSigningOnlyClient(t, srv.URL, logger)
 	bad := strings.Repeat("A", 100) + " " + strings.Repeat("B", 99)
-	_, err := c.Permissions(context.Background(), "client-tok", "users:42", bad)
+	_, err := c.RefreshPermissions(context.Background(), "u1", "users:42", bad)
 	if err != nil {
-		t.Fatalf("Permissions returned error: %v", err)
+		t.Fatalf("RefreshPermissions: %v", err)
 	}
 
 	logOut := buf.String()
-
 	wantLen := fmt.Sprintf(`"invalid_len":%d`, len(bad))
 	if !strings.Contains(logOut, wantLen) {
 		t.Errorf("WR-02: invalid_len must record full length %d; got %q", len(bad), logOut)
 	}
-
 	wantTrunc := `"invalid_id_truncated":"` + strings.Repeat("A", 16) + `..."`
 	if !strings.Contains(logOut, wantTrunc) {
 		t.Errorf("WR-02: invalid_id_truncated must be 16-byte prefix+\"...\"; got %q", logOut)
@@ -539,7 +498,7 @@ func TestTruncateForLog(t *testing.T) {
 	}
 }
 
-func TestPermissions_OutboundRequestID_ValidPassedThrough(t *testing.T) {
+func TestRefreshPermissions_OutboundRequestID_ValidPassedThrough(t *testing.T) {
 	t.Parallel()
 
 	var buf bytes.Buffer
@@ -556,15 +515,11 @@ func TestPermissions_OutboundRequestID_ValidPassedThrough(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	c := New(Config{
-		BackendURL:     srv.URL,
-		RequestTimeout: 2 * time.Second,
-	}, Deps{Logger: logger, Metrics: metrics.New()})
-
+	c := newSigningOnlyClient(t, srv.URL, logger)
 	const wantID = "valid-id.123_DEF"
-	_, err := c.Permissions(context.Background(), "client-tok", "users:42", wantID)
+	_, err := c.RefreshPermissions(context.Background(), "u1", "users:42", wantID)
 	if err != nil {
-		t.Fatalf("Permissions returned error: %v", err)
+		t.Fatalf("RefreshPermissions: %v", err)
 	}
 
 	mu.Lock()

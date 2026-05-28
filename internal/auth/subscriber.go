@@ -38,7 +38,7 @@ var defaultBackoffs = []time.Duration{1 * time.Second, 3 * time.Second, 9 * time
 type SubscriberConfig struct {
 	InitialMap *Whitelist
 
-	Token string
+	UserID string
 
 	Channel string
 
@@ -92,7 +92,7 @@ type Subscriber struct {
 	log zerolog.Logger
 	mc  *metrics.Registry
 
-	token   string
+	userID  string
 	channel string
 	ttl     time.Duration
 
@@ -119,13 +119,17 @@ func NewSubscriber(cfg SubscriberConfig, deps SubscriberDeps) *Subscriber {
 	if cfg.InitialMap != nil && cfg.InitialMap.TTLSeconds > 0 {
 		ttl = time.Duration(cfg.InitialMap.TTLSeconds) * time.Second
 	}
+	userID := cfg.UserID
+	if userID == "" && cfg.InitialMap != nil {
+		userID = cfg.InitialMap.UserID
+	}
 	s := &Subscriber{
 		Sub:      deps.Sub,
 		client:   deps.Client,
 		breaker:  deps.Breaker,
 		log:      deps.Logger,
 		mc:       deps.Metrics,
-		token:    cfg.Token,
+		userID:   userID,
 		channel:  cfg.Channel,
 		ttl:      ttl,
 		now:      now,
@@ -207,7 +211,7 @@ func (s *Subscriber) tryRefresh(ctx context.Context) {
 	}
 	defer s.refreshMu.Unlock()
 
-	fresh, err := s.client.Permissions(ctx, s.token, s.channel, newRequestID())
+	fresh, err := s.client.RefreshPermissions(ctx, s.userID, s.channel, newRequestID())
 	s.recordRefreshResult(err)
 	if err == nil {
 		if !s.refreshMapAllowed(fresh) {
@@ -236,7 +240,7 @@ func (s *Subscriber) tryRefresh(ctx context.Context) {
 			return
 		case <-time.After(backoff):
 		}
-		fresh, err = s.client.Permissions(ctx, s.token, s.channel, newRequestID())
+		fresh, err = s.client.RefreshPermissions(ctx, s.userID, s.channel, newRequestID())
 		s.recordRefreshResult(err)
 		if err == nil {
 			if !s.refreshMapAllowed(fresh) {

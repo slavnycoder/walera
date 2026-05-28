@@ -126,7 +126,6 @@ func (h *Handler) writeJSONReason(w http.ResponseWriter, r *http.Request, status
 
 type handshakeResult struct {
 	authMap         *auth.Whitelist
-	token           string
 	requestID       string
 	clientIP        string
 	userID          string
@@ -166,7 +165,14 @@ func (h *Handler) runHandshake(w http.ResponseWriter, r *http.Request, table, ch
 		return res, false
 	}
 
-	authMap, err := h.authClient.Permissions(r.Context(), token, channelStr, requestID)
+	authMap, err := h.authClient.OpenSession(r.Context(), token, channelStr, requestID)
+	// Drop the bearer from our scope and from the request's header map ASAP —
+	// downstream code (auth.Subscriber, refresh loop) authenticates with HMAC
+	// over user_id, not the bearer. Eliminating these references shrinks the
+	// in-process window where the user credential is reachable from a memory
+	// dump or accidental log capture.
+	r.Header.Del("Authorization")
+	token = ""
 	if err != nil {
 		h.writeAuthError(w, r, err)
 		return res, false
@@ -191,7 +197,6 @@ func (h *Handler) runHandshake(w http.ResponseWriter, r *http.Request, table, ch
 	}
 
 	res.authMap = authMap
-	res.token = token
 	res.requestID = requestID
 	return res, true
 }

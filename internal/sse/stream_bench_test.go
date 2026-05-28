@@ -139,7 +139,6 @@ func BenchmarkRunWriter(b *testing.B) {
 
 			hs := handshakeResult{
 				authMap:   buildRunWriterWhitelist(),
-				token:     "bench-token",
 				requestID: "bench-req-id",
 				clientIP:  "127.0.0.1",
 				userID:    "bench-user",

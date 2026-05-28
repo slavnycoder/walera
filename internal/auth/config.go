@@ -22,6 +22,14 @@ type Config struct {
 	RequestTimeout time.Duration `koanf:"request_timeout"`
 
 	Breaker BreakerConfig `koanf:"breaker"`
+
+	Signing SigningConfig `koanf:"signing"`
+}
+
+type SigningConfig struct {
+	Secret string `koanf:"secret"`
+
+	Kid string `koanf:"kid"`
 }
 
 type BreakerConfig struct {
@@ -48,6 +56,7 @@ func ApplyDefaults(k *koanf.Koanf) {
 	_ = k.Set("auth.breaker.debounce_floor", 20)
 	_ = k.Set("auth.breaker.cooldown", "30s")
 	_ = k.Set("auth.breaker.stale_refresh_jitter", "5s")
+	_ = k.Set("auth.signing.kid", "v1")
 }
 
 func LoadConfig(k *koanf.Koanf) (Config, error) {
@@ -98,6 +107,20 @@ func (c Config) Validate() error {
 	}
 	if c.RequestTimeout <= 0 {
 		errs = append(errs, errors.New("auth.request_timeout must be > 0"))
+	}
+
+	if c.Signing.Secret == "" {
+		errs = append(errs, errors.New("auth.signing.secret is required (set WALERA_AUTH_SIGNING_SECRET, ≥32 bytes)"))
+	} else if len(c.Signing.Secret) < MinSigningSecretBytes {
+		errs = append(errs, config.FormatError(
+			"auth.signing.secret",
+			fmt.Sprintf("len=%d", len(c.Signing.Secret)),
+			fmt.Sprintf("must be at least %d bytes", MinSigningSecretBytes),
+			"generate via: openssl rand -hex 32",
+		))
+	}
+	if c.Signing.Kid == "" {
+		errs = append(errs, errors.New("auth.signing.kid is required"))
 	}
 
 	if c.RequestTimeout > 0 && c.Breaker.Cooldown > 0 && c.Breaker.Cooldown < c.RequestTimeout {

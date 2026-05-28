@@ -77,7 +77,7 @@ type fakeAuthBackend struct {
 func newFakeAuthBackend() *fakeAuthBackend {
 	b := &fakeAuthBackend{}
 	mux := http.NewServeMux()
-	mux.HandleFunc("/auth/permissions", func(w http.ResponseWriter, r *http.Request) {
+	handler := func(w http.ResponseWriter, r *http.Request) {
 		b.hits.Add(1)
 		b.mu.Lock()
 		fn := b.respFn
@@ -87,7 +87,9 @@ func newFakeAuthBackend() *fakeAuthBackend {
 			return
 		}
 		fn(w, r)
-	})
+	}
+	mux.HandleFunc("/auth/sessions", handler)
+	mux.HandleFunc("/auth/permissions", handler)
 	b.srv = httptest.NewServer(mux)
 	return b
 }
@@ -155,6 +157,10 @@ func newTestHandler(t *testing.T, cors []string, lcfg *limits.Config) *testHandl
 			DebounceFloor:        20,
 			Cooldown:             30 * time.Second,
 			StaleRefreshJitter:   5 * time.Second,
+		},
+		Signing: auth.SigningConfig{
+			Secret: strings.Repeat("k", 64),
+			Kid:    "v1",
 		},
 	}
 	breaker := auth.NewBreaker(authCfg.Breaker, auth.BreakerDeps{

@@ -72,12 +72,17 @@ services:
     image: walera-testbench-mock-auth:local
     container_name: walera-mock-auth
     expose: ["9000"]
+    environment:
+      # Shared HMAC secret — must match WALERA_AUTH_SIGNING_SECRET on the
+      # walera service below. Server refuses to start if unset or <32 bytes.
+      WALERA_AUTH_SIGNING_SECRET: "${WALERA_AUTH_SIGNING_SECRET:?WALERA_AUTH_SIGNING_SECRET required in .env (≥32 bytes)}"
+      WALERA_AUTH_SIGNING_KID: "${WALERA_AUTH_SIGNING_KID:-v1}"
     healthcheck:
       test:
         - "CMD"
         - "python"
         - "-c"
-        - "import urllib.request, sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9000/auth/permissions?channel=_health', timeout=1).status == 200 else 1)"
+        - "import urllib.request, sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9000/_health', timeout=1).status == 200 else 1)"
       interval: 2s
       timeout: 2s
       retries: 15
@@ -114,6 +119,9 @@ services:
       # below maps to koanf path auth.backend_url (config.go:351 validation).
       WALERA_AUTH_BACKEND_URL: "http://mock-auth:9000"
       WALERA_AUTH_ALLOW_PLAINTEXT: "1"
+      # HMAC refresh secret — must match mock-auth's WALERA_AUTH_SIGNING_SECRET.
+      WALERA_AUTH_SIGNING_SECRET: "${WALERA_AUTH_SIGNING_SECRET:?WALERA_AUTH_SIGNING_SECRET required in .env (≥32 bytes)}"
+      WALERA_AUTH_SIGNING_KID: "${WALERA_AUTH_SIGNING_KID:-v1}"
       # HTTP — CORS for the Phase 08 demo UI at localhost:8081; h2c on by
       # default. Single-string env value is coerced to
       # []string{"http://localhost:8081"} per the contract locked by Plan
