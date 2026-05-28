@@ -287,6 +287,96 @@ func TestEncoder_BelowCapEncodesNormally(t *testing.T) {
 	}
 }
 
+func TestEncoder_EncodeInitialData(t *testing.T) {
+	t.Parallel()
+
+	enc := NewEncoder(0)
+	raw := json.RawMessage(`{"foo":1,"bar":"baz"}`)
+	out, overflow := enc.EncodeInitialData(raw)
+	if overflow {
+		t.Fatalf("unexpected overflow=true with cap=0")
+	}
+	got := string(out)
+	want := "event: initial_data\ndata: {\"foo\":1,\"bar\":\"baz\"}\n\n"
+	if got != want {
+		t.Errorf("EncodeInitialData = %q\nwant            %q", got, want)
+	}
+}
+
+func TestEncoder_EncodeInitialData_CompactsWhitespace(t *testing.T) {
+	t.Parallel()
+
+	enc := NewEncoder(0)
+
+	raw := json.RawMessage("{\n  \"k\": 1,\n  \"v\": [1, 2]\n}")
+	out, overflow := enc.EncodeInitialData(raw)
+	if overflow {
+		t.Fatalf("unexpected overflow=true")
+	}
+	if bytes.Count(out, []byte("\n")) != 3 {
+		t.Errorf("frame must contain exactly 3 newlines (event LF + data LF + terminator LF); got %d in %q",
+			bytes.Count(out, []byte("\n")), out)
+	}
+	if !bytes.Contains(out, []byte(`data: {"k":1,"v":[1,2]}`)) {
+		t.Errorf("compacted payload missing in frame: %q", out)
+	}
+}
+
+func TestEncoder_EncodeInitialData_EmptyAndNull(t *testing.T) {
+	t.Parallel()
+
+	enc := NewEncoder(0)
+
+	for _, tc := range []struct {
+		name string
+		in   json.RawMessage
+	}{
+		{"nil", nil},
+		{"empty", json.RawMessage("")},
+		{"null", json.RawMessage("null")},
+		{"null_with_space", json.RawMessage("  null  ")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			out, overflow := enc.EncodeInitialData(tc.in)
+			if overflow {
+				t.Errorf("overflow=true; want false")
+			}
+			if out != nil {
+				t.Errorf("frame = %q; want nil (absent payload)", out)
+			}
+		})
+	}
+}
+
+func TestEncoder_EncodeInitialData_MalformedJSONReturnsNil(t *testing.T) {
+	t.Parallel()
+
+	enc := NewEncoder(0)
+	out, overflow := enc.EncodeInitialData(json.RawMessage(`{not json`))
+	if overflow {
+		t.Errorf("overflow=true; want false on malformed JSON")
+	}
+	if out != nil {
+		t.Errorf("frame = %q; want nil on malformed JSON", out)
+	}
+}
+
+func TestEncoder_EncodeInitialData_RespectsPayloadCap(t *testing.T) {
+	t.Parallel()
+
+	enc := NewEncoder(50)
+
+	raw := json.RawMessage(`{"big":"` + strings.Repeat("x", 200) + `"}`)
+	out, overflow := enc.EncodeInitialData(raw)
+	if !overflow {
+		t.Fatalf("expected overflow=true; got overflow=false, len(out)=%d", len(out))
+	}
+	if out != nil {
+		t.Errorf("expected nil bytes on overflow; got %d bytes", len(out))
+	}
+}
+
 func TestEncoder_HeartbeatNotCapped(t *testing.T) {
 	t.Parallel()
 
