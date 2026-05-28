@@ -322,8 +322,8 @@ func TestConfigPhase3Defaults(t *testing.T) {
 		t.Fatalf("Load() returned error: %v", err)
 	}
 
-	if cfg.Auth.DefaultTTLSeconds != 60 {
-		t.Errorf("Auth.DefaultTTLSeconds: got %d; want 60", cfg.Auth.DefaultTTLSeconds)
+	if cfg.Auth.DefaultTTLSeconds != 0 {
+		t.Errorf("Auth.DefaultTTLSeconds: got %d; want 0 (periodic refresh opt-in)", cfg.Auth.DefaultTTLSeconds)
 	}
 	if cfg.Auth.HealthChannel != "_health" {
 		t.Errorf("Auth.HealthChannel: got %q; want %q", cfg.Auth.HealthChannel, "_health")

@@ -47,7 +47,10 @@ type BreakerConfig struct {
 }
 
 func ApplyDefaults(k *koanf.Koanf) {
-	_ = k.Set("auth.default_ttl_seconds", 60)
+	// auth.default_ttl_seconds intentionally has no default. Setting it >0
+	// opts the deployment into periodic permission refreshes. When unset
+	// (or 0), the refresh loop, stale-watcher, and per-subscriber retry
+	// path stay dormant.
 	_ = k.Set("auth.health_channel", "_health")
 	_ = k.Set("auth.request_timeout", "2s")
 	_ = k.Set("auth.breaker.window_buckets", 30)
@@ -107,6 +110,14 @@ func (c Config) Validate() error {
 	}
 	if c.RequestTimeout <= 0 {
 		errs = append(errs, errors.New("auth.request_timeout must be > 0"))
+	}
+	if c.DefaultTTLSeconds < 0 {
+		errs = append(errs, config.FormatError(
+			"auth.default_ttl_seconds",
+			fmt.Sprintf("%d", c.DefaultTTLSeconds),
+			"must be >= 0 (0 disables periodic permission refresh)",
+			"omit the field, set 0 to disable, or use a positive integer to enable",
+		))
 	}
 
 	if c.Signing.Secret == "" {

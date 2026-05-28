@@ -714,6 +714,47 @@ func TestSubscriber_TryRefresh_UnknownErrorDropsUnavailable(t *testing.T) {
 	}
 }
 
+func TestSubscriber_DefaultTTLZeroIgnoresInitialMapTTL(t *testing.T) {
+	t.Parallel()
+
+	srv := newScriptServer(t, func(_ int64, w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	c, _ := newSubTestClient(t, srv.srv.URL)
+
+	initial := makeMap(t, 100, "id")
+	initial.TTLSeconds = 60
+
+	s := NewSubscriber(
+		SubscriberConfig{
+			InitialMap: initial,
+			UserID:     "user-1",
+			Channel:    "public.orders:42",
+			DefaultTTL: 0,
+		},
+		SubscriberDeps{
+			Sub:     newTestRouterSub(t),
+			Client:  c,
+			Metrics: metrics.New(),
+		},
+	)
+
+	if s.ttl != 0 {
+		t.Fatalf("ttl: got %s; want 0 (feature gated by walera config)", s.ttl)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		s.RefreshLoop(context.Background())
+	}()
+	select {
+	case <-done:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatalf("RefreshLoop did not exit when DefaultTTL=0 and InitialMap.TTLSeconds>0")
+	}
+}
+
 func TestSubscriber_SwapMap_NilFreshNoOp(t *testing.T) {
 	t.Parallel()
 

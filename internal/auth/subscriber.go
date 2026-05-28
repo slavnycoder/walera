@@ -115,9 +115,15 @@ func NewSubscriber(cfg SubscriberConfig, deps SubscriberDeps) *Subscriber {
 	if backoffs == nil {
 		backoffs = defaultBackoffs
 	}
-	ttl := cfg.DefaultTTL
-	if cfg.InitialMap != nil && cfg.InitialMap.TTLSeconds > 0 {
-		ttl = time.Duration(cfg.InitialMap.TTLSeconds) * time.Second
+	// Periodic refresh is gated by the walera config (auth.default_ttl_seconds).
+	// When the operator hasn't opted in (DefaultTTL <= 0), the feature stays
+	// off — the auth-backend's per-response ttl_seconds cannot enable it.
+	var ttl time.Duration
+	if cfg.DefaultTTL > 0 {
+		ttl = cfg.DefaultTTL
+		if cfg.InitialMap != nil && cfg.InitialMap.TTLSeconds > 0 {
+			ttl = time.Duration(cfg.InitialMap.TTLSeconds) * time.Second
+		}
 	}
 	userID := cfg.UserID
 	if userID == "" && cfg.InitialMap != nil {

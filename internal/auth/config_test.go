@@ -23,8 +23,8 @@ func TestLoadConfig_Defaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadConfig: %v", err)
 	}
-	if cfg.DefaultTTLSeconds != 60 {
-		t.Errorf("DefaultTTLSeconds = %d; want 60", cfg.DefaultTTLSeconds)
+	if cfg.DefaultTTLSeconds != 0 {
+		t.Errorf("DefaultTTLSeconds = %d; want 0 (periodic refresh opt-in)", cfg.DefaultTTLSeconds)
 	}
 	if cfg.HealthChannel != "_health" {
 		t.Errorf("HealthChannel = %q; want _health", cfg.HealthChannel)

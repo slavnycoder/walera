@@ -31,7 +31,10 @@ func buildRunnables(a *App, slotName wal.SlotName) []Runnable {
 			Name: "limits-sweeper",
 			Run:  func(ctx context.Context) error { a.Limits.RunSweeper(ctx); return nil },
 		},
-		{
+	}
+
+	if a.Config.Auth.DefaultTTLSeconds > 0 {
+		runs = append(runs, Runnable{
 			Name: "auth-stale-watcher",
 			Run: func(ctx context.Context) error {
 				a.SubRegistry.WatchBreaker(
@@ -42,8 +45,15 @@ func buildRunnables(a *App, slotName wal.SlotName) []Runnable {
 				)
 				return nil
 			},
-		},
-		{
+		})
+	} else {
+		a.Logger.Info().
+			Str("docs", "https://github.com/walera/walera/blob/master/docs/auth.md").
+			Msg("auth periodic-refresh disabled (auth.default_ttl_seconds is 0 or unset)")
+	}
+
+	runs = append(runs,
+		Runnable{
 			Name: "router-ingest",
 			Run:  func(ctx context.Context) error { return a.RouterIndex.Ingest(ctx, a.TxCh) },
 			OnError: func(err error) {
@@ -51,7 +61,7 @@ func buildRunnables(a *App, slotName wal.SlotName) []Runnable {
 				a.cancel()
 			},
 		},
-		{
+		Runnable{
 			Name: "http-server",
 			Run: func(ctx context.Context) error {
 				a.Logger.Info().Str("addr", a.Config.HTTP.Addr).Msg("HTTP server listening")
@@ -65,7 +75,7 @@ func buildRunnables(a *App, slotName wal.SlotName) []Runnable {
 				a.cancel()
 			},
 		},
-	}
+	)
 
 	if a.PProfServer != nil {
 		runs = append(runs, Runnable{
