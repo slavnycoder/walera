@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Optional `initial_data` field in the auth backend's open-time
+  permission response. When present, Walera emits its raw JSON value
+  to the subscriber as a single `event: initial_data` SSE frame before
+  any `tx` events. Payloads exceeding `max_payload_bytes` are dropped
+  with a warning; the stream opens normally without the frame. The
+  field is opaque to Walera (any JSON value is forwarded verbatim
+  after whitespace compaction) and emitted only on the open-time map —
+  not re-emitted on permission refresh.
+
 ## [1.0.1] - 2026-05-27
 
 ### Changed

@@ -107,11 +107,12 @@ A worked example using Dexie/IndexedDB as the mirror, with
 
 Other event types Walera emits:
 
-| Event       | When it fires                                                |
-| ----------- | ------------------------------------------------------------ |
-| `error`     | Permission revoked, payload too large, etc. Includes reason. |
-| `shutdown`  | Service is restarting; the client should reconnect.          |
-| `:` comment | Heartbeat. Not visible to browser JS.                        |
+| Event          | When it fires                                                                                    |
+| -------------- | ------------------------------------------------------------------------------------------------ |
+| `initial_data` | Optional first frame, only if the auth backend returns an `initial_data` field. Opaque JSON.     |
+| `error`        | Permission revoked, payload too large, etc. Includes reason.                                     |
+| `shutdown`     | Service is restarting; the client should reconnect.                                              |
+| `:` comment    | Heartbeat. Not visible to browser JS.                                                            |
 
 ---
 

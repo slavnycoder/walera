@@ -90,6 +90,19 @@ Clients should implement exponential backoff on reconnect to avoid
 fleet-wide reconnect storms after a Walera restart or a network
 event.
 
+## Initial data frame
+
+If the auth backend's open-time permission response includes an
+`initial_data` field, Walera emits its raw JSON value to the subscriber
+as a single `event: initial_data` SSE frame **before** any `tx` events.
+The frame is optional, opaque to Walera, and emitted at most once per
+SSE connection (open-time map only — not re-emitted on permission
+refresh). A payload exceeding `max_payload_bytes` is dropped with a
+warning and the stream opens normally without the frame.
+
+See [Auth — Initial data payload](./auth.md#initial-data-payload) for
+the contract.
+
 ## Ordering within a transaction
 
 A single Postgres transaction is delivered as a single SSE event with

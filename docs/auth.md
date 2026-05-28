@@ -71,15 +71,20 @@ following shape:
   "tables": {
     "orders": ["id", "status", "total_cents", "updated_at"]
   },
-  "ttl_seconds": 60
+  "ttl_seconds": 60,
+  "initial_data": {
+    "snapshot_ts": "2026-05-18T08:30:00Z",
+    "cursor": "abc123"
+  }
 }
 ```
 
-| Field         | Meaning                                                       |
-| ------------- | ------------------------------------------------------------- |
-| `user_id`     | Stable identifier used for rate limits and structured logs.   |
-| `tables`      | Per-table list of columns the user may receive.               |
-| `ttl_seconds` | Refresh interval Walera uses for this permission map.         |
+| Field          | Meaning                                                                                |
+| -------------- | -------------------------------------------------------------------------------------- |
+| `user_id`      | Stable identifier used for rate limits and structured logs.                            |
+| `tables`       | Per-table list of columns the user may receive.                                        |
+| `ttl_seconds`  | Refresh interval Walera uses for this permission map.                                  |
+| `initial_data` | Optional. Arbitrary JSON delivered to the client as the first SSE frame after open.    |
 
 Field-whitelist semantics: only the columns named in `tables[<table>]`
 are forwarded to the subscriber. Other columns are filtered out before
@@ -87,6 +92,42 @@ the SSE event is written.
 
 The table from the SSE URL must appear in `tables`; otherwise Walera
 rejects the request.
+
+## Initial data payload
+
+If the auth backend includes an `initial_data` field in the open-time
+permission response, Walera emits its raw JSON value to the subscriber
+as a single `event: initial_data` SSE frame, written before any `tx`
+events:
+
+```
+event: initial_data
+data: {"snapshot_ts":"2026-05-18T08:30:00Z","cursor":"abc123"}
+```
+
+Notes:
+
+- The field is **optional**. When omitted (or set to JSON `null`), no
+  `initial_data` frame is emitted and the stream begins directly with
+  `tx` / `error` / heartbeat frames.
+- The value is opaque to Walera. It is compacted (whitespace stripped
+  so the SSE framing is not broken) and otherwise forwarded verbatim —
+  any JSON value is allowed (object, array, scalar). Schema and
+  semantics are between the auth backend and the client.
+- The frame is subject to the same `max_payload_bytes` cap as `tx`
+  events. If the compacted payload exceeds the cap, Walera logs a
+  warning (`sse initial_data exceeds max_payload_bytes; skipping`) and
+  drops the frame; the stream still opens and `tx` delivery proceeds
+  normally.
+- The frame is emitted only on the **open-time** permission map. It is
+  not re-emitted on background permission refreshes — `initial_data`
+  from refresh responses is ignored.
+- The payload is never logged (treat it as PII by default).
+
+Typical uses: a snapshot cursor / ETag the client should use when
+reconciling against the primary API before applying live events, a
+seed of server-derived state the client cannot compute on its own, or
+a per-session correlation identifier.
 
 ## Status codes
 
