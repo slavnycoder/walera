@@ -7,6 +7,69 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-05-28
+
+### Removed (breaking)
+
+- In-process per-IP and per-user **token-bucket rate limiting**. The
+  `limits.AllowPreAuthRate` and `limits.AllowPerUserRate` admission
+  gates, their `golang.org/x/time/rate` token buckets, the rate-entry
+  sweeper, and the associated config + metric surface are gone. Rate
+  limiting is now delegated to the upstream proxy (traefik / NGINX /
+  ingress), which can apply it uniformly across replicas and shed
+  pathological traffic before it consumes a Goroutine.
+- Removed config keys (presence in YAML now produces no
+  `limits.*` section override — they are no longer recognized; supply
+  them and `koanf` will silently ignore them since they map to no
+  struct field):
+  - `limits.per_user_rate_per_second` / `WALERA_LIMITS_PER_USER_RATE_PER_SECOND`
+  - `limits.per_user_burst` / `WALERA_LIMITS_PER_USER_BURST`
+  - `limits.pre_auth_rate_per_second` / `WALERA_LIMITS_PRE_AUTH_RATE_PER_SECOND`
+  - `limits.pre_auth_burst` / `WALERA_LIMITS_PRE_AUTH_BURST`
+  - `limits.sweep_interval` / `WALERA_LIMITS_SWEEP_INTERVAL`
+  - `limits.sweep_idle_threshold` / `WALERA_LIMITS_SWEEP_IDLE_THRESHOLD`
+- Removed Prometheus metric labels
+  `walera_limit_rejected_total{kind="pre_auth_rate"}` and
+  `walera_limit_rejected_total{kind="per_user_rate"}`. Existing alerts
+  / dashboards referencing them will report no series.
+- Removed `limits-sweeper` runnable. The sweeper only existed to GC
+  idle rate-bucket entries from `sync.Map`s that no longer exist.
+
+### Changed (breaking)
+
+- SSE handshake gate sequence collapses from six gates to four:
+  1. `limits.AcquireGlobal` → 503 + `Retry-After: 5` on overflow.
+  2. Bearer present + `authClient.OpenSession` (breaker-gated).
+  3. `limits.AcquirePerUser` → 429 on overflow (still in-process —
+     a proxy cannot enforce per-`user_id` concurrency without seeing
+     the authenticated identity).
+  4. Table in `authMap.Tables` → 403 `{"reason":"not_allowed"}`.
+- `internal/sse/INVARIANTS.md` invariant 10 rewritten to reflect the
+  new sequence.
+- `spec/03-subscriptions-and-sse.md` §3.2 handshake list renumbered
+  (former step 3 — per-user rate limit — removed).
+- `CLAUDE.md` "Token-Bucket Rate Limiter" section rewritten:
+  `golang.org/x/time/rate` is no longer in the limits package
+  (the writer commit-loop still uses it for `WaitN` pacing, so the
+  module stays in `go.mod`).
+
+### Migration
+
+The only operator action required is to **delete** any
+`limits.per_user_rate_per_second` / `*_burst` / `*_pre_auth_*` /
+`*_sweep_*` keys from your YAML or env. If you needed those caps,
+configure equivalent rate limiting at the upstream proxy:
+
+- **traefik**: `RateLimit` middleware keyed on `client.ip` (pre-auth)
+  and / or `request.header.X-Forwarded-For`.
+- **NGINX**: `limit_req_zone` + `limit_req`.
+- **Cloud LB / ingress**: per-vendor rate-limit policy.
+
+Per-user (post-auth) rate limiting cannot move outside Walera because
+the proxy does not see `user_id`. If you need it, build it against
+`walera_auth_requests_total` exported by Walera + a downstream policy
+engine.
+
 ### Added
 
 - Optional `initial_data` field in the auth backend's open-time
