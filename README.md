@@ -169,23 +169,29 @@ three layers.
 
 ### Rule 3 — Don't mix children of different roots
 
-A transaction that writes children of two different roots — even with
-each root anchored — leaks across subscribers and is **not** detected
-by the broker.
+A transaction that touches one root but also writes a child of a
+*different* root leaks: the foreign child rides along to the first
+root's subscribers. The broker does **not** detect this — its
+multi-root guard (Rule 1) counts only PKs of the subscriber's own root
+table, never the child tables.
 
 ```sql
 -- ✗ Caller-enforced: this leaks. Split it.
+-- A subscriber on orders:42 also receives line_item 88, a child of order 99.
 BEGIN;
-  UPDATE line_items SET qty = 3 WHERE id = 17;  -- belongs to order 42
-  UPDATE line_items SET qty = 1 WHERE id = 88;  -- belongs to order 99
-  UPDATE orders SET updated_at = now() WHERE id IN (42, 99);
+  UPDATE orders     SET updated_at = now() WHERE id = 42;  -- the only root anchored
+  UPDATE line_items SET qty = 3 WHERE id = 17;             -- child of order 42 (fine)
+  UPDATE line_items SET qty = 1 WHERE id = 88;             -- child of order 99 → leaks
 COMMIT;
 ```
 
-Walera cannot distinguish "child of my root" from "child of someone
-else's root" without FK-aware scope declarations, which are out of
-scope for the current model. If you need this stricter isolation,
-please file an issue.
+Note the contrast with Rule 1: had this anchored `orders` 42 **and**
+99, the broker would drop it as multi-root. With only one root touched,
+nothing trips the guard and the stray child slips through. Walera
+cannot distinguish "child of my root" from "child of someone else's
+root" without FK-aware scope declarations, which are out of scope for
+the current model. If you need this stricter isolation, please file an
+issue.
 
 ---
 
