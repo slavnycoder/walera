@@ -14,6 +14,70 @@ import (
 	"time"
 )
 
+// assertAbsentInLogs fails the test if any of the given canary strings (secrets,
+// PII, bearer tokens) appears in the binary's captured stderr. Enforces the
+// "never log row data, tokens, or secrets" constraint.
+func assertAbsentInLogs(t *testing.T, h *Harness, needles ...string) {
+	t.Helper()
+	logs := h.Binary.Stderr()
+	for _, s := range needles {
+		if s == "" {
+			continue
+		}
+		if strings.Contains(logs, s) {
+			t.Errorf("secret/PII %q leaked into process logs", s)
+		}
+	}
+}
+
+// readTxWithin waits up to d for a tx event without failing the test when none
+// arrives (ok=false). Non-tx frames (heartbeats, initial_data) are skipped. A
+// client error is still fatal.
+func readTxWithin(t *testing.T, events <-chan SSEEvent, errCh <-chan error, d time.Duration) (txEventPayload, bool) {
+	t.Helper()
+	deadline := time.After(d)
+	for {
+		select {
+		case ev, ok := <-events:
+			if !ok {
+				return txEventPayload{}, false
+			}
+			if ev.Type != "tx" {
+				continue
+			}
+			return decodeTxPayload(t, ev.Data), true
+		case err := <-errCh:
+			t.Fatalf("client error while awaiting tx: %v", err)
+		case <-deadline:
+			return txEventPayload{}, false
+		}
+	}
+}
+
+// expectNoTxWithin fails if any tx event arrives within d.
+func expectNoTxWithin(t *testing.T, events <-chan SSEEvent, errCh <-chan error, d time.Duration) {
+	t.Helper()
+	if p, ok := readTxWithin(t, events, errCh, d); ok {
+		t.Fatalf("expected no tx event, got changes: %+v", p.Changes)
+	}
+}
+
+// waitForRefresh blocks until the mock auth has served at least n more
+// user-permission refreshes than base, so a mid-stream SetMap is guaranteed to
+// have been picked up before the test proceeds.
+func waitForRefresh(t *testing.T, h *Harness, base, n int64, deadline time.Duration) {
+	t.Helper()
+	end := time.Now().Add(deadline)
+	for time.Now().Before(end) {
+		if h.Auth.PermissionsRequestCount()-base >= n {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("auth refresh did not advance by %d within %v (delta=%d)",
+		n, deadline, h.Auth.PermissionsRequestCount()-base)
+}
+
 func decodeTxPayload(t *testing.T, data []byte) txEventPayload {
 	t.Helper()
 	var p txEventPayload

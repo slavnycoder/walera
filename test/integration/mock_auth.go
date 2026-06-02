@@ -41,8 +41,9 @@ type MockAuth struct {
 	tokUser    map[string]string
 	revoked    map[string]bool
 
-	failMode atomic.Bool
-	requests atomic.Int64
+	failMode    atomic.Bool
+	openDelayNs atomic.Int64
+	requests    atomic.Int64
 
 	permissionsRequests atomic.Int64
 
@@ -123,6 +124,10 @@ func (m *MockAuth) Revoke(userID string) {
 
 func (m *MockAuth) FailMode(on bool) { m.failMode.Store(on) }
 
+// SetOpenDelay injects an artificial latency into serveOpenSession so tests can
+// exercise the handshake's auth-call timeout and the global-slot release path.
+func (m *MockAuth) SetOpenDelay(d time.Duration) { m.openDelayNs.Store(int64(d)) }
+
 func (m *MockAuth) RequestCount() int64 { return m.requests.Load() }
 
 func (m *MockAuth) PermissionsRequestCount() int64 { return m.permissionsRequests.Load() }
@@ -137,6 +142,9 @@ func (m *MockAuth) serveOpenSession(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
+	}
+	if d := m.openDelayNs.Load(); d > 0 {
+		time.Sleep(time.Duration(d))
 	}
 	if m.failMode.Load() {
 		http.Error(w, `{"reason":"unavailable"}`, http.StatusServiceUnavailable)

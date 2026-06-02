@@ -164,4 +164,65 @@ func Test04AuthLifecycle(t *testing.T) {
 			t.Fatalf("timeout waiting for 403; stderr:\n%s", h.Binary.Stderr())
 		}
 	})
+
+	// A refresh that NARROWS fields (drops a column but keeps the channel table)
+	// must take effect mid-stream: the dropped field stops being delivered, and
+	// the subscription stays alive (narrowing is not revocation).
+	t.Run("Narrow_Fields_MidStream", func(t *testing.T) {
+		t.Parallel()
+		h := NewHarness(t)
+		h.Auth.SetMap("test-token", "test-user", []string{"users"},
+			map[string][]string{"users": {"id", "email", "name"}})
+
+		ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
+		defer cancel()
+		events, errCh, closeFn := h.Client.Connect(ctx, "users/77", "test-token")
+		defer closeFn()
+
+		if err := h.PG.Exec(ctx,
+			"INSERT INTO users (id, email, name) VALUES ($1, $2, $3)",
+			77, "a@b.c", "Al",
+		); err != nil {
+			t.Fatalf("seed insert: %v", err)
+		}
+		ins := readTxEvent(ctx, t, h, events, errCh)
+		if _, ok := ins.Changes[0].Data["email"]; !ok {
+			t.Fatalf("precondition: wide whitelist should expose email, got %+v", ins.Changes[0].Data)
+		}
+
+		// Narrow the whitelist (drop email) and wait for the refresh loop
+		// (TTL=1s) to pick it up before mutating data again.
+		base := h.Auth.PermissionsRequestCount()
+		h.Auth.SetMap("test-token", "test-user", []string{"users"},
+			map[string][]string{"users": {"id", "name"}})
+		waitForRefresh(t, h, base, 1, 10*time.Second)
+		time.Sleep(300 * time.Millisecond) // let walera swap the map post-refresh
+
+		if err := h.PG.Exec(ctx,
+			"UPDATE users SET email = $1, name = $2 WHERE id = $3",
+			"after@x", "Al2", 77,
+		); err != nil {
+			t.Fatalf("update: %v", err)
+		}
+
+		p, ok := readTxWithin(t, events, errCh, 5*time.Second)
+		if !ok {
+			t.Fatalf("no update delivered after narrowing; stderr:\n%s", h.Binary.Stderr())
+		}
+		if _, leaked := p.Changes[0].Data["email"]; leaked {
+			t.Errorf("email delivered after removal from whitelist: %v", p.Changes[0].Data["email"])
+		}
+		if _, ok := p.Changes[0].Data["name"]; !ok {
+			t.Errorf("name should still be delivered after narrowing: %+v", p.Changes[0].Data)
+		}
+
+		// Subscription must remain alive — narrowing is not revocation.
+		select {
+		case ev, ok := <-events:
+			if ok && ev.Type == "error" && strings.Contains(string(ev.Data), "auth_revoked") {
+				t.Errorf("field narrowing wrongly triggered auth_revoked")
+			}
+		case <-time.After(500 * time.Millisecond):
+		}
+	})
 }

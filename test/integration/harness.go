@@ -35,6 +35,8 @@ type SpawnBinaryOption func(*spawnConfig)
 type spawnConfig struct {
 	writeTimeout        time.Duration
 	withoutPlaintextEnv bool
+	globalConcurrent    int
+	perUserConcurrent   int
 }
 
 func WithWriteTimeout(d time.Duration) SpawnBinaryOption {
@@ -43,6 +45,18 @@ func WithWriteTimeout(d time.Duration) SpawnBinaryOption {
 
 func WithoutPlaintextAllow() SpawnBinaryOption {
 	return func(c *spawnConfig) { c.withoutPlaintextEnv = true }
+}
+
+// WithGlobalConcurrent overrides limits.global_concurrent so the 503 admission
+// path is reachable with a handful of held connections.
+func WithGlobalConcurrent(n int) SpawnBinaryOption {
+	return func(c *spawnConfig) { c.globalConcurrent = n }
+}
+
+// WithPerUserConcurrent overrides limits.per_user_concurrent so the 429 path is
+// reachable deterministically for a single token.
+func WithPerUserConcurrent(n int) SpawnBinaryOption {
+	return func(c *spawnConfig) { c.perUserConcurrent = n }
 }
 
 func NewHarness(t *testing.T, opts ...SpawnBinaryOption) *Harness {
@@ -109,6 +123,12 @@ func SpawnBinary(t *testing.T, pgDSN, replicationDSN, mockAuthURL string, opts .
 	for _, opt := range opts {
 		opt(&sc)
 	}
+	if sc.globalConcurrent == 0 {
+		sc.globalConcurrent = 100
+	}
+	if sc.perUserConcurrent == 0 {
+		sc.perUserConcurrent = 10
+	}
 
 	writeTimeoutLine := ""
 	if sc.writeTimeout > 0 {
@@ -154,8 +174,8 @@ auth:
     cooldown: 2s
     stale_refresh_jitter: 100ms
 limits:
-  global_concurrent: 100
-  per_user_concurrent: 10
+  global_concurrent: %d
+  per_user_concurrent: %d
 health:
   readyz_probe_interval: 1s
 metrics:
@@ -163,7 +183,7 @@ metrics:
 shutdown:
   deadline: 5s
   drain_deadline: 4s
-`, pgDSN, addr, writeTimeoutLine, mockAuthURL, IntegrationSigningSecret, IntegrationSigningKid)
+`, pgDSN, addr, writeTimeoutLine, mockAuthURL, IntegrationSigningSecret, IntegrationSigningKid, sc.globalConcurrent, sc.perUserConcurrent)
 
 	cfgFile := filepath.Join(t.TempDir(), "walera-test.yaml")
 	if err := os.WriteFile(cfgFile, []byte(cfg), 0o644); err != nil {

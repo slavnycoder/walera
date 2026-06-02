@@ -82,6 +82,20 @@ func Test11Breaker(t *testing.T) {
 	}
 	openCancel()
 
+	// Fail-open for EXISTING subscribers: while the breaker is open (auth backend
+	// down), an already-connected subscriber must keep receiving WAL events. New
+	// opens are rejected (503 above); existing streams are not.
+	if err := h.PG.Exec(ctx,
+		"UPDATE users SET email = $1 WHERE id = $2", "still@flowing", 1,
+	); err != nil {
+		t.Fatalf("fail-open update: %v", err)
+	}
+	if p, ok := readTxWithin(t, events, errCh, 5*time.Second); !ok {
+		t.Fatalf("existing subscriber stopped receiving while breaker open (fail-open violated); stderr:\n%s", h.Binary.Stderr())
+	} else if p.Changes[0].PK != "1" {
+		t.Errorf("fail-open: unexpected change pk = %s; want 1", p.Changes[0].PK)
+	}
+
 	h.Auth.FailMode(false)
 
 	if _, err := waitForMetric(ctx, t, metricsURL,
