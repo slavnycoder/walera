@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.1] - 2026-06-02
+
+No functional or API changes — a documentation correction and expanded
+security test coverage only.
+
+### Fixed
+
+- **README "Rule 3" (don't mix children of different roots) example.** The
+  previous SQL anchored both roots, which actually trips the Rule 1 multi-root
+  guard and is dropped — not leaked — so it did not demonstrate a real leak.
+  Replaced it with a faithful case (one root anchored once plus a child of a
+  different root) and corrected the prose that claimed it leaks "even with each
+  root anchored."
+
+### Tests
+
+- Security integration coverage: cross-subscriber field isolation on a shared
+  row, case-sensitive whitelist (no column-name normalization bypass),
+  no-PII/token in frames or logs, mid-stream field narrowing via refresh,
+  wildcard routing confinement, breaker fail-open for existing subscribers, and
+  a table-driven handshake-admission suite (400 / 429 / 503 with slot-release
+  assertions).
+- Auth unit coverage (`-race`): refresh-LSN narrowing-boundary no-leak through
+  the real swap path, bounded fail-open with revoke-on-recovery, and concurrent
+  grant-swap/drop versus delivery.
+
 ## [2.0.0] - 2026-05-28
 
 ### Removed (breaking)
