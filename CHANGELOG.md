@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.2.0] - 2026-06-08
+
+### Security
+
+- Build with **Go 1.26.4** and base the production and testbench images on
+  `golang:1.26.4-alpine`, clearing the two reachable standard-library
+  advisories `GO-2026-5037` (inefficient candidate-hostname parsing in
+  `crypto/x509`) and `GO-2026-5039` (unescaped inputs in `net/textproto`
+  errors). The shipped binaries are now compiled against the patched
+  standard library, not just the CI `govulncheck` scan.
+
 ### Fixed
 
 - **README + `docs/auth.md` auth-contract accuracy.** The "Auth model" /
@@ -15,6 +26,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (refresh is `POST /auth/permissions`). Corrected both, documented the
   now-optional bearer when a cookie/header is forwarded, and noted that
   native `EventSource` cookies pair with `auth.forwarded_cookies`.
+
+### Tests
+
+- Repointed the testbench `smoke-05` substrate check (SC3/SC4) at the v2.0
+  `POST /auth/sessions` wire; the retired `GET /auth/permissions` bearer
+  endpoint returned `404` and reddened the Testbench Smoke workflow. Removed
+  an unused metrics-gather helper duplicated into the auth tests that tripped
+  `staticcheck` (U1000) and reddened the Checks workflow.
 
 ## [2.1.0] - 2026-06-08
 
