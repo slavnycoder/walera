@@ -3,6 +3,7 @@ package auth
 import (
 	"errors"
 	"fmt"
+	"net/textproto"
 	"net/url"
 	"os"
 	"time"
@@ -11,6 +12,29 @@ import (
 
 	"github.com/walera/walera/internal/config"
 )
+
+// isFieldNameToken reports whether s is a non-empty RFC 6265 cookie-name /
+// HTTP field-name token: letters, digits, and the punctuation
+// ! # $ % & ' * + - . ^ _ | ~ and backtick.
+func isFieldNameToken(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c >= 'A' && c <= 'Z':
+		case c >= 'a' && c <= 'z':
+		case c >= '0' && c <= '9':
+		case c == '!' || c == '#' || c == '$' || c == '%' || c == '&' ||
+			c == '\'' || c == '*' || c == '+' || c == '-' || c == '.' ||
+			c == '^' || c == '_' || c == '|' || c == '~' || c == '`':
+		default:
+			return false
+		}
+	}
+	return true
+}
 
 type Config struct {
 	BackendURL string `koanf:"backend_url"`
@@ -24,6 +48,13 @@ type Config struct {
 	Breaker BreakerConfig `koanf:"breaker"`
 
 	Signing SigningConfig `koanf:"signing"`
+
+	// ForwardedCookies / ForwardedHeaders are allowlists of client-supplied
+	// credentials threaded from the SSE handshake into the OpenSession backend
+	// call. Empty (nil) means the feature is off for that kind — no defaults.
+	ForwardedCookies []string `koanf:"forwarded_cookies"`
+
+	ForwardedHeaders []string `koanf:"forwarded_headers"`
 }
 
 type SigningConfig struct {
@@ -147,6 +178,40 @@ func (c Config) Validate() error {
 			"increase auth.breaker.cooldown or lower auth.request_timeout",
 		))
 	}
+
+	// Forwarded-credential allowlists. Cookie names follow RFC 6265 tokens;
+	// header names use the same token class. Reserved headers are managed by
+	// Walera and can never be forwarded.
+	for _, name := range c.ForwardedCookies {
+		if !isFieldNameToken(name) {
+			errs = append(errs, config.FormatError(
+				"auth.forwarded_cookies",
+				name,
+				"is not a valid RFC 6265 cookie name token",
+				"use only letters, digits, and ! # $ % & ' * + - . ^ _ | ~ `",
+			))
+		}
+	}
+	for _, name := range c.ForwardedHeaders {
+		if !isFieldNameToken(name) {
+			errs = append(errs, config.FormatError(
+				"auth.forwarded_headers",
+				name,
+				"is not a valid HTTP header field-name token",
+				"use only letters, digits, and ! # $ % & ' * + - . ^ _ | ~ `",
+			))
+			continue
+		}
+		if _, reserved := reservedHeaders[textproto.CanonicalMIMEHeaderKey(name)]; reserved {
+			errs = append(errs, config.FormatError(
+				"auth.forwarded_headers",
+				name,
+				"is a reserved header managed by Walera and cannot be forwarded",
+				"remove it from auth.forwarded_headers; Walera sets it on every backend call",
+			))
+		}
+	}
+
 	if len(errs) > 0 {
 		return fmt.Errorf("validation failed: %w", errors.Join(errs...))
 	}

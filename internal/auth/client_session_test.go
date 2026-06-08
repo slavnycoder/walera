@@ -56,7 +56,7 @@ func TestClient_OpenSession_OK(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	c, fb, mc := newSignedTestClient(t, srv.URL, 2*time.Second)
-	m, err := c.OpenSession(context.Background(), "the-token", "users:42", "req-open-1")
+	m, err := c.OpenSession(context.Background(), "the-token", ForwardedAuth{}, "users:42", "req-open-1")
 	if err != nil {
 		t.Fatalf("OpenSession: %v", err)
 	}
@@ -71,13 +71,16 @@ func TestClient_OpenSession_OK(t *testing.T) {
 	}
 }
 
-func TestClient_OpenSession_RejectsEmptyBearer(t *testing.T) {
+func TestClient_OpenSession_RejectsMissingCredentials(t *testing.T) {
 	t.Parallel()
 	c, _, _ := newSignedTestClient(t, "http://unused", time.Second)
-	_, err := c.OpenSession(context.Background(), "", "users:1", "req-x")
+	_, err := c.OpenSession(context.Background(), "", ForwardedAuth{}, "users:1", "req-x")
 	var ue *ErrUnauthorized
 	if !errors.As(err, &ue) {
 		t.Fatalf("err = %v (%T); want *ErrUnauthorized", err, err)
+	}
+	if string(ue.Body) != `{"reason":"missing_credentials"}` {
+		t.Errorf("body = %q; want missing_credentials JSON", ue.Body)
 	}
 }
 
@@ -90,7 +93,7 @@ func TestClient_OpenSession_401PropagatesBody(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	c, _, _ := newSignedTestClient(t, srv.URL, time.Second)
-	_, err := c.OpenSession(context.Background(), "any", "ch:1", "req")
+	_, err := c.OpenSession(context.Background(), "any", ForwardedAuth{}, "ch:1", "req")
 	var ue *ErrUnauthorized
 	if !errors.As(err, &ue) {
 		t.Fatalf("err = %v; want ErrUnauthorized", err)

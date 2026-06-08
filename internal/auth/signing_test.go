@@ -73,9 +73,9 @@ func TestSigner_VerifyRejectsTampering(t *testing.T) {
 	good := s.Sign("u1", "users:1", 1700000000, "n1")
 
 	cases := []struct {
-		name                       string
+		name                        string
 		userID, channel, nonce, sig string
-		ts                         int64
+		ts                          int64
 	}{
 		{"diff user", "u2", "users:1", "n1", good, 1700000000},
 		{"diff channel", "u1", "users:2", "n1", good, 1700000000},

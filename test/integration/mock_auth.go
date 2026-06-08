@@ -41,6 +41,16 @@ type MockAuth struct {
 	tokUser    map[string]string
 	revoked    map[string]bool
 
+	// cookieAuth maps a session-cookie name -> cookie value -> permissions, so
+	// an OpenSession with no bearer but a known cookie still resolves a user.
+	cookieAuth map[string]map[string]permissionResponse
+
+	// lastOpenCookies / lastOpenHeaders capture exactly what the most recent
+	// /auth/sessions call carried, so tests can assert allowlisted credentials
+	// reached the backend and non-allowlisted ones were stripped.
+	lastOpenCookies []*http.Cookie
+	lastOpenHeaders http.Header
+
 	failMode    atomic.Bool
 	openDelayNs atomic.Int64
 	requests    atomic.Int64
@@ -63,6 +73,7 @@ func NewMockAuth(t *testing.T) *MockAuth {
 		permsByUID:    make(map[string]permissionResponse),
 		tokUser:       make(map[string]string),
 		revoked:       make(map[string]bool),
+		cookieAuth:    make(map[string]map[string]permissionResponse),
 		signingSecret: []byte(IntegrationSigningSecret),
 		signingKid:    IntegrationSigningKid,
 	}
@@ -99,6 +110,50 @@ func (m *MockAuth) SetMap(token, userID string, tables []string, fields map[stri
 	m.tokUser[token] = userID
 	delete(m.revoked, userID)
 	m.mu.Unlock()
+}
+
+// SetCookieMap registers a session cookie (name=value) that resolves to the
+// given user and table/field whitelist. An OpenSession with no bearer but a
+// matching cookie authenticates as this user. The user is also registered in
+// permsByUID so the periodic-refresh path keeps the subscription alive.
+func (m *MockAuth) SetCookieMap(cookieName, cookieValue, userID string, tables []string, fields map[string][]string) {
+	tbl := make(map[string][]string, len(tables))
+	for _, t := range tables {
+		if cols, ok := fields[t]; ok {
+			tbl[t] = append([]string(nil), cols...)
+		} else {
+			tbl[t] = []string{}
+		}
+	}
+	resp := permissionResponse{
+		UserID:     userID,
+		Tables:     tbl,
+		TTLSeconds: 1,
+	}
+	m.mu.Lock()
+	if m.cookieAuth[cookieName] == nil {
+		m.cookieAuth[cookieName] = make(map[string]permissionResponse)
+	}
+	m.cookieAuth[cookieName][cookieValue] = resp
+	m.permsByUID[userID] = resp
+	delete(m.revoked, userID)
+	m.mu.Unlock()
+}
+
+// LastOpenCookies returns the cookies the most recent /auth/sessions call
+// carried (a copy, safe to read after the call).
+func (m *MockAuth) LastOpenCookies() []*http.Cookie {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return append([]*http.Cookie(nil), m.lastOpenCookies...)
+}
+
+// LastOpenHeaders returns the headers the most recent /auth/sessions call
+// carried (a clone, safe to read after the call).
+func (m *MockAuth) LastOpenHeaders() http.Header {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.lastOpenHeaders.Clone()
 }
 
 func (m *MockAuth) SetTTL(token string, ttlSeconds int) error {
@@ -151,31 +206,58 @@ func (m *MockAuth) serveOpenSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Record exactly what reached the backend so tests can assert allowlisted
+	// credentials were forwarded and non-allowlisted ones were stripped.
+	m.mu.Lock()
+	m.lastOpenCookies = r.Cookies()
+	m.lastOpenHeaders = r.Header.Clone()
+	m.mu.Unlock()
+
 	authHdr := r.Header.Get("Authorization")
 	token, hasBearer := strings.CutPrefix(authHdr, "Bearer ")
-	if !hasBearer || token == "" {
+
+	// Bearer path: resolve the token against the registered token map.
+	if hasBearer && token != "" {
+		m.mu.RLock()
+		resp, ok := m.permsByTok[token]
+		userID := m.tokUser[token]
+		revoked := userID != "" && m.revoked[userID]
+		m.mu.RUnlock()
+
+		if revoked {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"reason":"revoked"}`))
+			return
+		}
+		if !ok {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"reason":"unknown_token"}`))
+			return
+		}
+
 		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusUnauthorized)
-		_, _ = w.Write([]byte(`{"reason":"missing_bearer"}`))
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(mustJSON(resp))
 		return
 	}
 
+	// Bearer-less path: resolve via a registered session cookie.
+	resp, userID, ok := m.resolveCookieAuth(r)
+	if !ok {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"reason":"missing_credentials"}`))
+		return
+	}
 	m.mu.RLock()
-	resp, ok := m.permsByTok[token]
-	userID := m.tokUser[token]
 	revoked := userID != "" && m.revoked[userID]
 	m.mu.RUnlock()
-
 	if revoked {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusUnauthorized)
 		_, _ = w.Write([]byte(`{"reason":"revoked"}`))
-		return
-	}
-	if !ok {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusUnauthorized)
-		_, _ = w.Write([]byte(`{"reason":"unknown_token"}`))
 		return
 	}
 
@@ -183,6 +265,23 @@ func (m *MockAuth) serveOpenSession(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(body)
+}
+
+// resolveCookieAuth looks for any request cookie whose name+value was
+// registered via SetCookieMap and returns its permissions.
+func (m *MockAuth) resolveCookieAuth(r *http.Request) (permissionResponse, string, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, ck := range r.Cookies() {
+		byValue, ok := m.cookieAuth[ck.Name]
+		if !ok {
+			continue
+		}
+		if resp, ok := byValue[ck.Value]; ok {
+			return resp, resp.UserID, true
+		}
+	}
+	return permissionResponse{}, "", false
 }
 
 func (m *MockAuth) serveRefresh(w http.ResponseWriter, r *http.Request) {

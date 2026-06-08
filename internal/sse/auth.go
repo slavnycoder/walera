@@ -146,8 +146,12 @@ func (h *Handler) runHandshake(w http.ResponseWriter, r *http.Request, table, ch
 	res.clientIP = ip
 
 	authHdr := r.Header.Get("Authorization")
-	token, hasBearer := strings.CutPrefix(authHdr, "Bearer ")
-	if !hasBearer || token == "" {
+	token := ""
+	if t, ok := strings.CutPrefix(authHdr, "Bearer "); ok {
+		token = t
+	}
+	fwd := h.authClient.ForwardedFromRequest(r)
+	if token == "" && fwd.Empty() {
 
 		h.writeStatusOnlyError(w, r, http.StatusUnauthorized, 0)
 		return res, false
@@ -161,14 +165,20 @@ func (h *Handler) runHandshake(w http.ResponseWriter, r *http.Request, table, ch
 		return res, false
 	}
 
-	authMap, err := h.authClient.OpenSession(r.Context(), token, channelStr, requestID)
-	// Drop the bearer from our scope and from the request's header map ASAP —
-	// downstream code (auth.Subscriber, refresh loop) authenticates with HMAC
-	// over user_id, not the bearer. Eliminating these references shrinks the
-	// in-process window where the user credential is reachable from a memory
+	authMap, err := h.authClient.OpenSession(r.Context(), token, fwd, channelStr, requestID)
+	// Drop all forwarded credentials from our scope and from the request's
+	// header map ASAP — downstream code (auth.Subscriber, refresh loop)
+	// authenticates with HMAC over user_id, not the bearer/cookies/headers. The
+	// stream lives on r.Context() for its entire life, so scrubbing here shrinks
+	// the in-process window where these credentials are reachable from a memory
 	// dump or accidental log capture.
 	r.Header.Del("Authorization")
+	r.Header.Del("Cookie")
+	for name := range fwd.Headers {
+		r.Header.Del(name)
+	}
 	token = ""
+	fwd = auth.ForwardedAuth{}
 	if err != nil {
 		h.writeAuthError(w, r, err)
 		return res, false

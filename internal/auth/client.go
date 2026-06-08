@@ -10,6 +10,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/textproto"
 	"regexp"
 	"sync"
 	"time"
@@ -37,6 +38,36 @@ func truncateForLog(s string, max int) string {
 
 const maxResponseBytes = 64 * 1024
 
+// reservedHeaders is the set of canonical header names Walera owns on the
+// OpenSession request. They can never be injected or overridden via the
+// header allowlist — config.Validate rejects them, and ForwardedFromRequest /
+// OpenSession skip them defensively even if validation were bypassed.
+var reservedHeaders = map[string]struct{}{
+	textproto.CanonicalMIMEHeaderKey("Authorization"):     {},
+	textproto.CanonicalMIMEHeaderKey("Host"):              {},
+	textproto.CanonicalMIMEHeaderKey("Content-Length"):    {},
+	textproto.CanonicalMIMEHeaderKey("Content-Type"):      {},
+	textproto.CanonicalMIMEHeaderKey("Accept"):            {},
+	textproto.CanonicalMIMEHeaderKey("Connection"):        {},
+	textproto.CanonicalMIMEHeaderKey("Transfer-Encoding"): {},
+	textproto.CanonicalMIMEHeaderKey("Cookie"):            {},
+	textproto.CanonicalMIMEHeaderKey("X-Request-Id"):      {},
+	textproto.CanonicalMIMEHeaderKey("X-Walera-Sig"):      {},
+	textproto.CanonicalMIMEHeaderKey("X-Walera-Kid"):      {},
+}
+
+// ForwardedAuth carries the client-supplied cookies and headers selected by
+// the configured allowlists. Values are never logged (PII/secret).
+type ForwardedAuth struct {
+	Cookies []*http.Cookie
+	Headers http.Header
+}
+
+// Empty reports whether no cookies and no headers were forwarded.
+func (f ForwardedAuth) Empty() bool {
+	return len(f.Cookies) == 0 && len(f.Headers) == 0
+}
+
 type BreakerHook interface {
 	RecordResult(success bool)
 	Allow() bool
@@ -55,6 +86,12 @@ type Client struct {
 	log    zerolog.Logger
 	mc     *metrics.Registry
 	signer *Signer
+
+	// fwdCookies holds the allowlisted cookie names (exact, case-sensitive
+	// per RFC 6265). fwdHeaders holds the allowlisted header names canonicalized
+	// via textproto.CanonicalMIMEHeaderKey (case-insensitive lookup).
+	fwdCookies map[string]struct{}
+	fwdHeaders map[string]struct{}
 
 	setBreakerOnce sync.Once
 }
@@ -80,11 +117,13 @@ func New(cfg Config, deps Deps) *Client {
 		bk = nopBreaker{}
 	}
 	c := &Client{
-		base: cfg.BackendURL,
-		hc:   newHTTPClient(cfg),
-		bk:   bk,
-		log:  deps.Logger,
-		mc:   deps.Metrics,
+		base:       cfg.BackendURL,
+		hc:         newHTTPClient(cfg),
+		bk:         bk,
+		log:        deps.Logger,
+		mc:         deps.Metrics,
+		fwdCookies: buildCookieAllowlist(cfg.ForwardedCookies),
+		fwdHeaders: buildHeaderAllowlist(cfg.ForwardedHeaders),
 	}
 	if cfg.Signing.Secret != "" {
 		signer, err := NewSigner([]byte(cfg.Signing.Secret), cfg.Signing.Kid)
@@ -97,6 +136,67 @@ func New(cfg Config, deps Deps) *Client {
 		c.mc.AuthRequests(r).Add(0)
 	}
 	return c
+}
+
+// buildCookieAllowlist normalizes configured cookie names into a lookup set.
+// Cookie names are case-sensitive (RFC 6265), so they are stored verbatim.
+func buildCookieAllowlist(names []string) map[string]struct{} {
+	if len(names) == 0 {
+		return nil
+	}
+	m := make(map[string]struct{}, len(names))
+	for _, n := range names {
+		m[n] = struct{}{}
+	}
+	return m
+}
+
+// buildHeaderAllowlist normalizes configured header names into a lookup set
+// keyed by canonical MIME header key (header names are case-insensitive).
+func buildHeaderAllowlist(names []string) map[string]struct{} {
+	if len(names) == 0 {
+		return nil
+	}
+	m := make(map[string]struct{}, len(names))
+	for _, n := range names {
+		m[textproto.CanonicalMIMEHeaderKey(n)] = struct{}{}
+	}
+	return m
+}
+
+// ForwardedFromRequest extracts the allowlisted client cookies and headers from
+// the inbound SSE handshake. Reserved headers are skipped defensively. Cookie
+// and header values are never logged.
+func (c *Client) ForwardedFromRequest(r *http.Request) ForwardedAuth {
+	var fwd ForwardedAuth
+
+	if len(c.fwdCookies) > 0 {
+		for _, ck := range r.Cookies() {
+			if _, ok := c.fwdCookies[ck.Name]; ok {
+				fwd.Cookies = append(fwd.Cookies, &http.Cookie{Name: ck.Name, Value: ck.Value})
+			}
+		}
+	}
+
+	if len(c.fwdHeaders) > 0 {
+		for name := range c.fwdHeaders {
+			if _, reserved := reservedHeaders[name]; reserved {
+				continue
+			}
+			vals := r.Header.Values(name)
+			if len(vals) == 0 {
+				continue
+			}
+			if fwd.Headers == nil {
+				fwd.Headers = make(http.Header, len(c.fwdHeaders))
+			}
+			for _, v := range vals {
+				fwd.Headers.Add(name, v)
+			}
+		}
+	}
+
+	return fwd
 }
 
 func (c *Client) Metrics() *metrics.Registry { return c.mc }
@@ -135,16 +235,18 @@ func newHTTPClient(cfg Config) *http.Client {
 	}
 }
 
-func (c *Client) OpenSession(ctx context.Context, bearer, channel, requestID string) (*Whitelist, error) {
+func (c *Client) OpenSession(ctx context.Context, bearer string, fwd ForwardedAuth, channel, requestID string) (*Whitelist, error) {
 	start := time.Now()
 	defer func() {
 		c.mc.AuthRequestDuration().Observe(time.Since(start).Seconds())
 	}()
 
-	if bearer == "" {
+	// Credential gate: never make an unauthenticated backend call. The open
+	// proceeds when a bearer OR any forwarded cookie/header is present.
+	if bearer == "" && fwd.Empty() {
 		c.mc.AuthRequests("unauthorized").Inc()
 		c.bk.RecordResult(true)
-		return nil, &ErrUnauthorized{Body: []byte(`{"reason":"missing_bearer"}`)}
+		return nil, &ErrUnauthorized{Body: []byte(`{"reason":"missing_credentials"}`)}
 	}
 
 	body, err := jsonBody(map[string]string{"channel": channel})
@@ -160,7 +262,25 @@ func (c *Client) OpenSession(ctx context.Context, bearer, channel, requestID str
 		c.bk.RecordResult(false)
 		return nil, &ErrUnavailable{Cause: err}
 	}
-	req.Header.Set("Authorization", "Bearer "+bearer)
+
+	// Apply forwarded credentials FIRST, then let Walera's own headers win.
+	// Reserved canonical names are skipped here as defense-in-depth even though
+	// config.Validate already rejects them from the allowlist.
+	for name, vals := range fwd.Headers {
+		if _, reserved := reservedHeaders[textproto.CanonicalMIMEHeaderKey(name)]; reserved {
+			continue
+		}
+		for _, v := range vals {
+			req.Header.Add(name, v)
+		}
+	}
+	for _, ck := range fwd.Cookies {
+		req.AddCookie(ck)
+	}
+
+	if bearer != "" {
+		req.Header.Set("Authorization", "Bearer "+bearer)
+	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("X-Request-ID", c.sanitizeRequestID(requestID))

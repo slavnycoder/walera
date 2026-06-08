@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Config-allowlisted forwarding of client cookies and headers to the
+  auth backend on session open. Two opt-in name allowlists —
+  `auth.forwarded_cookies` (`[]string`) and `auth.forwarded_headers`
+  (`[]string`) — thread matching credentials from the SSE handshake into
+  the `POST /auth/sessions` open call. Empty (the default) forwards
+  nothing. Forwarding applies to the open call only, never to the
+  HMAC-signed periodic refresh. With an allowlisted cookie or header
+  present, the bearer token becomes **optional**: an open is rejected
+  `401` (`{"reason":"missing_credentials"}`) only when no credential at
+  all is supplied. Cookie names match case-sensitively (RFC 6265),
+  header names case-insensitively; reserved headers managed by Walera
+  (`Authorization`, `Host`, `Content-Length`, `Content-Type`, `Accept`,
+  `Connection`, `Transfer-Encoding`, `Cookie`, `X-Request-Id`,
+  `X-Walera-Sig`, `X-Walera-Kid`) can never be forwarded and are
+  rejected at startup. Forwarded values are never logged.
+
 ## [2.0.1] - 2026-06-02
 
 No functional or API changes — a documentation correction and expanded

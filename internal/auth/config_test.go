@@ -111,6 +111,108 @@ func TestLoadConfig_DefaultKid(t *testing.T) {
 	}
 }
 
+func TestLoadConfig_ForwardedAllowlists_Valid(t *testing.T) {
+	k := newK(t)
+	_ = k.Set("auth.forwarded_cookies", []string{"session", "csrf_token"})
+	_ = k.Set("auth.forwarded_headers", []string{"X-Tenant-Id", "X-Trace"})
+	cfg, err := auth.LoadConfig(k)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if len(cfg.ForwardedCookies) != 2 {
+		t.Errorf("ForwardedCookies = %v; want 2 entries", cfg.ForwardedCookies)
+	}
+	if len(cfg.ForwardedHeaders) != 2 {
+		t.Errorf("ForwardedHeaders = %v; want 2 entries", cfg.ForwardedHeaders)
+	}
+}
+
+func TestLoadConfig_ForwardedAllowlists_EmptyValidates(t *testing.T) {
+	// Feature off (nil allowlists) must validate cleanly.
+	cfg, err := auth.LoadConfig(newK(t))
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if cfg.ForwardedCookies != nil {
+		t.Errorf("ForwardedCookies = %v; want nil (feature off)", cfg.ForwardedCookies)
+	}
+	if cfg.ForwardedHeaders != nil {
+		t.Errorf("ForwardedHeaders = %v; want nil (feature off)", cfg.ForwardedHeaders)
+	}
+}
+
+func TestLoadConfig_ForwardedCookies_RejectsInvalidName(t *testing.T) {
+	cases := []struct {
+		name string
+		val  string
+	}{
+		{"space", "bad name"},
+		{"colon", "bad:name"},
+		{"empty", ""},
+		{"semicolon", "a;b"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			k := newK(t)
+			_ = k.Set("auth.forwarded_cookies", []string{tc.val})
+			_, err := auth.LoadConfig(k)
+			if err == nil {
+				t.Fatalf("LoadConfig: err = nil; want invalid cookie-name error")
+			}
+			if !strings.Contains(err.Error(), "auth.forwarded_cookies") {
+				t.Errorf("err = %q; want auth.forwarded_cookies field", err.Error())
+			}
+			if !strings.Contains(err.Error(), "RFC 6265") {
+				t.Errorf("err = %q; want RFC 6265 token message", err.Error())
+			}
+		})
+	}
+}
+
+func TestLoadConfig_ForwardedHeaders_RejectsInvalidName(t *testing.T) {
+	k := newK(t)
+	_ = k.Set("auth.forwarded_headers", []string{"bad header"})
+	_, err := auth.LoadConfig(k)
+	if err == nil {
+		t.Fatal("LoadConfig: err = nil; want invalid header-name error")
+	}
+	if !strings.Contains(err.Error(), "auth.forwarded_headers") {
+		t.Errorf("err = %q; want auth.forwarded_headers field", err.Error())
+	}
+	if !strings.Contains(err.Error(), "field-name token") {
+		t.Errorf("err = %q; want field-name token message", err.Error())
+	}
+}
+
+func TestLoadConfig_ForwardedHeaders_RejectsReserved(t *testing.T) {
+	// Reserved-name rejection is case-insensitive (canonicalized). Cover a few
+	// reserved names in assorted casings.
+	cases := []string{
+		"Authorization",
+		"authorization",
+		"Cookie",
+		"content-type",
+		"X-Request-Id",
+		"x-request-id",
+		"X-Walera-Sig",
+		"X-Walera-Kid",
+		"Host",
+	}
+	for _, name := range cases {
+		t.Run(name, func(t *testing.T) {
+			k := newK(t)
+			_ = k.Set("auth.forwarded_headers", []string{name})
+			_, err := auth.LoadConfig(k)
+			if err == nil {
+				t.Fatalf("LoadConfig: err = nil; want reserved-header rejection for %q", name)
+			}
+			if !strings.Contains(err.Error(), "reserved header managed by Walera") {
+				t.Errorf("err = %q; want reserved-header message for %q", err.Error(), name)
+			}
+		})
+	}
+}
+
 func TestLoadConfig_BackendURLSchemaRules(t *testing.T) {
 	cases := []struct {
 		name        string

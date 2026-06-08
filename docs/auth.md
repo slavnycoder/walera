@@ -30,10 +30,14 @@ endpoint, one request shape, one response shape.
 
 Walera sends:
 
-- The bearer token the client supplied (`Authorization: Bearer …`).
+- The bearer token the client supplied (`Authorization: Bearer …`),
+  when present.
 - The requested channel, encoded as `entity:id` or `entity:all` for
   wildcard streams.
 - A request identifier and `Accept: application/json`.
+- Optionally, a configured allowlist of the client's cookies and
+  headers forwarded verbatim from the SSE handshake — see
+  [Forwarding cookies and headers](#forwarding-cookies-and-headers).
 
 The backend returns:
 
@@ -43,22 +47,103 @@ The backend returns:
 - `5xx` or a timeout (treated as a transport failure; see
   [Circuit breaker behavior](#circuit-breaker-behavior)).
 
+## Forwarding cookies and headers
+
+Some auth backends key their decision on credentials the client carries
+outside the bearer token — a session cookie, a tenant header, an
+`X-Forwarded-For` chain. Walera can thread a configured allowlist of the
+client's cookies and headers from the SSE handshake into the
+**session-open** call to the backend.
+
+Two config keys control this, both **name allowlists** (not values):
+
+| Key                       | Type       | Meaning                                                  |
+| ------------------------- | ---------- | -------------------------------------------------------- |
+| `auth.forwarded_cookies`  | `[]string` | Cookie names copied from the handshake to the open call. |
+| `auth.forwarded_headers`  | `[]string` | Header names copied from the handshake to the open call. |
+
+Behavior:
+
+- **Empty means off.** When a list is unset (or empty), nothing of that
+  kind is forwarded. There is no default allowlist — forwarding is
+  strictly opt-in per deployment.
+- **Open only, never refresh.** Forwarding happens only on the session
+  **open** call (`POST /auth/sessions`). The periodic permission
+  refresh (`POST /auth/permissions`) is HMAC-signed by Walera and never
+  carries forwarded client credentials.
+- **Bearer is optional when a credential is forwarded.** Historically
+  the open required `Authorization: Bearer …`. With forwarding enabled,
+  the open proceeds as long as **at least one** credential is present —
+  a bearer, or an allowlisted cookie, or an allowlisted header. The open
+  is rejected with `401`
+  (`{"reason":"missing_credentials"}`) **only when no credential at all**
+  is supplied. When a bearer is present it is still sent; when it is
+  absent Walera omits the `Authorization` header entirely and relies on
+  the forwarded cookie/header.
+- **Name matching.** Cookie names match exactly and are
+  case-sensitive (per RFC 6265). Header names match case-insensitively
+  (canonicalized like all HTTP field names). Names must be valid field
+  tokens — letters, digits, and ``! # $ % & ' * + - . ^ _ | ~ ` `` —
+  otherwise config validation rejects them at startup.
+- **Reserved names can never be forwarded.** The following headers are
+  set and managed by Walera on every backend call and are rejected if
+  they appear in `auth.forwarded_headers` (any casing):
+
+  `Authorization`, `Host`, `Content-Length`, `Content-Type`, `Accept`,
+  `Connection`, `Transfer-Encoding`, `Cookie`, `X-Request-Id`,
+  `X-Walera-Sig`, `X-Walera-Kid`.
+
+  Forwarded headers are applied first; Walera's own headers always win.
+- **Values are never logged.** Forwarded cookie and header *values* are
+  treated as secrets/PII and never appear in logs. Only allowlisted
+  *names* are part of static config.
+
+On a session open, Walera applies the forwarded headers and cookies to
+the `POST /auth/sessions` request, then sets `Content-Type`, `Accept`,
+and `X-Request-ID`, and sets `Authorization: Bearer …` only when a
+bearer was supplied.
+
 ## Request format
 
-On every subscription open, Walera issues a single GET request:
+Walera uses two endpoints, both `POST` with a JSON body, both rooted at
+`<WALERA_AUTH_BACKEND_URL>`.
+
+On every subscription **open**, Walera calls `POST /auth/sessions`:
 
 ```http
-GET /auth/permissions?channel=orders%3A42
+POST /auth/sessions
 Authorization: Bearer <user-token>
-X-Request-ID: <request-id>
+Content-Type: application/json
 Accept: application/json
+X-Request-ID: <request-id>
+
+{"channel":"orders:42"}
 ```
 
 - For `/sse/v1/orders/all`, the channel is `orders:all`.
-- For Walera's own readiness probes the channel is `_health`; Walera does not
-  send an `Authorization` header for this probe.
+- `Authorization` is sent only when the client supplied a bearer; with
+  cookie/header forwarding it may be absent (see
+  [Forwarding cookies and headers](#forwarding-cookies-and-headers)).
 
-The full URL is `<WALERA_AUTH_BACKEND_URL>/auth/permissions?channel=…`.
+While a subscription is live, Walera periodically **refreshes** the
+permission map via `POST /auth/permissions`. The refresh is authenticated
+by Walera itself with an HMAC signature over the `user_id` (headers
+`X-Walera-Sig` / `X-Walera-Kid`), not by the client's bearer, and never
+carries forwarded client credentials:
+
+```http
+POST /auth/permissions
+Content-Type: application/json
+Accept: application/json
+X-Walera-Sig: <hmac>
+X-Walera-Kid: <key-id>
+X-Request-ID: <request-id>
+
+{"user_id":"alice","channel":"orders:42","ts":1718000000,"nonce":"…"}
+```
+
+- For Walera's own readiness probes the `user_id` / channel is `_health`;
+  the probe rides the same HMAC-signed refresh path and carries no bearer.
 
 ## Response format
 

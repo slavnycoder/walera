@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"testing"
@@ -37,6 +38,8 @@ type spawnConfig struct {
 	withoutPlaintextEnv bool
 	globalConcurrent    int
 	perUserConcurrent   int
+	forwardedCookies    []string
+	forwardedHeaders    []string
 }
 
 func WithWriteTimeout(d time.Duration) SpawnBinaryOption {
@@ -57,6 +60,18 @@ func WithGlobalConcurrent(n int) SpawnBinaryOption {
 // reachable deterministically for a single token.
 func WithPerUserConcurrent(n int) SpawnBinaryOption {
 	return func(c *spawnConfig) { c.perUserConcurrent = n }
+}
+
+// WithForwardedCookies populates auth.forwarded_cookies so the named client
+// cookies are threaded from the SSE handshake into the OpenSession backend call.
+func WithForwardedCookies(names ...string) SpawnBinaryOption {
+	return func(c *spawnConfig) { c.forwardedCookies = append(c.forwardedCookies, names...) }
+}
+
+// WithForwardedHeaders populates auth.forwarded_headers so the named client
+// headers are threaded from the SSE handshake into the OpenSession backend call.
+func WithForwardedHeaders(names ...string) SpawnBinaryOption {
+	return func(c *spawnConfig) { c.forwardedHeaders = append(c.forwardedHeaders, names...) }
 }
 
 func NewHarness(t *testing.T, opts ...SpawnBinaryOption) *Harness {
@@ -135,6 +150,12 @@ func SpawnBinary(t *testing.T, pgDSN, replicationDSN, mockAuthURL string, opts .
 		writeTimeoutLine = fmt.Sprintf("  write_timeout: %s\n", sc.writeTimeout)
 	}
 
+	// Forwarded-credential allowlists are nested under the auth: block. Each is
+	// emitted only when configured so the "feature off" path (nil slice) stays
+	// the default for every other scenario.
+	forwardedLines := yamlStringList("  forwarded_cookies", sc.forwardedCookies) +
+		yamlStringList("  forwarded_headers", sc.forwardedHeaders)
+
 	cfg := fmt.Sprintf(`log:
   level: debug
   dev_mode: false
@@ -163,7 +184,7 @@ auth:
   default_ttl_seconds: 1
   health_channel: _health
   request_timeout: 2s
-  signing:
+%s  signing:
     secret: %q
     kid: %q
   breaker:
@@ -183,7 +204,7 @@ metrics:
 shutdown:
   deadline: 5s
   drain_deadline: 4s
-`, pgDSN, addr, writeTimeoutLine, mockAuthURL, IntegrationSigningSecret, IntegrationSigningKid, sc.globalConcurrent, sc.perUserConcurrent)
+`, pgDSN, addr, writeTimeoutLine, mockAuthURL, forwardedLines, IntegrationSigningSecret, IntegrationSigningKid, sc.globalConcurrent, sc.perUserConcurrent)
 
 	cfgFile := filepath.Join(t.TempDir(), "walera-test.yaml")
 	if err := os.WriteFile(cfgFile, []byte(cfg), 0o644); err != nil {
@@ -232,6 +253,23 @@ shutdown:
 
 	t.Fatalf("binary did not start listening at %s within 10s\nstderr:\n%s", addr, stderrBuf.String())
 	return nil
+}
+
+// yamlStringList renders a YAML block-sequence under key for the given values,
+// returning "" when values is empty so the key is omitted entirely (preserving
+// the nil-slice "feature off" default). key already carries its indentation;
+// list items are indented two spaces deeper than that.
+func yamlStringList(key string, values []string) string {
+	if len(values) == 0 {
+		return ""
+	}
+	indent := key[:len(key)-len(strings.TrimLeft(key, " "))]
+	var b bytes.Buffer
+	fmt.Fprintf(&b, "%s:\n", key)
+	for _, v := range values {
+		fmt.Fprintf(&b, "%s  - %q\n", indent, v)
+	}
+	return b.String()
 }
 
 func freePort(t *testing.T) string {

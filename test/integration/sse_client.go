@@ -40,7 +40,50 @@ func NewClient(baseURL string) *Client {
 	return &Client{baseURL: baseURL}
 }
 
+// ConnectOption customizes the SSE handshake request — extra cookies, extra
+// headers, or a bearer-less open (cookie/header-only auth).
+type ConnectOption func(*connectConfig)
+
+type connectConfig struct {
+	noBearer bool
+	cookies  []*http.Cookie
+	headers  http.Header
+}
+
+// WithoutBearer omits the Authorization header entirely, so the open is
+// authenticated purely by forwarded cookies/headers.
+func WithoutBearer() ConnectOption {
+	return func(c *connectConfig) { c.noBearer = true }
+}
+
+// WithCookie attaches a request cookie to the handshake.
+func WithCookie(name, value string) ConnectOption {
+	return func(c *connectConfig) {
+		c.cookies = append(c.cookies, &http.Cookie{Name: name, Value: value})
+	}
+}
+
+// WithHeader attaches a request header to the handshake.
+func WithHeader(name, value string) ConnectOption {
+	return func(c *connectConfig) {
+		if c.headers == nil {
+			c.headers = make(http.Header)
+		}
+		c.headers.Add(name, value)
+	}
+}
+
 func (c *Client) Connect(ctx context.Context, channel, token string) (<-chan SSEEvent, <-chan error, func()) {
+	return c.ConnectWith(ctx, channel, token)
+}
+
+// ConnectWith is Connect with optional cookies/headers and a bearer-less mode.
+func (c *Client) ConnectWith(ctx context.Context, channel, token string, opts ...ConnectOption) (<-chan SSEEvent, <-chan error, func()) {
+	var cc connectConfig
+	for _, opt := range opts {
+		opt(&cc)
+	}
+
 	events := make(chan SSEEvent, 16)
 	errCh := make(chan error, 1)
 
@@ -53,7 +96,17 @@ func (c *Client) Connect(ctx context.Context, channel, token string) (<-chan SSE
 		cancel()
 		return events, errCh, func() {}
 	}
-	req.Header.Set("Authorization", "Bearer "+token)
+	if !cc.noBearer {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	for name, vals := range cc.headers {
+		for _, v := range vals {
+			req.Header.Add(name, v)
+		}
+	}
+	for _, ck := range cc.cookies {
+		req.AddCookie(ck)
+	}
 	req.Header.Set("X-Request-ID", randomHex(16))
 	req.Header.Set("Accept", "text/event-stream")
 

@@ -112,12 +112,12 @@ func TestClient_RefreshPermissions_StatusPropagation(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
-		name         string
-		status       int
-		body         string
-		wantLabel    string
+		name          string
+		status        int
+		body          string
+		wantLabel     string
 		wantReachable bool
-		check        func(t *testing.T, err error)
+		check         func(t *testing.T, err error)
 	}{
 		{
 			name:          "401",
