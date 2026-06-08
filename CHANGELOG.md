@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **README + `docs/auth.md` auth-contract accuracy.** The "Auth model" /
+  "Request format" sections described the session open as a `GET
+  /auth/permissions` request; the open is actually `POST /auth/sessions`
+  (refresh is `POST /auth/permissions`). Corrected both, documented the
+  now-optional bearer when a cookie/header is forwarded, and noted that
+  native `EventSource` cookies pair with `auth.forwarded_cookies`.
+
 ## [2.1.0] - 2026-06-08
 
 ### Added

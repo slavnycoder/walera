@@ -197,16 +197,22 @@ issue.
 
 ## Auth model
 
-Walera does not authenticate users. It forwards the bearer token from
-each SSE open to an auth backend **you operate**, and receives back a
-per-user whitelist of tables and columns. Field filtering is enforced
-inside Walera before any event reaches the wire.
+Walera does not authenticate users. On each SSE open it calls an auth
+backend **you operate** and receives back a per-user whitelist of tables
+and columns. By default it forwards the client's bearer token; it can
+also forward a configured allowlist of the client's cookies and headers
+(`auth.forwarded_cookies` / `auth.forwarded_headers`), in which case the
+bearer becomes optional. Field filtering is enforced inside Walera before
+any event reaches the wire.
 
-The contract is a single GET:
+The open is a single POST:
 
 ```http
-GET /auth/permissions?channel=orders%3A42
-Authorization: Bearer <user-token>
+POST /auth/sessions
+Authorization: Bearer <user-token>   # optional when a cookie/header is forwarded
+Content-Type: application/json
+
+{"channel":"orders:42"}
 ```
 
 ```json
@@ -256,6 +262,12 @@ fetchEventSource("http://localhost:8080/sse/v1/orders/42", {
   },
 });
 ```
+
+If you'd rather not pull in a polyfill, native `EventSource` still sends
+cookies (same-origin, or cross-origin with `withCredentials: true`). Pair
+that with `auth.forwarded_cookies` so Walera relays the session cookie to
+your auth backend — the bearer header becomes optional. See
+[`docs/auth.md`](./docs/auth.md#forwarding-cookies-and-headers).
 
 Rules of thumb:
 
