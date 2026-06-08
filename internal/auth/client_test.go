@@ -61,27 +61,6 @@ func gatherCounter(t *testing.T, reg *metrics.Registry, name, labelKey, labelVal
 	return 0
 }
 
-func gatherHistogramSampleCount(t *testing.T, reg *metrics.Registry, name string) uint64 {
-	t.Helper()
-	families, err := reg.Gatherer().Gather()
-	if err != nil {
-		t.Fatalf("Gather: %v", err)
-	}
-	for _, fam := range families {
-		if fam.GetName() != name {
-			continue
-		}
-		var total uint64
-		for _, m := range fam.GetMetric() {
-			if h := m.GetHistogram(); h != nil {
-				total += h.GetSampleCount()
-			}
-		}
-		return total
-	}
-	return 0
-}
-
 func matchLabel(m *dto.Metric, key, val string) bool {
 	for _, lp := range m.GetLabel() {
 		if lp.GetName() == key && lp.GetValue() == val {
