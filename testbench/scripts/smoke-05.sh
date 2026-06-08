@@ -48,6 +48,12 @@
 #     The cold-start invariant is exercised at workflow level: the CI
 #     workflow boots from a clean compose state, so reaching smoke-05 at all
 #     means demo-up worked.
+#   - SC3/SC4 hit `POST /auth/sessions` (the v2.0 HMAC-refresh wire's
+#     bearer->whitelist exchange), NOT the retired v1.0 `GET /auth/permissions`
+#     endpoint. The ROADMAP quote below predates that wire change; the
+#     returned whitelist shape (user_id/tables/roots/ttl_seconds) is identical,
+#     so the SC3/SC4 assertions are unchanged in substance. The HMAC-signed
+#     `POST /auth/permissions` refresh path is left to the Go integration suite.
 #   - SC3 uses the mock-auth container itself (busybox `wget`) to curl
 #     itself over the compose-internal network. walera's distroless image
 #     ships neither curl nor wget, so we cannot exec from there. mock-auth
@@ -166,17 +172,27 @@ psql_q() {
     postgres psql -U walera -d walera -t -A -c "$1"
 }
 
-# mock-auth wget helper — exec inside the mock-auth container so we hit the
-# compose-internal port (no host port published per BENCH-03).
-mock_get() {
-  local path="$1" token="${2:-}"
+# mock-auth session-open helper — exec inside the mock-auth container so we hit
+# the compose-internal port (no host port published per BENCH-03). POSTs the
+# Bearer token + a JSON {"channel":...} body to /auth/sessions.
+#
+# This is the v2.0 HMAC-refresh wire: the user->whitelist exchange moved from
+# the v1.0 `GET /auth/permissions?channel=...` bearer endpoint to
+# `POST /auth/sessions`. The returned body is the same full-whitelist shape
+# (user_id/tables/roots/ttl_seconds). The HMAC-signed `POST /auth/permissions`
+# refresh path is NOT exercised here — computing HMAC-SHA256 from busybox wget
+# is impractical; that path is covered by the Go integration suite.
+mock_session() {
+  local channel="$1" token="${2:-}"
   if [[ -n "${token}" ]]; then
     docker compose -f "${COMPOSE_FILE}" exec -T mock-auth \
-      wget -q -S -O- "http://127.0.0.1:9000${path}" \
-      --header="Authorization: Bearer ${token}" 2>&1
+      wget -q -S -O- --post-data="{\"channel\":\"${channel}\"}" \
+      --header="Authorization: Bearer ${token}" \
+      "http://127.0.0.1:9000/auth/sessions" 2>&1
   else
     docker compose -f "${COMPOSE_FILE}" exec -T mock-auth \
-      wget -q -S -O- "http://127.0.0.1:9000${path}" 2>&1
+      wget -q -S -O- --post-data="{\"channel\":\"${channel}\"}" \
+      "http://127.0.0.1:9000/auth/sessions" 2>&1
   fi
 }
 
@@ -312,8 +328,8 @@ extract_body() {
   awk '/^[[:space:]]*\{/{p=1} p {print}'
 }
 
-# SC3.a — demo-alice returns a full-whitelist payload with the v1.0 wire keys.
-alice_raw="$(mock_get '/auth/permissions?channel=orders:1' demo-alice || true)"
+# SC3.a — demo-alice returns a full-whitelist payload with the session wire keys.
+alice_raw="$(mock_session 'orders:1' demo-alice || true)"
 alice_body="$(echo "${alice_raw}" | extract_body)"
 if echo "${alice_body}" | grep -Fq '"user_id"' \
   && echo "${alice_body}" | grep -Fq '"tables"' \
@@ -321,7 +337,7 @@ if echo "${alice_body}" | grep -Fq '"user_id"' \
   && echo "${alice_body}" | grep -Fq '"ttl_seconds"' \
   && echo "${alice_body}" | grep -Fq 'u_demo_alice' \
   && echo "${alice_body}" | grep -Fq 'line_items'; then
-  pass "SC3.a demo-alice returns full-whitelist payload (v1.0 wire keys present, line_items included)"
+  pass "SC3.a demo-alice returns full-whitelist payload (session wire keys present, line_items included)"
 else
   fail "SC3.a demo-alice payload missing one or more required fields"
   echo "${alice_body}" | head -3 | sed 's/^/      /'
@@ -329,7 +345,7 @@ else
 fi
 
 # SC3.b — demo-bob returns a narrow whitelist (orders only; NO line_items, NO devices, NO articles).
-bob_body="$(mock_get '/auth/permissions?channel=orders:1' demo-bob | extract_body || true)"
+bob_body="$(mock_session 'orders:1' demo-bob | extract_body || true)"
 if echo "${bob_body}" | grep -Fq 'u_demo_bob' \
   && echo "${bob_body}" | grep -Fq '"orders"' \
   && ! echo "${bob_body}" | grep -Fq 'line_items' \
@@ -343,7 +359,7 @@ else
 fi
 
 # SC3.c — demo-eve returns wildcard-only (articles only — roots: ["articles"]).
-eve_body="$(mock_get '/auth/permissions?channel=articles:hello-world' demo-eve | extract_body || true)"
+eve_body="$(mock_session 'articles:hello-world' demo-eve | extract_body || true)"
 if echo "${eve_body}" | grep -Fq 'u_demo_eve' \
   && echo "${eve_body}" | grep -Fq '"articles"' \
   && ! echo "${eve_body}" | grep -Fq '"orders"' \
@@ -384,12 +400,12 @@ info "===== SC4: mock-auth admin endpoints (_admin/fail-on, fail-off) ====="
 
 sc4_ok=1
 
-# SC4.a — baseline: permissions returns 200 with body.
-sc4_pre="$(mock_get '/auth/permissions?channel=orders:1' demo-alice 2>&1 || true)"
+# SC4.a — baseline: session-open returns 200 with body.
+sc4_pre="$(mock_session 'orders:1' demo-alice 2>&1 || true)"
 if echo "${sc4_pre}" | grep -Fq 'HTTP/1.0 200' || echo "${sc4_pre}" | grep -Fq 'HTTP/1.1 200'; then
-  pass "SC4.a baseline /auth/permissions returns 200"
+  pass "SC4.a baseline /auth/sessions returns 200"
 else
-  fail "SC4.a baseline /auth/permissions did not return 200"
+  fail "SC4.a baseline /auth/sessions did not return 200"
   echo "${sc4_pre}" | head -5 | sed 's/^/      /'
   sc4_ok=0
 fi
@@ -404,14 +420,14 @@ else
   sc4_ok=0
 fi
 
-# SC4.c — after fail-on, permissions now returns 503 (or 500/5xx — the mock
-# documents 503 but accept any 5xx as fail-on engaged).
+# SC4.c — after fail-on, session-open now returns 5xx (the mock documents 500
+# "failing" on the session path; accept any 5xx as fail-on engaged).
 sleep 0.5
-sc4_after_on="$(mock_get '/auth/permissions?channel=orders:1' demo-alice 2>&1 || true)"
+sc4_after_on="$(mock_session 'orders:1' demo-alice 2>&1 || true)"
 if echo "${sc4_after_on}" | grep -Eq 'HTTP/1\.[01] 5[0-9][0-9]'; then
-  pass "SC4.c after fail-on /auth/permissions returns 5xx (fail-on engaged)"
+  pass "SC4.c after fail-on /auth/sessions returns 5xx (fail-on engaged)"
 else
-  fail "SC4.c after fail-on /auth/permissions did NOT return 5xx"
+  fail "SC4.c after fail-on /auth/sessions did NOT return 5xx"
   echo "${sc4_after_on}" | head -5 | sed 's/^/      /'
   sc4_ok=0
 fi
@@ -427,11 +443,11 @@ else
 fi
 
 sleep 0.5
-sc4_after_off="$(mock_get '/auth/permissions?channel=orders:1' demo-alice 2>&1 || true)"
+sc4_after_off="$(mock_session 'orders:1' demo-alice 2>&1 || true)"
 if echo "${sc4_after_off}" | grep -Eq 'HTTP/1\.[01] 200'; then
-  pass "SC4.e after fail-off /auth/permissions back to 200"
+  pass "SC4.e after fail-off /auth/sessions back to 200"
 else
-  fail "SC4.e after fail-off /auth/permissions did NOT return 200"
+  fail "SC4.e after fail-off /auth/sessions did NOT return 200"
   echo "${sc4_after_off}" | head -5 | sed 's/^/      /'
   sc4_ok=0
 fi
