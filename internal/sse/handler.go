@@ -156,7 +156,7 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 }
 
 func (h *Handler) servePreflight(w http.ResponseWriter, r *http.Request) {
-	if !handlePreflight(w, r, h.cfg.CORSOrigins, h.corsAllowHeaders) {
+	if !handlePreflight(w, r, h.cfg.CORSOrigins, "GET, OPTIONS", h.corsAllowHeaders) {
 
 		w.WriteHeader(http.StatusMethodNotAllowed)
 	}

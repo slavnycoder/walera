@@ -21,7 +21,7 @@ type refreshResponse struct {
 
 // serveRefreshPreflight answers the CORS preflight for POST /sse/v1/refresh.
 func (h *Handler) serveRefreshPreflight(w http.ResponseWriter, r *http.Request) {
-	if !handlePreflightMethods(w, r, h.cfg.CORSOrigins, "POST, OPTIONS", h.corsAllowHeaders) {
+	if !handlePreflight(w, r, h.cfg.CORSOrigins, "POST, OPTIONS", h.corsAllowHeaders) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
 }

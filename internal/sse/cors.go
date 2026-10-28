@@ -44,16 +44,9 @@ func writeNoSniff(w http.ResponseWriter) {
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 }
 
-func handlePreflight(w http.ResponseWriter, r *http.Request, allowedOrigins []string, allowHeaders string) bool {
-	return handlePreflightMethods(w, r, allowedOrigins, "GET, OPTIONS", allowHeaders)
-}
-
-// handlePreflightMethods writes a CORS preflight response advertising the given
-// Access-Control-Allow-Methods and Access-Control-Allow-Headers strings. The SSE
-// GET routes pass "GET, OPTIONS"; the POST /sse/v1/refresh route passes
-// "POST, OPTIONS". Both pass h.corsAllowHeaders. All other preflight headers are
-// identical so both routes share one source of truth.
-func handlePreflightMethods(w http.ResponseWriter, r *http.Request, allowedOrigins []string, methods, allowHeaders string) bool {
+// handlePreflight answers an OPTIONS preflight advertising methods and
+// allowHeaders. Returns false (writes nothing) for non-OPTIONS requests.
+func handlePreflight(w http.ResponseWriter, r *http.Request, allowedOrigins []string, methods, allowHeaders string) bool {
 	if r.Method != http.MethodOptions {
 		return false
 	}
@@ -66,34 +59,13 @@ func handlePreflightMethods(w http.ResponseWriter, r *http.Request, allowedOrigi
 	return true
 }
 
-// buildAllowHeaders builds the Access-Control-Allow-Headers value for the CORS
-// preflight: the base set every route needs plus any configured forwarded auth
-// headers (auth.forwarded_headers, e.g. X-Tenant), so a browser fetch on
-// POST /sse/v1/refresh can actually send them. Forwarded headers are canonicalized
-// via textproto.CanonicalMIMEHeaderKey and deduped against the base set (and each
-// other). With no forwarded headers configured the result is the base string
-// unchanged, so existing deployments see no difference.
+// buildAllowHeaders returns the preflight Access-Control-Allow-Headers: the base
+// set plus the configured forwarded headers. config.Validate rejects reserved
+// names, so there is no overlap with the base.
 func buildAllowHeaders(forwarded []string) string {
-	const base = "Authorization, X-Request-ID, Content-Type"
-	if len(forwarded) == 0 {
-		return base
-	}
-	seen := map[string]struct{}{
-		textproto.CanonicalMIMEHeaderKey("Authorization"): {},
-		textproto.CanonicalMIMEHeaderKey("X-Request-ID"):  {},
-		textproto.CanonicalMIMEHeaderKey("Content-Type"):  {},
-	}
-	parts := []string{base}
+	parts := []string{"Authorization", "X-Request-ID", "Content-Type"}
 	for _, h := range forwarded {
-		canon := textproto.CanonicalMIMEHeaderKey(h)
-		if canon == "" {
-			continue
-		}
-		if _, dup := seen[canon]; dup {
-			continue
-		}
-		seen[canon] = struct{}{}
-		parts = append(parts, canon)
+		parts = append(parts, textproto.CanonicalMIMEHeaderKey(h))
 	}
 	return strings.Join(parts, ", ")
 }
