@@ -23,55 +23,7 @@ func usersMap(userID string, cols ...string) *Whitelist {
 	}
 }
 
-func TestRefreshOnce_Swapped(t *testing.T) {
-	t.Parallel()
-	srv := newScriptServer(t, func(_ int64, w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(permissionsBody(t, map[string][]string{"users": {"id", "name"}}))
-	})
-	c, _ := newSubTestClient(t, srv.srv.URL)
-	s := newTestSubscriber(t, subscriberTestOpts{
-		Client:     c,
-		Channel:    "users:42",
-		UserID:     "u1",
-		InitialMap: usersMap("u1", "id"),
-	})
-
-	if got := s.RefreshOnce(context.Background(), "rid-test"); got != RefreshSwapped {
-		t.Fatalf("RefreshOnce = %v; want RefreshSwapped", got)
-	}
-	if _, ok := s.AuthMap.Load().Tables["users"]["name"]; !ok {
-		t.Errorf("AuthMap not swapped: users.name missing after refresh")
-	}
-	if r := s.Sub.Reason(); r != "" {
-		t.Errorf("subscriber dropped with reason %q; want not dropped", r)
-	}
-}
-
-func TestRefreshOnce_RevokedTableMissing_DropsSub(t *testing.T) {
-	t.Parallel()
-	// Fresh whitelist no longer grants the channel's table -> revoked.
-	srv := newScriptServer(t, func(_ int64, w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(permissionsBody(t, map[string][]string{"orders": {"id"}}))
-	})
-	c, _ := newSubTestClient(t, srv.srv.URL)
-	s := newTestSubscriber(t, subscriberTestOpts{
-		Client:     c,
-		Channel:    "users:42",
-		UserID:     "u1",
-		InitialMap: usersMap("u1", "id"),
-	})
-
-	if got := s.RefreshOnce(context.Background(), "rid-test"); got != RefreshRevoked {
-		t.Fatalf("RefreshOnce = %v; want RefreshRevoked", got)
-	}
-	if r := s.Sub.Reason(); r != "auth_revoked" {
-		t.Errorf("drop reason = %q; want auth_revoked", r)
-	}
-}
-
-func TestRefreshOnce_Revoked403_DropsSub(t *testing.T) {
+func TestTryRefresh_Revoked403_DropsSub(t *testing.T) {
 	t.Parallel()
 	srv := newScriptServer(t, func(_ int64, w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusForbidden)
@@ -84,85 +36,22 @@ func TestRefreshOnce_Revoked403_DropsSub(t *testing.T) {
 		InitialMap: usersMap("u1", "id"),
 	})
 
-	if got := s.RefreshOnce(context.Background(), "rid-test"); got != RefreshRevoked {
-		t.Fatalf("RefreshOnce = %v; want RefreshRevoked", got)
-	}
+	s.tryRefresh(context.Background())
 	if r := s.Sub.Reason(); r != "auth_revoked" {
 		t.Errorf("drop reason = %q; want auth_revoked", r)
-	}
-}
-
-func TestRefreshOnce_Unavailable_KeepsStream(t *testing.T) {
-	t.Parallel()
-	srv := newScriptServer(t, func(_ int64, w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusInternalServerError)
-	})
-	c, _ := newSubTestClient(t, srv.srv.URL)
-	initial := usersMap("u1", "id")
-	s := newTestSubscriber(t, subscriberTestOpts{
-		Client:     c,
-		Channel:    "users:42",
-		UserID:     "u1",
-		InitialMap: initial,
-	})
-
-	if got := s.RefreshOnce(context.Background(), "rid-test"); got != RefreshUnavailable {
-		t.Fatalf("RefreshOnce = %v; want RefreshUnavailable", got)
-	}
-	// Best-effort: the stream must NOT be dropped on a transient failure.
-	if r := s.Sub.Reason(); r != "" {
-		t.Errorf("subscriber dropped with reason %q; want kept alive", r)
-	}
-	if s.AuthMap.Load() != initial {
-		t.Errorf("AuthMap changed on a failed refresh; want initial map intact")
-	}
-}
-
-func TestRefreshOnce_Busy_NoBackendCall(t *testing.T) {
-	t.Parallel()
-	srv := newScriptServer(t, func(_ int64, w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(permissionsBody(t, map[string][]string{"users": {"id"}}))
-	})
-	c, _ := newSubTestClient(t, srv.srv.URL)
-	s := newTestSubscriber(t, subscriberTestOpts{
-		Client:     c,
-		Channel:    "users:42",
-		UserID:     "u1",
-		InitialMap: usersMap("u1", "id"),
-	})
-
-	// Simulate a concurrent in-flight refresh holding the lock.
-	s.refreshMu.Lock()
-	got := s.RefreshOnce(context.Background(), "rid-test")
-	s.refreshMu.Unlock()
-
-	if got != RefreshBusy {
-		t.Fatalf("RefreshOnce = %v; want RefreshBusy", got)
-	}
-	if n := srv.calls.Load(); n != 0 {
-		t.Errorf("backend calls = %d; want 0 (busy must not contact the backend)", n)
 	}
 }
 
 // TestTryRefresh_OnDemandNotStarvedDuringBackoff proves the #3b fix: the TTL
 // backoff chain no longer holds the swap lock (refreshMu) across its sleeps.
 // While tryRefresh waits between failed retries, a concurrent on-demand
-// RefreshOnce can acquire refreshMu and swap fresh permissions — previously it
-// was starved with RefreshBusy for the whole backoff window — and the TTL chain
+// RefreshOwnByChannel can acquire refreshMu and swap fresh permissions — previously it
+// was starved with Busy for the whole backoff window — and the TTL chain
 // must then NOT drop the just-refreshed, healthy stream.
 func TestTryRefresh_OnDemandNotStarvedDuringBackoff(t *testing.T) {
 	t.Parallel()
-	const onDemandRID = "ondemand-rid"
 	attemptFailed := make(chan struct{}, 1)
-	srv := newScriptServer(t, func(_ int64, w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("X-Request-ID") == onDemandRID {
-			// On-demand fetch succeeds (backend briefly recovered).
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write(permissionsBody(t, map[string][]string{"users": {"id", "name"}}))
-			return
-		}
-		// Every TTL attempt (random newRequestID) fails: backend is flapping.
+	srv := newScriptServer(t, func(_ int64, w http.ResponseWriter, _ *http.Request) {
 		select {
 		case attemptFailed <- struct{}{}:
 		default:
@@ -181,6 +70,9 @@ func TestTryRefresh_OnDemandNotStarvedDuringBackoff(t *testing.T) {
 		Backoffs:   []time.Duration{500 * time.Millisecond},
 	})
 
+	reg := newTestRegistry(t)
+	reg.Add(s)
+
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
@@ -193,16 +85,16 @@ func TestTryRefresh_OnDemandNotStarvedDuringBackoff(t *testing.T) {
 	<-attemptFailed
 
 	// On-demand refresh during the backoff window must succeed, not get Busy.
-	got := RefreshBusy
+	var sum RefreshSummary
 	deadline := time.Now().Add(300 * time.Millisecond)
 	for time.Now().Before(deadline) {
-		if got = s.RefreshOnce(context.Background(), onDemandRID); got != RefreshBusy {
+		if sum = reg.RefreshOwnByChannel("users:42", "u1", usersMap("u1", "id", "name")); sum.Busy == 0 {
 			break
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	if got != RefreshSwapped {
-		t.Fatalf("on-demand during TTL backoff = %v; want RefreshSwapped (refreshMu must be free during the sleep)", got)
+	if sum.Swapped != 1 {
+		t.Fatalf("on-demand during TTL backoff = %+v; want Swapped=1 (refreshMu must be free during the sleep)", sum)
 	}
 
 	wg.Wait()
@@ -213,8 +105,8 @@ func TestTryRefresh_OnDemandNotStarvedDuringBackoff(t *testing.T) {
 	if _, ok := s.AuthMap.Load().Tables["users"]["name"]; !ok {
 		t.Errorf("AuthMap missing users.name; on-demand swap not visible")
 	}
-	if n := srv.calls.Load(); n != 2 {
-		t.Errorf("backend calls = %d; want 2 (one failed TTL attempt + one on-demand; the chain must early-return after the swap, not retry)", n)
+	if n := srv.calls.Load(); n != 1 {
+		t.Errorf("backend calls = %d; want 1 (one failed TTL attempt; the chain must stop after the on-demand swap)", n)
 	}
 }
 
@@ -448,44 +340,6 @@ func TestRefreshOwnByChannel_SwappedAndBusy(t *testing.T) {
 	}
 }
 
-// denyBreaker reports the breaker as open (Allow() == false).
-type denyBreaker struct{}
-
-func (denyBreaker) Allow() bool { return false }
-
-func TestRefreshOnce_BreakerOpen_ShortCircuits(t *testing.T) {
-	t.Parallel()
-	// Like the TTL RefreshLoop (which skips a tick when the breaker is open), the
-	// on-demand RefreshOnce is gated by the AUTH-04 breaker (#5): when the breaker
-	// is open it returns RefreshUnavailable without contacting the failing backend.
-	srv := newScriptServer(t, func(_ int64, w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(permissionsBody(t, map[string][]string{"users": {"id", "name"}}))
-	})
-	c, _ := newSubTestClient(t, srv.srv.URL)
-	initial := usersMap("u1", "id")
-	s := newTestSubscriber(t, subscriberTestOpts{
-		Client:     c,
-		Breaker:    denyBreaker{}, // breaker open
-		Channel:    "users:42",
-		UserID:     "u1",
-		InitialMap: initial,
-	})
-
-	if got := s.RefreshOnce(context.Background(), "rid-test"); got != RefreshUnavailable {
-		t.Fatalf("RefreshOnce = %v; want RefreshUnavailable (open breaker must short-circuit on-demand)", got)
-	}
-	if n := srv.calls.Load(); n != 0 {
-		t.Errorf("backend calls = %d; want 0 (open breaker must not contact the backend)", n)
-	}
-	if r := s.Sub.Reason(); r != "" {
-		t.Errorf("subscriber dropped with reason %q; want kept alive", r)
-	}
-	if s.AuthMap.Load() != initial {
-		t.Errorf("AuthMap changed while breaker open; want initial map intact")
-	}
-}
-
 func TestRefreshOwnByChannel_NoMatch(t *testing.T) {
 	t.Parallel()
 	srv := newScriptServer(t, func(_ int64, w http.ResponseWriter, _ *http.Request) {
@@ -506,12 +360,12 @@ func TestRefreshOwnByChannel_NoMatch(t *testing.T) {
 	}
 }
 
-// TestRefreshOnce_RaceWithFilterAndTTL exercises the atomic whitelist swap under
-// concurrent WAL-hot-path reads (FilterWithLSN), on-demand refreshes (RefreshOnce),
+// TestRefreshOwnByChannel_RaceWithFilterAndTTL exercises the atomic whitelist swap under
+// concurrent WAL-hot-path reads (FilterWithLSN), on-demand refreshes (RefreshOwnByChannel),
 // and a TTL tick (tryRefresh) on the same subscriber. The backend always grants
 // the channel so the subscriber is never dropped; the test asserts -race cleanliness
 // and that the final installed whitelist is the refreshed one.
-func TestRefreshOnce_RaceWithFilterAndTTL(t *testing.T) {
+func TestRefreshOwnByChannel_RaceWithFilterAndTTL(t *testing.T) {
 	t.Parallel()
 	srv := newScriptServer(t, func(_ int64, w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -524,6 +378,9 @@ func TestRefreshOnce_RaceWithFilterAndTTL(t *testing.T) {
 		UserID:     "u1",
 		InitialMap: usersMap("u1", "id"),
 	})
+
+	reg := newTestRegistry(t)
+	reg.Add(s)
 
 	change := makeUpdateChange("users", map[string]any{"id": 1, "name": "x"})
 
@@ -548,7 +405,7 @@ func TestRefreshOnce_RaceWithFilterAndTTL(t *testing.T) {
 		go func() {
 			defer workers.Done()
 			for j := 0; j < 100; j++ {
-				s.RefreshOnce(context.Background(), "rid-test")
+				reg.RefreshOwnByChannel("users:42", "u1", usersMap("u1", "id", "name"))
 			}
 		}()
 	}

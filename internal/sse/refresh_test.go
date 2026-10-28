@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -53,6 +52,30 @@ func addLiveSub(t *testing.T, reg *auth.Subscribers, c *auth.Client, bk *auth.Br
 func registerLiveSub(t *testing.T, kit *testHandlerKit, userID, channel, table string, cols ...string) *auth.Subscriber {
 	t.Helper()
 	return addLiveSub(t, kit.authReg, kit.authClient, kit.breaker, userID, channel, table, cols...)
+}
+
+// addTTLSub registers a live u1 subscriber on users:42 with a running TTL loop
+// (period ttl). Tests block its /auth/permissions call to hold the swap lock.
+func addTTLSub(t *testing.T, kit *testHandlerKit, ttl time.Duration) *auth.Subscriber {
+	t.Helper()
+	rsub := router.NewSubscriber(
+		router.SubscriberConfig{Kind: router.KindExact, Schema: "public", Table: "users", PK: "42", BufferCap: 4},
+		router.SubscriberDeps{Parent: context.Background()},
+	)
+	// TTLSeconds 0 so DefaultTTL sets the period.
+	wl := &auth.Whitelist{UserID: "u1", Tables: map[string]map[string]struct{}{"users": colSet("id")}}
+	asub := auth.NewSubscriber(
+		auth.SubscriberConfig{InitialMap: wl, UserID: "u1", Channel: "users:42", DefaultTTL: ttl},
+		auth.SubscriberDeps{Sub: rsub, Client: kit.authClient, Breaker: kit.breaker, Logger: zerolog.Nop(), Metrics: metrics.New()},
+	)
+	kit.authReg.Add(asub)
+	ctx, cancel := context.WithCancel(context.Background())
+	go asub.RefreshLoop(ctx)
+	t.Cleanup(func() {
+		cancel()
+		kit.authReg.Remove(asub.ID())
+	})
+	return asub
 }
 
 // refreshBackend scripts OpenSession (/auth/sessions) for user "u1" to return
@@ -371,38 +394,22 @@ func TestRefresh_OpenSessionUnavailable_503(t *testing.T) {
 func TestRefresh_Busy_409_KeepsStream(t *testing.T) {
 	t.Parallel()
 	kit := newTestHandler(t, nil, nil)
-	sub := registerLiveSub(t, kit, "u1", "users:42", "users", "id")
 
-	// A background RefreshOnce holds refreshMu while blocked inside its backend
-	// fetch (the FIRST /auth/permissions call). RefreshOwnByChannel fetches
-	// off-lock and only then TryLocks each sub, so the POST's own fetch must return
-	// while the background still holds the lock — hence only the first
-	// /auth/permissions call blocks; later calls answer immediately, letting the
-	// POST reach a TryLock that deterministically fails → RefreshBusy → 409.
+	// The TTL loop's first /auth/permissions call blocks while holding refreshMu.
 	var permCalls atomic.Int32
 	inflight := make(chan struct{})
 	proceed := make(chan struct{})
 	kit.backend.SetResp(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/auth/permissions" {
-			if permCalls.Add(1) == 1 {
-				close(inflight)
-				<-proceed
-			}
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write(permMapJSON("u1", map[string][]string{"users": {"id", "name"}}, 60))
-			return
+		if r.URL.Path == "/auth/permissions" && permCalls.Add(1) == 1 {
+			close(inflight)
+			<-proceed
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write(permMapJSON("u1", map[string][]string{"users": {"id"}}, 60))
+		_, _ = w.Write(permMapJSON("u1", map[string][]string{"users": {"id", "name"}}, 60))
 	})
-
-	var bg sync.WaitGroup
-	bg.Add(1)
-	go func() {
-		defer bg.Done()
-		sub.RefreshOnce(context.Background(), "bg-refresh")
-	}()
-	<-inflight // background RefreshOnce now holds refreshMu inside the backend call
+	sub := addTTLSub(t, kit, 20*time.Millisecond)
+	<-inflight
+	defer close(proceed)
 
 	w, _ := postRefresh(kit.h, `{"channel":"users:42"}`, true)
 	if w.Code != http.StatusConflict {
@@ -420,9 +427,6 @@ func TestRefresh_Busy_409_KeepsStream(t *testing.T) {
 	if got := gatherCounterValue(t, kit.h.metrics, "walera_refresh_ondemand_total", "result", "refresh_in_progress"); got != 1 {
 		t.Errorf("refresh_in_progress metric = %v; want 1", got)
 	}
-
-	close(proceed)
-	bg.Wait()
 }
 
 func TestRefresh_InvalidRequestID_400(t *testing.T) {
@@ -580,35 +584,22 @@ func TestRefresh_PerUserSlotsFull_StillRefreshes(t *testing.T) {
 func TestRefresh_PartialSuccess_SwappedBeatsBusy_200(t *testing.T) {
 	t.Parallel()
 	kit := newTestHandler(t, nil, nil)
-	// Two live subs for the same (user, channel): one is held busy by a background
-	// refresh, the other swaps. Swapped must win over a concurrent Busy → 200.
-	busySub := registerLiveSub(t, kit, "u1", "users:42", "users", "id")
-	freeSub := registerLiveSub(t, kit, "u1", "users:42", "users", "id")
 
 	var permCalls atomic.Int32
 	inflight := make(chan struct{})
 	proceed := make(chan struct{})
 	kit.backend.SetResp(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/auth/permissions" {
-			if permCalls.Add(1) == 1 {
-				close(inflight)
-				<-proceed
-			}
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write(permMapJSON("u1", map[string][]string{"users": {"id", "name"}}, 60))
-			return
+		if r.URL.Path == "/auth/permissions" && permCalls.Add(1) == 1 {
+			close(inflight)
+			<-proceed
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write(permMapJSON("u1", map[string][]string{"users": {"id", "name"}}, 60))
 	})
-
-	var bg sync.WaitGroup
-	bg.Add(1)
-	go func() {
-		defer bg.Done()
-		busySub.RefreshOnce(context.Background(), "bg-refresh")
-	}()
-	<-inflight // busySub's refreshMu is now held by the blocked background refresh
+	addTTLSub(t, kit, 20*time.Millisecond) // busy: TTL refresh holds its lock
+	freeSub := registerLiveSub(t, kit, "u1", "users:42", "users", "id")
+	<-inflight
+	defer close(proceed)
 
 	w, _ := postRefresh(kit.h, `{"channel":"users:42"}`, true)
 	if w.Code != http.StatusOK {
@@ -627,9 +618,6 @@ func TestRefresh_PartialSuccess_SwappedBeatsBusy_200(t *testing.T) {
 	if got := gatherCounterValue(t, kit.h.metrics, "walera_refresh_ondemand_total", "result", "swapped"); got != 1 {
 		t.Errorf("swapped metric = %v; want 1", got)
 	}
-
-	close(proceed)
-	bg.Wait()
 }
 
 func TestRefresh_Preflight_AdvertisesForwardedHeader(t *testing.T) {

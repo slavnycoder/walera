@@ -85,19 +85,11 @@ type Subscriber struct {
 	client  *Client
 	breaker breakerHook
 
-	// refreshMu guards a single fetch+swap (applyFetched/swapMap). It is the
-	// lock shared between the TTL chain, the breaker fan-out and on-demand
-	// RefreshOnce, so a swap can never race a swap. The TTL chain holds it only
-	// for the duration of one attempt (via lockedAttempt), never across a
-	// backoff sleep, so on-demand refresh is not starved while the chain retries.
+	// refreshMu guards one fetch+swap. Shared by the TTL chain (per attempt, never
+	// across a backoff sleep) and on-demand RefreshOwnByChannel.
 	refreshMu sync.Mutex
-	// chainMu dedups concurrent TTL/breaker-fan-out refresh chains for this
-	// subscriber (a TTL tick racing a breaker fan-out): only one chain runs at a
-	// time, the rest no-op. Unlike refreshMu it is NOT shared with on-demand
-	// RefreshOnce and IS held across the backoff sleeps — holding it there is
-	// harmless because on-demand contends on refreshMu, not chainMu. Lock order
-	// is always chainMu → refreshMu (on-demand takes only refreshMu), so the two
-	// can never deadlock.
+	// chainMu dedups concurrent TTL/breaker-fan-out chains and is held across
+	// backoff sleeps. Lock order: chainMu → refreshMu.
 	chainMu sync.Mutex
 
 	lastRefresh atomic.Int64
@@ -234,19 +226,7 @@ const (
 	attemptFailed                           // other (non-revoked, non-unavailable) error
 )
 
-// fetchPermissions performs one backend permission re-fetch and records the
-// outcome metric. It does NO logging and NO whitelist swap, and holds no lock —
-// the returned (*Whitelist, error) is handed to applyFetched, which makes the
-// swap/drop decision under refreshMu. Splitting fetch from apply lets a single
-// backend round-trip fan out to every subscriber on the same (user, channel)
-// without a K-fold round-trip (see Subscribers.RefreshOwnByChannel).
-func (s *Subscriber) fetchPermissions(ctx context.Context, requestID string) (*Whitelist, error) {
-	fresh, err := s.client.RefreshPermissions(ctx, s.userID, s.channel, requestID)
-	s.recordRefreshResult(err)
-	return fresh, err
-}
-
-// applyFetched turns a fetchPermissions result into the swap/drop decision: on
+// applyFetched turns a RefreshPermissions result into the swap/drop decision: on
 // success it performs the atomic whitelist swap (or drops auth_revoked when the
 // channel is no longer granted); on a definitive revocation error it drops the
 // subscriber; a transient *ErrUnavailable leaves the stream intact
@@ -275,15 +255,11 @@ func (s *Subscriber) applyFetched(fresh *Whitelist, err error) attemptResult {
 	return attemptUnavailable
 }
 
-// refreshAttempt performs one TTL permission re-fetch and, on success, the
-// atomic whitelist swap; on a definitive revocation it drops the subscriber. It
-// records the metric (via fetchPermissions) and logs the failure (TTL-gated)
-// exactly as before. It does NOT drop the subscriber on a transient/unexpected
-// error — that decision is left to the caller. Must be called with refreshMu
-// held. logRefreshError lives here and only here, so the on-demand path can
-// route through fetchPermissions+applyFetched without a duplicate warn.
+// refreshAttempt performs one TTL permission re-fetch and applies it. It does not
+// drop on a transient error; the caller decides. Must hold refreshMu.
 func (s *Subscriber) refreshAttempt(ctx context.Context, attempt int, requestID string) attemptResult {
-	fresh, err := s.fetchPermissions(ctx, requestID)
+	fresh, err := s.client.RefreshPermissions(ctx, s.userID, s.channel, requestID)
+	s.recordRefreshResult(err)
 	if err != nil {
 		s.logRefreshError(err, attempt)
 	}
@@ -293,7 +269,7 @@ func (s *Subscriber) refreshAttempt(ctx context.Context, attempt int, requestID 
 // tryRefresh runs the TTL/breaker-fan-out refresh chain: an immediate attempt
 // followed by the bounded backoff retry chain. chainMu (not refreshMu) dedups
 // concurrent chains, so the swap lock is released for the whole duration of
-// every backoff sleep and an on-demand RefreshOnce can swap fresh permissions
+// every backoff sleep and an on-demand RefreshOwnByChannel can swap fresh permissions
 // while this chain waits between retries (previously it was starved for the full
 // backoff window, up to ~13s). Each individual fetch+swap runs under refreshMu
 // via lockedAttempt, and every auth_unavailable drop goes through dropIfUnchanged
@@ -309,7 +285,7 @@ func (s *Subscriber) tryRefresh(ctx context.Context) {
 	// Snapshot the live whitelist pointer at chain start, before the first
 	// attempt. swapMap is the only writer of AuthMap after construction and
 	// always stores a fresh pointer, so a changed pointer means a concurrent
-	// successful refresh (an on-demand RefreshOnce that grabbed refreshMu) has
+	// successful refresh (an on-demand RefreshOwnByChannel that grabbed refreshMu) has
 	// already brought the stream current — the chain must then stop without
 	// dropping. Sampling here, not after attempt 0, closes the window where an
 	// on-demand swap landing during attempt 0 would otherwise be adopted as the
@@ -362,7 +338,7 @@ func (s *Subscriber) tryRefresh(ctx context.Context) {
 }
 
 // lockedAttempt runs exactly one refreshAttempt under refreshMu — the swap lock
-// shared with on-demand RefreshOnce and the breaker fan-out. It is the only
+// shared with on-demand RefreshOwnByChannel and the breaker fan-out. It is the only
 // place the TTL chain takes refreshMu for a fetch, and it holds the lock only
 // for that single fetch+swap, never across a backoff sleep, so on-demand refresh
 // is not starved while the chain retries.
@@ -375,7 +351,7 @@ func (s *Subscriber) lockedAttempt(ctx context.Context, attempt int, requestID s
 // dropIfUnchanged drops the subscriber (auth_unavailable) only if no concurrent
 // refresh swapped a fresh whitelist since mapAtChainStart was sampled. The check
 // and drop run under refreshMu so the decision is serialized against an in-flight
-// on-demand RefreshOnce: if one is mid-fetch it holds refreshMu, so this blocks
+// on-demand RefreshOwnByChannel: if one is mid-fetch it holds refreshMu, so this blocks
 // until it stores its result, then observes the changed pointer and skips the
 // drop — never killing a stream that was just successfully refreshed. Dropping
 // under refreshMu mirrors applyFetched's auth_revoked drop.
@@ -384,56 +360,6 @@ func (s *Subscriber) dropIfUnchanged(mapAtChainStart *Whitelist) {
 	defer s.refreshMu.Unlock()
 	if s.AuthMap.Load() == mapAtChainStart {
 		s.Sub.Drop("auth_unavailable")
-	}
-}
-
-// RefreshResult is the outcome of an on-demand synchronous refresh (RefreshOnce).
-type RefreshResult int
-
-const (
-	// RefreshSwapped: fresh permissions were fetched and the whitelist swapped.
-	RefreshSwapped RefreshResult = iota
-	// RefreshRevoked: the channel is no longer granted; the subscriber was
-	// dropped with reason auth_revoked (identical to the TTL path).
-	RefreshRevoked
-	// RefreshUnavailable: the backend re-fetch failed (transient or unexpected).
-	// The live whitelist is left intact and the stream is NOT dropped.
-	RefreshUnavailable
-	// RefreshBusy: another refresh (a TTL tick or breaker fan-out) currently
-	// holds refreshMu, so no fetch was performed by this call.
-	RefreshBusy
-)
-
-// RefreshOnce performs a single synchronous permission re-fetch and atomic
-// whitelist swap. It shares refreshMu — and therefore the swap/drop/guard
-// primitives — with the TTL loop and the breaker fan-out, so it can never race
-// or double-swap a concurrent refresh. Like the TTL loop it is gated by the
-// AUTH-04 breaker: when the breaker is open it returns RefreshUnavailable
-// without contacting the failing backend (so on-demand POSTs don't hammer it
-// and delay half-open). Unlike the TTL tryRefresh it runs NO backoff retries: a
-// transient backend failure returns RefreshUnavailable and leaves the current
-// whitelist in place (best-effort, the stream is preserved). A definitive
-// revocation drops the subscriber (auth_revoked), exactly as TTL does. If a
-// concurrent refresh holds the lock, it returns RefreshBusy without contacting
-// the backend. It does NOT log — on-demand failures are logged once in
-// serveRefresh.
-func (s *Subscriber) RefreshOnce(ctx context.Context, requestID string) RefreshResult {
-	if s.breaker != nil && !s.breaker.Allow() {
-		return RefreshUnavailable
-	}
-	if !s.refreshMu.TryLock() {
-		return RefreshBusy
-	}
-	defer s.refreshMu.Unlock()
-
-	fresh, err := s.fetchPermissions(ctx, requestID)
-	switch s.applyFetched(fresh, err) {
-	case attemptSwapped:
-		return RefreshSwapped
-	case attemptRevoked:
-		return RefreshRevoked
-	default: // attemptUnavailable, attemptFailed
-		return RefreshUnavailable
 	}
 }
 
