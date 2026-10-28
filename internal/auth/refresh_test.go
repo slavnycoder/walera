@@ -6,6 +6,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/jackc/pglogrepl"
 
@@ -143,6 +144,129 @@ func TestRefreshOnce_Busy_NoBackendCall(t *testing.T) {
 	}
 	if n := srv.calls.Load(); n != 0 {
 		t.Errorf("backend calls = %d; want 0 (busy must not contact the backend)", n)
+	}
+}
+
+// TestTryRefresh_OnDemandNotStarvedDuringBackoff proves the #3b fix: the TTL
+// backoff chain no longer holds the swap lock (refreshMu) across its sleeps.
+// While tryRefresh waits between failed retries, a concurrent on-demand
+// RefreshOnce can acquire refreshMu and swap fresh permissions — previously it
+// was starved with RefreshBusy for the whole backoff window — and the TTL chain
+// must then NOT drop the just-refreshed, healthy stream.
+func TestTryRefresh_OnDemandNotStarvedDuringBackoff(t *testing.T) {
+	t.Parallel()
+	const onDemandRID = "ondemand-rid"
+	attemptFailed := make(chan struct{}, 1)
+	srv := newScriptServer(t, func(_ int64, w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Request-ID") == onDemandRID {
+			// On-demand fetch succeeds (backend briefly recovered).
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(permissionsBody(t, map[string][]string{"users": {"id", "name"}}))
+			return
+		}
+		// Every TTL attempt (random newRequestID) fails: backend is flapping.
+		select {
+		case attemptFailed <- struct{}{}:
+		default:
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+	c, _ := newSubTestClient(t, srv.srv.URL)
+
+	initial := usersMap("u1", "id")
+	s := newTestSubscriber(t, subscriberTestOpts{
+		Client:     c,
+		Breaker:    &stubBreakerHook{allow: true},
+		Channel:    "users:42",
+		UserID:     "u1",
+		InitialMap: initial,
+		Backoffs:   []time.Duration{500 * time.Millisecond},
+	})
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		s.tryRefresh(context.Background())
+	}()
+
+	// The first TTL attempt has failed; tryRefresh is now in its backoff sleep
+	// with refreshMu released.
+	<-attemptFailed
+
+	// On-demand refresh during the backoff window must succeed, not get Busy.
+	got := RefreshBusy
+	deadline := time.Now().Add(300 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if got = s.RefreshOnce(context.Background(), onDemandRID); got != RefreshBusy {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if got != RefreshSwapped {
+		t.Fatalf("on-demand during TTL backoff = %v; want RefreshSwapped (refreshMu must be free during the sleep)", got)
+	}
+
+	wg.Wait()
+
+	if r := s.Sub.Reason(); r != "" {
+		t.Fatalf("stream dropped with reason %q after a concurrent on-demand swap; want kept alive (no wrongful drop)", r)
+	}
+	if _, ok := s.AuthMap.Load().Tables["users"]["name"]; !ok {
+		t.Errorf("AuthMap missing users.name; on-demand swap not visible")
+	}
+	if n := srv.calls.Load(); n != 2 {
+		t.Errorf("backend calls = %d; want 2 (one failed TTL attempt + one on-demand; the chain must early-return after the swap, not retry)", n)
+	}
+}
+
+// TestTryRefresh_BackoffChainCoalesces proves the new dedup invariant for #3b:
+// concurrent TTL / breaker-fan-out chains are now coalesced by chainMu (not
+// refreshMu). A second tryRefresh that starts while the first is asleep in its
+// backoff must still no-op instead of launching its own backend chain.
+func TestTryRefresh_BackoffChainCoalesces(t *testing.T) {
+	t.Parallel()
+	attemptFailed := make(chan struct{}, 1)
+	srv := newScriptServer(t, func(_ int64, w http.ResponseWriter, _ *http.Request) {
+		select {
+		case attemptFailed <- struct{}{}:
+		default:
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+	c, _ := newSubTestClient(t, srv.srv.URL)
+
+	s := newTestSubscriber(t, subscriberTestOpts{
+		Client:     c,
+		Breaker:    &stubBreakerHook{allow: true},
+		Channel:    "users:42",
+		UserID:     "u1",
+		InitialMap: usersMap("u1", "id"),
+		Backoffs:   []time.Duration{300 * time.Millisecond},
+	})
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		// Chain A: attempt0 (500) -> backoff -> attempt1 (500) -> drop.
+		s.tryRefresh(context.Background())
+	}()
+
+	// Chain A is now in its backoff sleep, still holding chainMu.
+	<-attemptFailed
+
+	// Chain B starts during A's backoff: chainMu is held, so it must no-op
+	// immediately without contacting the backend.
+	s.tryRefresh(context.Background())
+
+	wg.Wait()
+
+	if n := srv.calls.Load(); n != 2 {
+		t.Fatalf("backend calls = %d; want 2 (chain A's two attempts only; the concurrent chain must coalesce)", n)
+	}
+	if r := s.Sub.Reason(); r != "auth_unavailable" {
+		t.Errorf("drop reason = %q; want auth_unavailable", r)
 	}
 }
 

@@ -85,7 +85,20 @@ type Subscriber struct {
 	client  *Client
 	breaker breakerHook
 
+	// refreshMu guards a single fetch+swap (applyFetched/swapMap). It is the
+	// lock shared between the TTL chain, the breaker fan-out and on-demand
+	// RefreshOnce, so a swap can never race a swap. The TTL chain holds it only
+	// for the duration of one attempt (via lockedAttempt), never across a
+	// backoff sleep, so on-demand refresh is not starved while the chain retries.
 	refreshMu sync.Mutex
+	// chainMu dedups concurrent TTL/breaker-fan-out refresh chains for this
+	// subscriber (a TTL tick racing a breaker fan-out): only one chain runs at a
+	// time, the rest no-op. Unlike refreshMu it is NOT shared with on-demand
+	// RefreshOnce and IS held across the backoff sleeps — holding it there is
+	// harmless because on-demand contends on refreshMu, not chainMu. Lock order
+	// is always chainMu → refreshMu (on-demand takes only refreshMu), so the two
+	// can never deadlock.
+	chainMu sync.Mutex
 
 	lastRefresh atomic.Int64
 
@@ -277,13 +290,21 @@ func (s *Subscriber) refreshAttempt(ctx context.Context, attempt int, requestID 
 	return s.applyFetched(fresh, err)
 }
 
+// tryRefresh runs the TTL/breaker-fan-out refresh chain: an immediate attempt
+// followed by the bounded backoff retry chain. chainMu (not refreshMu) dedups
+// concurrent chains, so the swap lock is released for the whole duration of
+// every backoff sleep and an on-demand RefreshOnce can swap fresh permissions
+// while this chain waits between retries (previously it was starved for the full
+// backoff window, up to ~13s). Each individual fetch+swap still runs under
+// refreshMu via lockedAttempt. Behavior in the pure-TTL case (no concurrent
+// on-demand swap) is unchanged: same attempt count, same drop/breaker semantics.
 func (s *Subscriber) tryRefresh(ctx context.Context) {
-	if !s.refreshMu.TryLock() {
+	if !s.chainMu.TryLock() {
 		return
 	}
-	defer s.refreshMu.Unlock()
+	defer s.chainMu.Unlock()
 
-	switch s.refreshAttempt(ctx, 0, newRequestID()) {
+	switch s.lockedAttempt(ctx, 0, newRequestID()) {
 	case attemptSwapped, attemptRevoked:
 		return
 	case attemptFailed:
@@ -293,6 +314,14 @@ func (s *Subscriber) tryRefresh(ctx context.Context) {
 		// fall through to the backoff retry chain
 	}
 
+	// Snapshot the live whitelist pointer. swapMap is the only writer of AuthMap
+	// after construction and always stores a fresh pointer, so a changed pointer
+	// after a sleep means a concurrent successful refresh (an on-demand
+	// RefreshOnce that grabbed refreshMu while we slept) already brought the
+	// stream current. In that case we stop retrying and must NOT drop — dropping
+	// a just-refreshed, healthy stream would be a regression.
+	mapAtChainStart := s.AuthMap.Load()
+
 	for i, backoff := range s.backoffs {
 		select {
 		case <-ctx.Done():
@@ -301,7 +330,10 @@ func (s *Subscriber) tryRefresh(ctx context.Context) {
 			return
 		case <-time.After(backoff):
 		}
-		switch s.refreshAttempt(ctx, i+1, newRequestID()) {
+		if s.AuthMap.Load() != mapAtChainStart {
+			return
+		}
+		switch s.lockedAttempt(ctx, i+1, newRequestID()) {
 		case attemptSwapped, attemptRevoked:
 			return
 		case attemptFailed:
@@ -312,9 +344,25 @@ func (s *Subscriber) tryRefresh(ctx context.Context) {
 		}
 	}
 
+	// A concurrent on-demand swap may have landed between the final attempt and
+	// here (outside any lock); don't drop a stream that is already current.
+	if s.AuthMap.Load() != mapAtChainStart {
+		return
+	}
 	if s.breaker == nil || s.breaker.Allow() {
 		s.Sub.Drop("auth_unavailable")
 	}
+}
+
+// lockedAttempt runs exactly one refreshAttempt under refreshMu — the swap lock
+// shared with on-demand RefreshOnce and the breaker fan-out. It is the only
+// place the TTL chain takes refreshMu, and it holds the lock only for that
+// single fetch+swap, never across a backoff sleep, so on-demand refresh is not
+// starved while the chain retries.
+func (s *Subscriber) lockedAttempt(ctx context.Context, attempt int, requestID string) attemptResult {
+	s.refreshMu.Lock()
+	defer s.refreshMu.Unlock()
+	return s.refreshAttempt(ctx, attempt, requestID)
 }
 
 // RefreshResult is the outcome of an on-demand synchronous refresh (RefreshOnce).
