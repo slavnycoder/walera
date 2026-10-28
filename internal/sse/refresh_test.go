@@ -55,23 +55,12 @@ func registerLiveSub(t *testing.T, kit *testHandlerKit, userID, channel, table s
 	return addLiveSub(t, kit.authReg, kit.authClient, kit.breaker, userID, channel, table, cols...)
 }
 
-// refreshBackend scripts the fake auth backend to answer OpenSession
-// (/auth/sessions) with sessionTables and RefreshPermissions (/auth/permissions)
-// with permTables (or permStatus when it is a non-200 code). All maps are for
-// user "u1".
-func refreshBackend(b *fakeAuthBackend, sessionTables, permTables map[string][]string, permStatus int) {
-	b.SetResp(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/auth/permissions" {
-			if permStatus != 0 && permStatus != http.StatusOK {
-				w.WriteHeader(permStatus)
-				return
-			}
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write(permMapJSON("u1", permTables, 60))
-			return
-		}
+// refreshBackend scripts OpenSession (/auth/sessions) for user "u1" to return
+// tables; POST /sse/v1/refresh swaps exactly this whitelist.
+func refreshBackend(b *fakeAuthBackend, tables map[string][]string) {
+	b.SetResp(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write(permMapJSON("u1", sessionTables, 60))
+		_, _ = w.Write(permMapJSON("u1", tables, 60))
 	})
 }
 
@@ -89,7 +78,7 @@ func TestRefresh_HappyPath_200(t *testing.T) {
 	t.Parallel()
 	kit := newTestHandler(t, nil, nil)
 	sub := registerLiveSub(t, kit, "u1", "users:42", "users", "id")
-	refreshBackend(kit.backend, map[string][]string{"users": {"id"}}, map[string][]string{"users": {"id", "name"}}, 200)
+	refreshBackend(kit.backend, map[string][]string{"users": {"id", "name"}})
 
 	w, _ := postRefresh(kit.h, `{"channel":"users:42"}`, true)
 	if w.Code != http.StatusOK {
@@ -115,7 +104,7 @@ func TestRefresh_HappyPath_200(t *testing.T) {
 func TestRefresh_NoLiveSubscriber_404(t *testing.T) {
 	t.Parallel()
 	kit := newTestHandler(t, nil, nil)
-	refreshBackend(kit.backend, map[string][]string{"users": {"id"}}, map[string][]string{"users": {"id"}}, 200)
+	refreshBackend(kit.backend, map[string][]string{"users": {"id"}})
 
 	w, _ := postRefresh(kit.h, `{"channel":"users:42"}`, true)
 	if w.Code != http.StatusNotFound {
@@ -134,7 +123,7 @@ func TestRefresh_OwnScope_OtherUserUntouched(t *testing.T) {
 	kit := newTestHandler(t, nil, nil)
 	// Caller authenticates as u1, but the only live sub on the channel is u2's.
 	other := registerLiveSub(t, kit, "u2", "users:42", "users", "id")
-	refreshBackend(kit.backend, map[string][]string{"users": {"id"}}, map[string][]string{"users": {"id", "name"}}, 200)
+	refreshBackend(kit.backend, map[string][]string{"users": {"id", "name"}})
 
 	w, _ := postRefresh(kit.h, `{"channel":"users:42"}`, true)
 	if w.Code != http.StatusNotFound {
@@ -149,7 +138,7 @@ func TestRefresh_WildcardNotCrossMatched(t *testing.T) {
 	t.Parallel()
 	kit := newTestHandler(t, nil, nil)
 	sub := registerLiveSub(t, kit, "u1", "users:all", "users", "id")
-	refreshBackend(kit.backend, map[string][]string{"users": {"id"}}, map[string][]string{"users": {"id", "name"}}, 200)
+	refreshBackend(kit.backend, map[string][]string{"users": {"id", "name"}})
 
 	// Exact channel must NOT match the wildcard subscriber.
 	if w, _ := postRefresh(kit.h, `{"channel":"users:42"}`, true); w.Code != http.StatusNotFound {
@@ -169,7 +158,7 @@ func TestRefresh_NotAllowed_403(t *testing.T) {
 	kit := newTestHandler(t, nil, nil)
 	registerLiveSub(t, kit, "u1", "users:42", "users", "id")
 	// Caller authorized only for orders, not users.
-	refreshBackend(kit.backend, map[string][]string{"orders": {"id"}}, map[string][]string{"users": {"id"}}, 200)
+	refreshBackend(kit.backend, map[string][]string{"orders": {"id"}})
 
 	w, _ := postRefresh(kit.h, `{"channel":"users:42"}`, true)
 	if w.Code != http.StatusForbidden {
@@ -180,52 +169,6 @@ func TestRefresh_NotAllowed_403(t *testing.T) {
 	}
 	if got := gatherCounterValue(t, kit.h.metrics, "walera_refresh_ondemand_total", "result", "not_allowed"); got != 1 {
 		t.Errorf("not_allowed metric = %v; want 1", got)
-	}
-}
-
-func TestRefresh_Revoked_403_DropsSub(t *testing.T) {
-	t.Parallel()
-	kit := newTestHandler(t, nil, nil)
-	sub := registerLiveSub(t, kit, "u1", "users:42", "users", "id")
-	// Caller authorized at session time, but the re-fetch revokes the table.
-	refreshBackend(kit.backend, map[string][]string{"users": {"id"}}, map[string][]string{"orders": {"id"}}, 200)
-
-	w, _ := postRefresh(kit.h, `{"channel":"users:42"}`, true)
-	if w.Code != http.StatusForbidden {
-		t.Fatalf("status = %d; want 403", w.Code)
-	}
-	if got := reasonOf(t, w); got != "auth_revoked" {
-		t.Errorf("reason = %q; want auth_revoked", got)
-	}
-	if r := sub.Sub.Reason(); r != "auth_revoked" {
-		t.Errorf("sub drop reason = %q; want auth_revoked", r)
-	}
-	if got := gatherCounterValue(t, kit.h.metrics, "walera_refresh_ondemand_total", "result", "auth_revoked"); got != 1 {
-		t.Errorf("auth_revoked metric = %v; want 1", got)
-	}
-}
-
-func TestRefresh_Unavailable_503_KeepsStream(t *testing.T) {
-	t.Parallel()
-	kit := newTestHandler(t, nil, nil)
-	sub := registerLiveSub(t, kit, "u1", "users:42", "users", "id")
-	refreshBackend(kit.backend, map[string][]string{"users": {"id"}}, nil, http.StatusInternalServerError)
-
-	w, _ := postRefresh(kit.h, `{"channel":"users:42"}`, true)
-	if w.Code != http.StatusServiceUnavailable {
-		t.Fatalf("status = %d; want 503", w.Code)
-	}
-	if got := w.Header().Get("Retry-After"); got != "5" {
-		t.Errorf("Retry-After = %q; want 5", got)
-	}
-	if got := reasonOf(t, w); got != "auth_unavailable" {
-		t.Errorf("reason = %q; want auth_unavailable", got)
-	}
-	if r := sub.Sub.Reason(); r != "" {
-		t.Errorf("sub dropped with reason %q; want kept alive (best-effort)", r)
-	}
-	if got := gatherCounterValue(t, kit.h.metrics, "walera_refresh_ondemand_total", "result", "auth_unavailable"); got != 1 {
-		t.Errorf("auth_unavailable metric = %v; want 1", got)
 	}
 }
 
@@ -269,7 +212,7 @@ func TestRefresh_CredentialScrub(t *testing.T) {
 	t.Parallel()
 	kit := newTestHandler(t, nil, nil)
 	registerLiveSub(t, kit, "u1", "users:42", "users", "id")
-	refreshBackend(kit.backend, map[string][]string{"users": {"id"}}, map[string][]string{"users": {"id", "name"}}, 200)
+	refreshBackend(kit.backend, map[string][]string{"users": {"id", "name"}})
 
 	req := httptest.NewRequest(http.MethodPost, "/sse/v1/refresh", strings.NewReader(`{"channel":"users:42"}`))
 	req.Header.Set("Authorization", "Bearer valid")
@@ -336,7 +279,7 @@ func TestRefresh_MultipleOwnSubs_FanOut_200(t *testing.T) {
 	// Same user, same channel, two live subscribers (two tabs).
 	a := registerLiveSub(t, kit, "u1", "users:42", "users", "id")
 	b := registerLiveSub(t, kit, "u1", "users:42", "users", "id")
-	refreshBackend(kit.backend, map[string][]string{"users": {"id"}}, map[string][]string{"users": {"id", "name"}}, 200)
+	refreshBackend(kit.backend, map[string][]string{"users": {"id", "name"}})
 
 	w, _ := postRefresh(kit.h, `{"channel":"users:42"}`, true)
 	if w.Code != http.StatusOK {
@@ -555,24 +498,14 @@ func newRefreshFwdHandler(t *testing.T, fwdHeaders []string) (*Handler, *fakeAut
 	return h, backend, authReg, authClient, breaker
 }
 
-func TestRefresh_CredentialScrub_AndNoCredsToRefreshBackend(t *testing.T) {
+func TestRefresh_CredentialScrub_ForwardedHeaders(t *testing.T) {
 	t.Parallel()
 	h, backend, reg, client, breaker := newRefreshFwdHandler(t, []string{"X-Tenant"})
 	addLiveSub(t, reg, client, breaker, "u1", "users:42", "users", "id")
 
-	var mu sync.Mutex
-	var permHdr http.Header
-	backend.SetResp(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/auth/permissions" {
-			mu.Lock()
-			permHdr = r.Header.Clone()
-			mu.Unlock()
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write(permMapJSON("u1", map[string][]string{"users": {"id", "name"}}, 60))
-			return
-		}
+	backend.SetResp(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write(permMapJSON("u1", map[string][]string{"users": {"id"}}, 60))
+		_, _ = w.Write(permMapJSON("u1", map[string][]string{"users": {"id", "name"}}, 60))
 	})
 
 	req := httptest.NewRequest(http.MethodPost, "/sse/v1/refresh", strings.NewReader(`{"channel":"users:42"}`))
@@ -585,26 +518,11 @@ func TestRefresh_CredentialScrub_AndNoCredsToRefreshBackend(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d; want 200 (body=%s)", w.Code, w.Body.String())
 	}
-	// (1) The request header map is scrubbed of all forwarded credentials.
+	// The request header map is scrubbed of all forwarded credentials.
 	for _, hdr := range []string{"Authorization", "Cookie", "X-Tenant"} {
 		if got := req.Header.Get(hdr); got != "" {
 			t.Errorf("%s not scrubbed from request: %q", hdr, got)
 		}
-	}
-	// (2) The refresh re-fetch (HMAC-signed /auth/permissions) carries NO caller
-	//     credentials — the security invariant of the refresh path.
-	mu.Lock()
-	defer mu.Unlock()
-	if permHdr == nil {
-		t.Fatal("/auth/permissions was not contacted")
-	}
-	for _, hdr := range []string{"Authorization", "Cookie", "X-Tenant"} {
-		if got := permHdr.Get(hdr); got != "" {
-			t.Errorf("refresh backend request leaked %s: %q", hdr, got)
-		}
-	}
-	if permHdr.Get("X-Walera-Sig") == "" {
-		t.Errorf("refresh backend request missing HMAC signature")
 	}
 }
 
@@ -631,7 +549,7 @@ func TestRefresh_PerUserSlotsFull_StillRefreshes(t *testing.T) {
 	t.Parallel()
 	kit := newTestHandler(t, nil, &limits.Config{GlobalConcurrent: 1024, PerUserConcurrentMax: 2})
 	sub := registerLiveSub(t, kit, "u1", "users:42", "users", "id")
-	refreshBackend(kit.backend, map[string][]string{"users": {"id"}}, map[string][]string{"users": {"id", "name"}}, 200)
+	refreshBackend(kit.backend, map[string][]string{"users": {"id", "name"}})
 
 	// u1 holds one of two slots (its live stream). Refresh must not consume the
 	// other one, and must not fail when all are taken.
@@ -681,7 +599,7 @@ func TestRefresh_PartialSuccess_SwappedBeatsBusy_200(t *testing.T) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write(permMapJSON("u1", map[string][]string{"users": {"id"}}, 60))
+		_, _ = w.Write(permMapJSON("u1", map[string][]string{"users": {"id", "name"}}, 60))
 	})
 
 	var bg sync.WaitGroup
@@ -753,4 +671,31 @@ func errorOf(t *testing.T, w *httptest.ResponseRecorder) string {
 		t.Fatalf("decode error: %v (body=%s)", err, w.Body.String())
 	}
 	return b.Error
+}
+
+func TestRefresh_SwapsOpenSessionWhitelist_NoPermissionsCall(t *testing.T) {
+	t.Parallel()
+	kit := newTestHandler(t, nil, nil)
+	sub := registerLiveSub(t, kit, "u1", "users:42", "users", "id")
+	var permCalls atomic.Int32
+	kit.backend.SetResp(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/auth/permissions" {
+			permCalls.Add(1)
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(permMapJSON("u1", map[string][]string{"users": {"id", "name"}}, 60))
+	})
+
+	w, _ := postRefresh(kit.h, `{"channel":"users:42"}`, true)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d; want 200 (body=%s)", w.Code, w.Body.String())
+	}
+	if n := permCalls.Load(); n != 0 {
+		t.Errorf("/auth/permissions calls = %d; want 0 (OpenSession already returned the whitelist)", n)
+	}
+	if _, ok := sub.AuthMap.Load().Tables["users"]["name"]; !ok {
+		t.Errorf("whitelist not swapped: users.name missing")
+	}
 }

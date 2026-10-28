@@ -2,15 +2,13 @@ package auth
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/jackc/pglogrepl"
-
-	"github.com/walera/walera/internal/metrics"
 )
 
 func usersMap(userID string, cols ...string) *Whitelist {
@@ -375,7 +373,7 @@ func TestRefreshOwnByChannel_OnlyOwnChannelUser(t *testing.T) {
 	reg.Add(otherUser)
 	reg.Add(otherChan)
 
-	sum := reg.RefreshOwnByChannel(context.Background(), "users:42", "u1", "rid-test")
+	sum := reg.RefreshOwnByChannel("users:42", "u1", usersMap("u1", "id", "name"))
 	if sum.Matched != 1 || sum.Swapped != 1 {
 		t.Fatalf("summary = %+v; want Matched=1 Swapped=1", sum)
 	}
@@ -406,7 +404,7 @@ func TestRefreshOwnByChannel_FanOutMultipleOwnSubs(t *testing.T) {
 	reg.Add(a)
 	reg.Add(b)
 
-	sum := reg.RefreshOwnByChannel(context.Background(), "users:42", "u1", "rid-test")
+	sum := reg.RefreshOwnByChannel("users:42", "u1", usersMap("u1", "id", "name"))
 	if sum.Matched != 2 || sum.Swapped != 2 {
 		t.Fatalf("summary = %+v; want Matched=2 Swapped=2", sum)
 	}
@@ -436,7 +434,7 @@ func TestRefreshOwnByChannel_SwappedAndBusy(t *testing.T) {
 	reg.Add(busy)
 
 	busy.refreshMu.Lock() // simulate an in-flight TTL refresh on one sub
-	sum := reg.RefreshOwnByChannel(context.Background(), "users:42", "u1", "rid-test")
+	sum := reg.RefreshOwnByChannel("users:42", "u1", usersMap("u1", "id", "name"))
 	busy.refreshMu.Unlock()
 
 	if sum.Matched != 2 || sum.Swapped != 1 || sum.Busy != 1 {
@@ -499,7 +497,7 @@ func TestRefreshOwnByChannel_NoMatch(t *testing.T) {
 	reg := newTestRegistry(t)
 	reg.Add(ownSub(t, c, "u1", "users:42"))
 
-	sum := reg.RefreshOwnByChannel(context.Background(), "users:777", "u1", "rid-test")
+	sum := reg.RefreshOwnByChannel("users:777", "u1", usersMap("u1", "id", "name"))
 	if sum.Matched != 0 {
 		t.Fatalf("summary = %+v; want Matched=0", sum)
 	}
@@ -584,138 +582,59 @@ func TestRefreshOwnByChannel_WildcardNotCrossMatched(t *testing.T) {
 	reg := newTestRegistry(t)
 	reg.Add(ownSub(t, c, "u1", "users:all"))
 
-	if sum := reg.RefreshOwnByChannel(context.Background(), "users:42", "u1", "rid-test"); sum.Matched != 0 {
+	if sum := reg.RefreshOwnByChannel("users:42", "u1", usersMap("u1", "id", "name")); sum.Matched != 0 {
 		t.Errorf("exact channel matched a wildcard subscriber: %+v", sum)
 	}
-	if sum := reg.RefreshOwnByChannel(context.Background(), "users:all", "u1", "rid-test"); sum.Matched != 1 || sum.Swapped != 1 {
+	if sum := reg.RefreshOwnByChannel("users:all", "u1", usersMap("u1", "id", "name")); sum.Matched != 1 || sum.Swapped != 1 {
 		t.Errorf("wildcard channel summary = %+v; want Matched=1 Swapped=1", sum)
 	}
 }
 
-// TestRefreshOwnByChannel_SingleFetchMetricOnce proves the #9 fix: K live subs
-// on the same (user, channel) trigger exactly ONE backend round-trip and ONE
-// auth_refresh_total increment — the fetched whitelist is fanned out via
-// applyFetched, not re-fetched per sub.
-func TestRefreshOwnByChannel_SingleFetchMetricOnce(t *testing.T) {
+func TestRefreshOwnByChannel_AppliesGivenWhitelist_NoBackendCall(t *testing.T) {
 	t.Parallel()
 	srv := newScriptServer(t, func(_ int64, w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(permissionsBody(t, map[string][]string{"users": {"id", "name"}}))
+		w.WriteHeader(http.StatusInternalServerError)
 	})
 	c, _ := newSubTestClient(t, srv.srv.URL)
-	mc := metrics.New()
-
-	mkSub := func() *Subscriber {
-		return newTestSubscriber(t, subscriberTestOpts{
-			Client:     c,
-			Channel:    "users:42",
-			UserID:     "u1",
-			InitialMap: usersMap("u1", "id"),
-			Metrics:    mc,
-		})
-	}
-	a, b, d := mkSub(), mkSub(), mkSub()
-
+	sub := ownSub(t, c, "u1", "users:42")
 	reg := newTestRegistry(t)
-	reg.Add(a)
-	reg.Add(b)
-	reg.Add(d)
+	reg.Add(sub)
 
-	sum := reg.RefreshOwnByChannel(context.Background(), "users:42", "u1", "rid-test")
-	if sum.Matched != 3 || sum.Swapped != 3 {
-		t.Fatalf("summary = %+v; want Matched=3 Swapped=3", sum)
-	}
-	if n := srv.calls.Load(); n != 1 {
-		t.Errorf("backend calls = %d; want 1 (single fetch fanned out to K subs)", n)
-	}
-	if got := gatherAuthRefreshCount(t, mc, "ok"); got != 1 {
-		t.Errorf("auth_refresh_total{result=ok} = %v; want 1 (metric recorded once per group, not per sub)", got)
-	}
-	for i, s := range []*Subscriber{a, b, d} {
-		if _, ok := s.AuthMap.Load().Tables["users"]["name"]; !ok {
-			t.Errorf("sub %d not refreshed: users.name missing", i)
-		}
-	}
-}
+	fresh := usersMap("u1", "id", "name")
+	fresh.InitialData = json.RawMessage(`{"startup":"payload"}`)
 
-// TestRefreshOwnByChannel_BreakerOpen_ShortCircuits proves the #5 group-level
-// gate: when the lead subscriber's breaker is open the whole group is reported
-// Unavailable and the backend is never contacted.
-func TestRefreshOwnByChannel_BreakerOpen_ShortCircuits(t *testing.T) {
-	t.Parallel()
-	srv := newScriptServer(t, func(_ int64, w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(permissionsBody(t, map[string][]string{"users": {"id", "name"}}))
-	})
-	c, _ := newSubTestClient(t, srv.srv.URL)
-
-	mkSub := func() *Subscriber {
-		return newTestSubscriber(t, subscriberTestOpts{
-			Client:     c,
-			Breaker:    denyBreaker{}, // breaker open
-			Channel:    "users:42",
-			UserID:     "u1",
-			InitialMap: usersMap("u1", "id"),
-		})
-	}
-	a, b := mkSub(), mkSub()
-
-	reg := newTestRegistry(t)
-	reg.Add(a)
-	reg.Add(b)
-
-	sum := reg.RefreshOwnByChannel(context.Background(), "users:42", "u1", "rid-test")
-	if sum.Matched != 2 || sum.Unavailable != 2 {
-		t.Fatalf("summary = %+v; want Matched=2 Unavailable=2", sum)
-	}
-	if sum.Swapped != 0 || sum.Busy != 0 || sum.Revoked != 0 {
-		t.Errorf("summary = %+v; want only Unavailable set", sum)
+	sum := reg.RefreshOwnByChannel("users:42", "u1", fresh)
+	if sum.Matched != 1 || sum.Swapped != 1 {
+		t.Fatalf("summary = %+v; want Matched=1 Swapped=1", sum)
 	}
 	if n := srv.calls.Load(); n != 0 {
-		t.Errorf("backend calls = %d; want 0 (open breaker must not contact the backend)", n)
+		t.Errorf("backend calls = %d; want 0 (whitelist is supplied by the caller)", n)
 	}
-	for i, s := range []*Subscriber{a, b} {
-		if _, ok := s.AuthMap.Load().Tables["users"]["name"]; ok {
-			t.Errorf("sub %d swapped while breaker open; want untouched", i)
-		}
-		if r := s.Sub.Reason(); r != "" {
-			t.Errorf("sub %d dropped with reason %q; want kept alive", i, r)
-		}
+	got := sub.AuthMap.Load()
+	if _, ok := got.Tables["users"]["name"]; !ok {
+		t.Errorf("whitelist not swapped: users.name missing")
+	}
+	if got.InitialData != nil {
+		t.Errorf("swapped whitelist retains InitialData (%d bytes); want nil", len(got.InitialData))
 	}
 }
 
-// TestRefreshThreadsRequestID proves the #11 fix: the client-supplied requestID
-// reaches the backend on both the single (RefreshOnce) and group
-// (RefreshOwnByChannel) on-demand paths, instead of a hardcoded fresh ID.
-func TestRefreshThreadsRequestID(t *testing.T) {
+func TestRefreshOwnByChannel_RevokedDropsSub(t *testing.T) {
 	t.Parallel()
-	var gotReqID atomic.Value
-	srv := newScriptServer(t, func(_ int64, w http.ResponseWriter, r *http.Request) {
-		gotReqID.Store(r.Header.Get("X-Request-ID"))
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(permissionsBody(t, map[string][]string{"users": {"id", "name"}}))
+	srv := newScriptServer(t, func(_ int64, w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
 	})
 	c, _ := newSubTestClient(t, srv.srv.URL)
-
-	s := newTestSubscriber(t, subscriberTestOpts{
-		Client:     c,
-		Channel:    "users:42",
-		UserID:     "u1",
-		InitialMap: usersMap("u1", "id"),
-	})
-	if got := s.RefreshOnce(context.Background(), "client-rid-once"); got != RefreshSwapped {
-		t.Fatalf("RefreshOnce = %v; want RefreshSwapped", got)
-	}
-	if got := gotReqID.Load(); got != "client-rid-once" {
-		t.Errorf("RefreshOnce forwarded X-Request-ID = %v; want client-rid-once", got)
-	}
-
+	sub := ownSub(t, c, "u1", "users:42")
 	reg := newTestRegistry(t)
-	reg.Add(ownSub(t, c, "u1", "users:42"))
-	if sum := reg.RefreshOwnByChannel(context.Background(), "users:42", "u1", "client-rid-group"); sum.Swapped != 1 {
-		t.Fatalf("RefreshOwnByChannel summary = %+v; want Swapped=1", sum)
+	reg.Add(sub)
+
+	fresh := &Whitelist{UserID: "u1", Tables: map[string]map[string]struct{}{"orders": {}}}
+	sum := reg.RefreshOwnByChannel("users:42", "u1", fresh)
+	if sum.Matched != 1 || sum.Revoked != 1 {
+		t.Fatalf("summary = %+v; want Matched=1 Revoked=1", sum)
 	}
-	if got := gotReqID.Load(); got != "client-rid-group" {
-		t.Errorf("RefreshOwnByChannel forwarded X-Request-ID = %v; want client-rid-group", got)
+	if r := sub.Sub.Reason(); r != "auth_revoked" {
+		t.Errorf("drop reason = %q; want auth_revoked", r)
 	}
 }

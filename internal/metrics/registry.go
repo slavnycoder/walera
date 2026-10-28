@@ -105,7 +105,7 @@ func New() *Registry {
 	for _, result := range []string{"ok", "unauthorized", "forbidden", "not_found", "unavailable"} {
 		r.authRefreshTotal.WithLabelValues(result).Add(0)
 	}
-	for _, result := range []string{"swapped", "no_live_subscriber", "not_allowed", "auth_revoked", "auth_unavailable", "refresh_in_progress"} {
+	for _, result := range []string{"swapped", "no_live_subscriber", "not_allowed", "auth_revoked", "refresh_in_progress"} {
 		r.refreshOnDemandTotal.WithLabelValues(result).Add(0)
 	}
 
@@ -209,7 +209,7 @@ func newAuthMetrics(r *Registry) {
 	}, []string{"result"})
 	r.refreshOnDemandTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "walera_refresh_ondemand_total",
-		Help: "On-demand POST /sse/v1/refresh outcomes by result (swapped|no_live_subscriber|not_allowed|auth_revoked|auth_unavailable|refresh_in_progress); separates handler outcomes from TTL-driven auth_refresh_total.",
+		Help: "On-demand POST /sse/v1/refresh outcomes by result (swapped|no_live_subscriber|not_allowed|auth_revoked|refresh_in_progress); separates handler outcomes from TTL-driven auth_refresh_total.",
 	}, []string{"result"})
 }
 

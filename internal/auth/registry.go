@@ -63,29 +63,17 @@ func (r *Subscribers) Len() int {
 
 // RefreshSummary aggregates the per-subscriber outcomes of an on-demand refresh.
 type RefreshSummary struct {
-	Matched     int
-	Swapped     int
-	Revoked     int
-	Unavailable int
-	Busy        int
+	Matched int
+	Swapped int
+	Revoked int
+	Busy    int
 }
 
-// RefreshOwnByChannel synchronously refreshes the live subscribers owned by
-// userID and subscribed to channel (the caller's-own scope used by
-// POST /sse/v1/refresh). Matching subscribers are snapshotted under the registry
-// lock, then the group is refreshed off-lock with a SINGLE backend round-trip:
-// the matched subscribers share identical permissions, so one lead.fetchPermissions
-// is fanned out to every sub via applyFetched instead of K identical
-// RefreshPermissions calls (and the auth_refresh_total metric is recorded once,
-// not per-sub). The group is gated by the AUTH-04 breaker through the lead
-// subscriber: when the breaker is open every matched sub is reported Unavailable
-// without touching the backend (mirrors RefreshLoop / RefreshOnce). The backend
-// fetch must never run while r.mu is held (mirrors fanoutStaleRefreshes). The
-// match is exact string equality on both channel and userID, so a wildcard
-// subscriber is not refreshed by an exact channel and vice versa, and one user's
-// POST can never refresh another user's stream. The client requestID is threaded
-// to the backend for end-to-end correlation. Returns the aggregate outcome.
-func (r *Subscribers) RefreshOwnByChannel(ctx context.Context, channel, userID, requestID string) RefreshSummary {
+// RefreshOwnByChannel applies fresh — the whitelist OpenSession just returned for
+// this user and channel — to the user's live subscribers on channel. No backend
+// call. Exact match on channel and userID, so a wildcard and an exact channel
+// never cross-match and one user can't touch another's stream.
+func (r *Subscribers) RefreshOwnByChannel(channel, userID string, fresh *Whitelist) RefreshSummary {
 	r.mu.Lock()
 	matched := make([]*Subscriber, 0, 4)
 	for _, s := range r.subs {
@@ -96,31 +84,15 @@ func (r *Subscribers) RefreshOwnByChannel(ctx context.Context, channel, userID, 
 	r.mu.Unlock()
 
 	sum := RefreshSummary{Matched: len(matched)}
-	if sum.Matched == 0 {
-		return sum
-	}
-
-	lead := matched[0]
-	if lead.breaker != nil && !lead.breaker.Allow() {
-		sum.Unavailable = len(matched)
-		return sum
-	}
-
-	fresh, err := lead.fetchPermissions(ctx, requestID)
 	for _, s := range matched {
 		if !s.refreshMu.TryLock() {
 			sum.Busy++
 			continue
 		}
-		switch s.applyFetched(fresh, err) {
-		case attemptSwapped:
-			sum.Swapped++
-		case attemptRevoked:
+		if s.applyFetched(fresh, nil) == attemptRevoked {
 			sum.Revoked++
-		case attemptUnavailable:
-			sum.Unavailable++
-		case attemptFailed:
-			sum.Unavailable++
+		} else {
+			sum.Swapped++
 		}
 		s.refreshMu.Unlock()
 	}

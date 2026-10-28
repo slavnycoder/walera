@@ -26,31 +26,23 @@ func (h *Handler) serveRefreshPreflight(w http.ResponseWriter, r *http.Request) 
 	}
 }
 
-// serveRefresh handles POST /sse/v1/refresh. The frontend sends a channel name
-// in the JSON body; Walera authenticates the caller (the same identity path as
-// the SSE handshake, via the shared authenticate helper), authorizes them for the
-// channel, and then synchronously re-fetches the channel's permissions from the
-// auth backend and atomically swaps the whitelist for the caller's OWN live
-// subscriber(s) on that channel — mid-stream, no reconnect. The refresh delegates
-// to auth.Subscribers.RefreshOwnByChannel, which shares the fetch/apply primitives
-// with the TTL loop (so it inherits the identical swap, revocation-drop, and
-// breaker semantics) but issues a SINGLE backend fetch for the whole group and
-// returns an aggregate result; there is no TTL backoff.
+// serveRefresh handles POST /sse/v1/refresh {"channel":"..."}: authenticates the
+// caller via OpenSession (same path as the SSE handshake) and swaps the returned
+// whitelist into the caller's own live subscriber(s) on that channel, mid-stream.
 //
 // Admission: only the global semaphore. The per-user counter caps concurrent
 // streams and is held for a stream's lifetime, so taking it here would 429 a
 // user with a full set of streams.
 //
 // Status codes:
-//   - 200 {"refreshed":N}     the caller's N subscriber(s) were re-authorized and swapped
-//   - 400 {"error":...}       malformed body / channel / request id
-//   - 401                     no credentials presented
-//   - 403 {"reason":...}      caller not authorized for the channel (not_allowed),
-//     or the re-fetch revoked access and the subscriber was dropped (auth_revoked)
-//   - 404 {"reason":"no_live_subscriber"}  the caller has no live stream on the channel
-//   - 409 {"reason":"refresh_in_progress"} a refresh is already in flight (Retry-After: 1)
-//   - 503 {"reason":"auth_unavailable"}    the backend re-fetch failed (Retry-After: 5)
-//   - 503 (status only)       global concurrency exhausted (Retry-After: 5)
+//   - 200 {"refreshed":N}                  N subscriber(s) swapped
+//   - 400 {"error":...}                    malformed body / channel / request id
+//   - 401, 403, 503                        OpenSession failure, as in the handshake
+//   - 403 {"reason":"not_allowed"}         channel's table not granted
+//   - 403 {"reason":"auth_revoked"}        fresh whitelist revokes the channel; sub dropped
+//   - 404 {"reason":"no_live_subscriber"}  no live stream on the channel
+//   - 409 {"reason":"refresh_in_progress"} a TTL refresh holds the lock (Retry-After: 1)
+//   - 503 (status only)                    global concurrency exhausted (Retry-After: 5)
 func (h *Handler) serveRefresh(w http.ResponseWriter, r *http.Request) {
 	// 0. Global admission, before any auth work, so an accept-storm of refreshes
 	//    can't blow up goroutines or hammer the backend. Released on return.
@@ -75,7 +67,7 @@ func (h *Handler) serveRefresh(w http.ResponseWriter, r *http.Request) {
 
 	// 2. Authenticate the caller via the shared identity path (the same helper the
 	//    SSE handshake uses), including the immediate credential scrub.
-	authMap, requestID, ok := h.authenticate(w, r, channelStr)
+	authMap, _, ok := h.authenticate(w, r, channelStr)
 	if !ok {
 		return
 	}
@@ -86,43 +78,21 @@ func (h *Handler) serveRefresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 3. Synchronously refresh the caller's own live subscriber(s) on the channel.
-	//    Branch precedence keeps a partial success from hiding behind a concurrent
-	//    failure: an authoritative revocation beats everything, then any swap beats
-	//    Busy/Unavailable, then a real backend failure, then in-flight (Busy).
-	sum := h.authRegistry.RefreshOwnByChannel(r.Context(), channelStr, authMap.UserID, requestID)
+	// 3. Apply the whitelist OpenSession just returned to the caller's own live
+	//    subscriber(s). Revocation beats a swap; a swap beats a concurrent Busy.
+	sum := h.authRegistry.RefreshOwnByChannel(channelStr, authMap.UserID, authMap)
 	switch {
 	case sum.Matched == 0:
 		h.metrics.RefreshOnDemand("no_live_subscriber").Inc()
 		h.writeJSONReason(w, r, http.StatusNotFound, "no_live_subscriber")
 	case sum.Revoked > 0:
-		// The re-fetch determined the caller is no longer entitled to the channel;
-		// the subscriber was dropped (auth_revoked), mirroring the TTL path.
 		h.metrics.RefreshOnDemand("auth_revoked").Inc()
 		h.writeJSONReason(w, r, http.StatusForbidden, "auth_revoked")
 	case sum.Swapped > 0:
-		// Partial or full success: at least one of the caller's subscribers was
-		// re-authorized and swapped (a concurrent Busy/Unavailable does not mask it).
 		h.metrics.RefreshOnDemand("swapped").Inc()
 		h.writeRefreshOK(w, r, sum.Swapped)
-	case sum.Unavailable > 0:
-		// A real transient backend failure: the stream(s) are kept on their current
-		// whitelist; the caller may retry. This is the SINGLE on-demand log site —
-		// the shared fetchPermissions no longer logs (only the TTL refreshAttempt
-		// does), so an explicitly requested on-demand failure is observable at any
-		// ttl. Channel/user_id are identifiers, not row data.
-		h.logger.Warn().
-			Str("channel", channelStr).
-			Str("user_id", authMap.UserID).
-			Int("matched", sum.Matched).
-			Int("unavailable", sum.Unavailable).
-			Msg("on-demand refresh did not complete")
-		h.metrics.RefreshOnDemand("auth_unavailable").Inc()
-		h.writeReasonRetry(w, r, http.StatusServiceUnavailable, 5, "auth_unavailable")
 	default:
-		// Only Busy remains: a refresh (a TTL tick, breaker fan-out, or a concurrent
-		// POST) already holds refreshMu — the stream is healthy and in-flight, so
-		// this is a 409, not a 503. No warn: nothing failed.
+		// Only Busy: a TTL refresh holds the swap lock; the stream is healthy.
 		h.metrics.RefreshOnDemand("refresh_in_progress").Inc()
 		h.writeReasonRetry(w, r, http.StatusConflict, 1, "refresh_in_progress")
 	}

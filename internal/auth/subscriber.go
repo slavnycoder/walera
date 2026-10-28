@@ -461,11 +461,11 @@ func (s *Subscriber) swapMap(fresh *Whitelist) {
 	if fresh == nil {
 		return
 	}
-	// Shallow-clone so one fetched whitelist can be fanned out to K subscribers
-	// on the same (user, channel) without a data race on RefreshLSN: each sub
-	// stores its own copy stamped with its own LSN. The Tables map is read-only
-	// after decode, so sharing it across copies is safe.
+	// Copy so one whitelist can be applied to K subscribers, each stamped with its
+	// own LSN. Tables is read-only after decode and safe to share. InitialData is
+	// a handshake-only payload; don't keep it alive per subscriber.
 	cp := *fresh
+	cp.InitialData = nil
 	cp.RefreshLSN = s.lsn()
 	s.PrevWhitelist.Store(s.AuthMap.Load())
 	s.AuthMap.Store(&cp)
