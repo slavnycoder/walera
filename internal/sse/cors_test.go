@@ -110,7 +110,7 @@ func TestPreflight_OptionsWithMatchingOrigin_204(t *testing.T) {
 	r.Header.Set("Origin", "https://app.example")
 	w := httptest.NewRecorder()
 
-	handled := handlePreflight(w, r, []string{"https://app.example"})
+	handled := handlePreflight(w, r, []string{"https://app.example"}, buildAllowHeaders(nil))
 	if !handled {
 		t.Fatalf("handled = false; want true for OPTIONS request")
 	}
@@ -127,8 +127,8 @@ func TestPreflight_OptionsWithMatchingOrigin_204(t *testing.T) {
 	if hdr.Get("Access-Control-Allow-Methods") != "GET, OPTIONS" {
 		t.Errorf("Access-Control-Allow-Methods = %q; want %q", hdr.Get("Access-Control-Allow-Methods"), "GET, OPTIONS")
 	}
-	if hdr.Get("Access-Control-Allow-Headers") == "" {
-		t.Errorf("Access-Control-Allow-Headers = empty; want non-empty")
+	if got := hdr.Get("Access-Control-Allow-Headers"); got != "Authorization, X-Request-ID, Content-Type" {
+		t.Errorf("Access-Control-Allow-Headers = %q; want base set", got)
 	}
 	if hdr.Get("Access-Control-Max-Age") != "86400" {
 		t.Errorf("Access-Control-Max-Age = %q; want %q", hdr.Get("Access-Control-Max-Age"), "86400")
@@ -141,7 +141,7 @@ func TestPreflight_OptionsNoOrigin_204VaryOnly(t *testing.T) {
 	r := httptest.NewRequest(http.MethodOptions, "/sse/v1/users/42", nil)
 	w := httptest.NewRecorder()
 
-	handled := handlePreflight(w, r, []string{"https://app.example"})
+	handled := handlePreflight(w, r, []string{"https://app.example"}, buildAllowHeaders(nil))
 	if !handled {
 		t.Fatalf("handled = false; want true for OPTIONS request")
 	}
@@ -162,12 +162,38 @@ func TestPreflight_NonOptions_NotHandled(t *testing.T) {
 	r := httptest.NewRequest(http.MethodGet, "/sse/v1/users/42", nil)
 	w := httptest.NewRecorder()
 
-	handled := handlePreflight(w, r, []string{"https://app.example"})
+	handled := handlePreflight(w, r, []string{"https://app.example"}, buildAllowHeaders(nil))
 	if handled {
 		t.Errorf("handled = true; want false for GET request")
 	}
 
 	if w.Header().Get("Vary") != "" {
 		t.Errorf("Vary = %q; want empty (preflight should not set headers on non-OPTIONS)", w.Header().Get("Vary"))
+	}
+}
+
+func TestBuildAllowHeaders(t *testing.T) {
+	t.Parallel()
+
+	const base = "Authorization, X-Request-ID, Content-Type"
+	cases := []struct {
+		name      string
+		forwarded []string
+		want      string
+	}{
+		{"nil → base unchanged", nil, base},
+		{"empty → base unchanged", []string{}, base},
+		{"one forwarded header appended + canonicalized", []string{"x-tenant"}, base + ", X-Tenant"},
+		{"multiple forwarded headers", []string{"X-Tenant", "x-region-id"}, base + ", X-Tenant, X-Region-Id"},
+		{"dedupes a base header (case-insensitive)", []string{"authorization", "X-Tenant"}, base + ", X-Tenant"},
+		{"dedupes a repeated forwarded header", []string{"X-Tenant", "x-tenant"}, base + ", X-Tenant"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := buildAllowHeaders(tc.forwarded); got != tc.want {
+				t.Errorf("buildAllowHeaders(%v) = %q; want %q", tc.forwarded, got, tc.want)
+			}
+		})
 	}
 }

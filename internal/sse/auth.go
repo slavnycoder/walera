@@ -133,18 +133,16 @@ type handshakeResult struct {
 	perUserAcquired bool
 }
 
-func (h *Handler) runHandshake(w http.ResponseWriter, r *http.Request, table, channelStr string) (handshakeResult, bool) {
-	var res handshakeResult
-
-	if !h.limits.AcquireGlobal() {
-		h.writeStatusOnlyError(w, r, http.StatusServiceUnavailable, 5)
-		return res, false
-	}
-	res.globalAcquired = true
-
-	ip := h.clientIP(r)
-	res.clientIP = ip
-
+// authenticate runs the shared identity sequence used by both the SSE handshake
+// and the on-demand POST /sse/v1/refresh endpoint: Bearer-token cut + forwarded
+// credentials, require-at-least-one (else 401), X-Request-ID validate/derive
+// (invalid → 400 invalid_request_id), OpenSession against channelStr, and an
+// immediate scrub of all caller credentials from our scope and the request header
+// map. On any failure it writes the response and returns ok=false. It does NOT
+// enforce admission limits or table authorization — those belong to the caller,
+// which sequences them around this call. On success it returns the authorized
+// whitelist and the request id (threaded onward for end-to-end correlation).
+func (h *Handler) authenticate(w http.ResponseWriter, r *http.Request, channelStr string) (*auth.Whitelist, string, bool) {
 	authHdr := r.Header.Get("Authorization")
 	token := ""
 	if t, ok := strings.CutPrefix(authHdr, "Bearer "); ok {
@@ -154,7 +152,7 @@ func (h *Handler) runHandshake(w http.ResponseWriter, r *http.Request, table, ch
 	if token == "" && fwd.Empty() {
 
 		h.writeStatusOnlyError(w, r, http.StatusUnauthorized, 0)
-		return res, false
+		return nil, "", false
 	}
 	requestID := r.Header.Get("X-Request-ID")
 	if requestID == "" {
@@ -162,7 +160,7 @@ func (h *Handler) runHandshake(w http.ResponseWriter, r *http.Request, table, ch
 	} else if !validRequestID(requestID) {
 
 		h.writeJSONError(w, r, http.StatusBadRequest, "invalid_request_id")
-		return res, false
+		return nil, "", false
 	}
 
 	authMap, err := h.authClient.OpenSession(r.Context(), token, fwd, channelStr, requestID)
@@ -181,6 +179,25 @@ func (h *Handler) runHandshake(w http.ResponseWriter, r *http.Request, table, ch
 	fwd = auth.ForwardedAuth{}
 	if err != nil {
 		h.writeAuthError(w, r, err)
+		return nil, "", false
+	}
+	return authMap, requestID, true
+}
+
+func (h *Handler) runHandshake(w http.ResponseWriter, r *http.Request, table, channelStr string) (handshakeResult, bool) {
+	var res handshakeResult
+
+	if !h.limits.AcquireGlobal() {
+		h.writeStatusOnlyError(w, r, http.StatusServiceUnavailable, 5)
+		return res, false
+	}
+	res.globalAcquired = true
+
+	ip := h.clientIP(r)
+	res.clientIP = ip
+
+	authMap, requestID, ok := h.authenticate(w, r, channelStr)
+	if !ok {
 		return res, false
 	}
 

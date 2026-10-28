@@ -107,6 +107,9 @@ func TestRefresh_HappyPath_200(t *testing.T) {
 	if _, ok := sub.AuthMap.Load().Tables["users"]["name"]; !ok {
 		t.Errorf("whitelist not swapped: users.name missing")
 	}
+	if got := gatherCounterValue(t, kit.h.metrics, "walera_refresh_ondemand_total", "result", "swapped"); got != 1 {
+		t.Errorf("swapped metric = %v; want 1", got)
+	}
 }
 
 func TestRefresh_NoLiveSubscriber_404(t *testing.T) {
@@ -120,6 +123,9 @@ func TestRefresh_NoLiveSubscriber_404(t *testing.T) {
 	}
 	if got := reasonOf(t, w); got != "no_live_subscriber" {
 		t.Errorf("reason = %q; want no_live_subscriber", got)
+	}
+	if got := gatherCounterValue(t, kit.h.metrics, "walera_refresh_ondemand_total", "result", "no_live_subscriber"); got != 1 {
+		t.Errorf("no_live_subscriber metric = %v; want 1", got)
 	}
 }
 
@@ -172,6 +178,9 @@ func TestRefresh_NotAllowed_403(t *testing.T) {
 	if got := reasonOf(t, w); got != "not_allowed" {
 		t.Errorf("reason = %q; want not_allowed", got)
 	}
+	if got := gatherCounterValue(t, kit.h.metrics, "walera_refresh_ondemand_total", "result", "not_allowed"); got != 1 {
+		t.Errorf("not_allowed metric = %v; want 1", got)
+	}
 }
 
 func TestRefresh_Revoked_403_DropsSub(t *testing.T) {
@@ -190,6 +199,9 @@ func TestRefresh_Revoked_403_DropsSub(t *testing.T) {
 	}
 	if r := sub.Sub.Reason(); r != "auth_revoked" {
 		t.Errorf("sub drop reason = %q; want auth_revoked", r)
+	}
+	if got := gatherCounterValue(t, kit.h.metrics, "walera_refresh_ondemand_total", "result", "auth_revoked"); got != 1 {
+		t.Errorf("auth_revoked metric = %v; want 1", got)
 	}
 }
 
@@ -211,6 +223,9 @@ func TestRefresh_Unavailable_503_KeepsStream(t *testing.T) {
 	}
 	if r := sub.Sub.Reason(); r != "" {
 		t.Errorf("sub dropped with reason %q; want kept alive (best-effort)", r)
+	}
+	if got := gatherCounterValue(t, kit.h.metrics, "walera_refresh_ondemand_total", "result", "auth_unavailable"); got != 1 {
+		t.Errorf("auth_unavailable metric = %v; want 1", got)
 	}
 }
 
@@ -410,22 +425,26 @@ func TestRefresh_OpenSessionUnavailable_503(t *testing.T) {
 	}
 }
 
-func TestRefresh_Busy_503_KeepsStream(t *testing.T) {
+func TestRefresh_Busy_409_KeepsStream(t *testing.T) {
 	t.Parallel()
 	kit := newTestHandler(t, nil, nil)
 	sub := registerLiveSub(t, kit, "u1", "users:42", "users", "id")
 
-	// A blocking /auth/permissions lets a background refresh hold refreshMu while
-	// the POST runs, so the POST observes RefreshBusy deterministically.
-	inflight := make(chan struct{}, 1)
+	// A background RefreshOnce holds refreshMu while blocked inside its backend
+	// fetch (the FIRST /auth/permissions call). RefreshOwnByChannel fetches
+	// off-lock and only then TryLocks each sub, so the POST's own fetch must return
+	// while the background still holds the lock — hence only the first
+	// /auth/permissions call blocks; later calls answer immediately, letting the
+	// POST reach a TryLock that deterministically fails → RefreshBusy → 409.
+	var permCalls atomic.Int32
+	inflight := make(chan struct{})
 	proceed := make(chan struct{})
 	kit.backend.SetResp(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/auth/permissions" {
-			select {
-			case inflight <- struct{}{}:
-			default:
+			if permCalls.Add(1) == 1 {
+				close(inflight)
+				<-proceed
 			}
-			<-proceed
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write(permMapJSON("u1", map[string][]string{"users": {"id", "name"}}, 60))
 			return
@@ -438,19 +457,25 @@ func TestRefresh_Busy_503_KeepsStream(t *testing.T) {
 	bg.Add(1)
 	go func() {
 		defer bg.Done()
-		kit.h.authRegistry.RefreshOwnByChannel(context.Background(), "users:42", "u1")
+		sub.RefreshOnce(context.Background(), "bg-refresh")
 	}()
-	<-inflight // background refresh now holds refreshMu inside the backend call
+	<-inflight // background RefreshOnce now holds refreshMu inside the backend call
 
 	w, _ := postRefresh(kit.h, `{"channel":"users:42"}`, true)
-	if w.Code != http.StatusServiceUnavailable {
-		t.Fatalf("status = %d; want 503 (busy)", w.Code)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("status = %d; want 409 (refresh in progress)", w.Code)
 	}
-	if got := reasonOf(t, w); got != "auth_unavailable" {
-		t.Errorf("reason = %q; want auth_unavailable", got)
+	if got := reasonOf(t, w); got != "refresh_in_progress" {
+		t.Errorf("reason = %q; want refresh_in_progress", got)
+	}
+	if got := w.Header().Get("Retry-After"); got != "1" {
+		t.Errorf("Retry-After = %q; want 1", got)
 	}
 	if r := sub.Sub.Reason(); r != "" {
 		t.Errorf("sub dropped with reason %q; want kept alive while busy", r)
+	}
+	if got := gatherCounterValue(t, kit.h.metrics, "walera_refresh_ondemand_total", "result", "refresh_in_progress"); got != 1 {
+		t.Errorf("refresh_in_progress metric = %v; want 1", got)
 	}
 
 	close(proceed)
@@ -580,6 +605,116 @@ func TestRefresh_CredentialScrub_AndNoCredsToRefreshBackend(t *testing.T) {
 	}
 	if permHdr.Get("X-Walera-Sig") == "" {
 		t.Errorf("refresh backend request missing HMAC signature")
+	}
+}
+
+func TestRefresh_GlobalLimitExhausted_503(t *testing.T) {
+	t.Parallel()
+	kit := newTestHandler(t, nil, &limits.Config{GlobalConcurrent: 1, PerUserConcurrentMax: 10})
+	// Occupy the only global slot so the refresh's AcquireGlobal fails before any
+	// auth work happens.
+	if !kit.limits.AcquireGlobal() {
+		t.Fatal("precondition: could not acquire the single global slot")
+	}
+	defer kit.limits.ReleaseGlobal()
+
+	w, _ := postRefresh(kit.h, `{"channel":"users:42"}`, true)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d; want 503 (global limit)", w.Code)
+	}
+	if got := w.Header().Get("Retry-After"); got != "5" {
+		t.Errorf("Retry-After = %q; want 5", got)
+	}
+}
+
+func TestRefresh_PerUserLimitExhausted_429(t *testing.T) {
+	t.Parallel()
+	kit := newTestHandler(t, nil, &limits.Config{GlobalConcurrent: 1024, PerUserConcurrentMax: 1})
+	validMapBackend(kit.backend) // OpenSession authenticates the caller as u1
+	// Occupy u1's only per-user slot so the refresh's AcquirePerUser fails after
+	// OpenSession yields the user_id (mirrors the handshake order).
+	if ok, _ := kit.limits.AcquirePerUser("u1"); !ok {
+		t.Fatal("precondition: could not acquire the single per-user slot")
+	}
+	defer kit.limits.ReleasePerUser("u1")
+
+	w, _ := postRefresh(kit.h, `{"channel":"users:42"}`, true)
+	if w.Code != http.StatusTooManyRequests {
+		t.Fatalf("status = %d; want 429 (per-user limit)", w.Code)
+	}
+}
+
+func TestRefresh_PartialSuccess_SwappedBeatsBusy_200(t *testing.T) {
+	t.Parallel()
+	kit := newTestHandler(t, nil, nil)
+	// Two live subs for the same (user, channel): one is held busy by a background
+	// refresh, the other swaps. Swapped must win over a concurrent Busy → 200.
+	busySub := registerLiveSub(t, kit, "u1", "users:42", "users", "id")
+	freeSub := registerLiveSub(t, kit, "u1", "users:42", "users", "id")
+
+	var permCalls atomic.Int32
+	inflight := make(chan struct{})
+	proceed := make(chan struct{})
+	kit.backend.SetResp(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/auth/permissions" {
+			if permCalls.Add(1) == 1 {
+				close(inflight)
+				<-proceed
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write(permMapJSON("u1", map[string][]string{"users": {"id", "name"}}, 60))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(permMapJSON("u1", map[string][]string{"users": {"id"}}, 60))
+	})
+
+	var bg sync.WaitGroup
+	bg.Add(1)
+	go func() {
+		defer bg.Done()
+		busySub.RefreshOnce(context.Background(), "bg-refresh")
+	}()
+	<-inflight // busySub's refreshMu is now held by the blocked background refresh
+
+	w, _ := postRefresh(kit.h, `{"channel":"users:42"}`, true)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d; want 200 (partial success beats busy) body=%s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Refreshed int `json:"refreshed"`
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
+	if resp.Refreshed != 1 {
+		t.Errorf("refreshed = %d; want 1 (only the free sub swapped)", resp.Refreshed)
+	}
+	if _, ok := freeSub.AuthMap.Load().Tables["users"]["name"]; !ok {
+		t.Errorf("free sub not swapped")
+	}
+	if got := gatherCounterValue(t, kit.h.metrics, "walera_refresh_ondemand_total", "result", "swapped"); got != 1 {
+		t.Errorf("swapped metric = %v; want 1", got)
+	}
+
+	close(proceed)
+	bg.Wait()
+}
+
+func TestRefresh_Preflight_AdvertisesForwardedHeader(t *testing.T) {
+	t.Parallel()
+	h, _, _, _, _ := newRefreshFwdHandler(t, []string{"X-Tenant"})
+
+	req := httptest.NewRequest(http.MethodOptions, "/sse/v1/refresh", nil)
+	req.Header.Set("Origin", "https://app.example")
+	w := httptest.NewRecorder()
+	h.serveRefreshPreflight(w, req)
+
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("status = %d; want 204", w.Code)
+	}
+	got := w.Header().Get("Access-Control-Allow-Headers")
+	want := "Authorization, X-Request-ID, Content-Type, X-Tenant"
+	if got != want {
+		t.Errorf("Access-Control-Allow-Headers = %q; want %q (forwarded header must be advertised)", got, want)
 	}
 }
 

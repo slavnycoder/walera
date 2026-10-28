@@ -36,6 +36,8 @@ type Registry struct {
 
 	authRefreshTotal *prometheus.CounterVec
 
+	refreshOnDemandTotal *prometheus.CounterVec
+
 	poolWorkerDirtySubs *prometheus.GaugeVec
 	poolDrainBatchSize  prometheus.Histogram
 	poolDrainDuration   prometheus.Histogram
@@ -77,6 +79,7 @@ func New() *Registry {
 		r.subscriberQueueDepth,
 		r.subscriberLifetime,
 		r.authRefreshTotal,
+		r.refreshOnDemandTotal,
 		r.poolWorkerDirtySubs,
 		r.poolDrainBatchSize,
 		r.poolDrainDuration,
@@ -101,6 +104,9 @@ func New() *Registry {
 	r.txFanOutWork.Observe(0)
 	for _, result := range []string{"ok", "unauthorized", "forbidden", "not_found", "unavailable"} {
 		r.authRefreshTotal.WithLabelValues(result).Add(0)
+	}
+	for _, result := range []string{"swapped", "no_live_subscriber", "not_allowed", "auth_revoked", "auth_unavailable", "refresh_in_progress"} {
+		r.refreshOnDemandTotal.WithLabelValues(result).Add(0)
 	}
 
 	for _, reason := range []string{"slow_consumer", "tx_too_large", "client_closed", "shutdown"} {
@@ -200,6 +206,10 @@ func newAuthMetrics(r *Registry) {
 	r.authRefreshTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "walera_auth_refresh_total",
 		Help: "Per-subscriber auth refresh attempts by result (separates from handshake auth_requests_total).",
+	}, []string{"result"})
+	r.refreshOnDemandTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "walera_refresh_ondemand_total",
+		Help: "On-demand POST /sse/v1/refresh outcomes by result (swapped|no_live_subscriber|not_allowed|auth_revoked|auth_unavailable|refresh_in_progress); separates handler outcomes from TTL-driven auth_refresh_total.",
 	}, []string{"result"})
 }
 
@@ -346,6 +356,10 @@ func (r *Registry) SubscriberLifetime() prometheus.Histogram { return r.subscrib
 
 func (r *Registry) AuthRefresh(result string) prometheus.Counter {
 	return r.authRefreshTotal.WithLabelValues(result)
+}
+
+func (r *Registry) RefreshOnDemand(result string) prometheus.Counter {
+	return r.refreshOnDemandTotal.WithLabelValues(result)
 }
 
 func (r *Registry) PoolWorkerDirtySubs(workerID string) prometheus.Gauge {

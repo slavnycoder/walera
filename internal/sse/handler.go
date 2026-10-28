@@ -76,6 +76,9 @@ type Handler struct {
 	authCfg      auth.Config
 	logger       zerolog.Logger
 	metrics      *metrics.Registry
+	// corsAllowHeaders is the precomputed Access-Control-Allow-Headers string for
+	// every preflight: the base set plus any configured forwarded auth headers.
+	corsAllowHeaders string
 }
 
 type AuthDeps struct {
@@ -127,18 +130,19 @@ func validateDeps(deps Deps) {
 func NewHandler(cfg Config, deps Deps) *Handler {
 	validateDeps(deps)
 	return &Handler{
-		bc:           deps.Broadcaster,
-		routerCfg:    cfg.Router,
-		cfg:          cfg,
-		enc:          NewEncoder(cfg.MaxPayloadBytes),
-		pool:         deps.Pool,
-		authClient:   deps.Auth.Client,
-		limits:       deps.Limits,
-		authRegistry: deps.Auth.Subscribers,
-		breaker:      deps.Auth.Breaker,
-		authCfg:      cfg.Auth,
-		logger:       deps.Logger,
-		metrics:      deps.Metrics,
+		bc:               deps.Broadcaster,
+		routerCfg:        cfg.Router,
+		cfg:              cfg,
+		enc:              NewEncoder(cfg.MaxPayloadBytes),
+		pool:             deps.Pool,
+		authClient:       deps.Auth.Client,
+		limits:           deps.Limits,
+		authRegistry:     deps.Auth.Subscribers,
+		breaker:          deps.Auth.Breaker,
+		authCfg:          cfg.Auth,
+		logger:           deps.Logger,
+		metrics:          deps.Metrics,
+		corsAllowHeaders: buildAllowHeaders(cfg.Auth.ForwardedHeaders),
 	}
 }
 
@@ -152,7 +156,7 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 }
 
 func (h *Handler) servePreflight(w http.ResponseWriter, r *http.Request) {
-	if !handlePreflight(w, r, h.cfg.CORSOrigins) {
+	if !handlePreflight(w, r, h.cfg.CORSOrigins, h.corsAllowHeaders) {
 
 		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
