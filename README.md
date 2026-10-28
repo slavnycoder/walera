@@ -134,17 +134,19 @@ BEGIN;
   UPDATE orders SET status = 'paid' WHERE id = 42;
 COMMIT;
 
--- ✗ DROPPED for affected subscribers (multi-root violation):
+-- ✗ DROPPED for exact subscribers (multi-root violation):
 BEGIN;
   UPDATE orders SET reordered_at = now();   -- touches every order!
 COMMIT;
 ```
 
-This rule is **broker-enforced**. Multi-root transactions are silently
-dropped per subscriber (`walera_tx_dropped_total{reason="multi_root"}`
-increments, a warn-level log fires, the connection stays open). Split
-bulk operations across roots in your application layer — one
-transaction per root.
+This rule is **broker-enforced for exact subscribers** (`/sse/v1/{table}/{pk}`):
+a multi-root transaction is silently skipped for them
+(`walera_tx_dropped_total{reason="multi_root"}` increments, a warn-level log
+fires, the connection stays open). Wildcard subscribers (`/sse/v1/{table}/all`)
+are authorized for every row and receive the transaction whole, subject to
+`router.max_changes_per_tx`. Split bulk operations across roots in your
+application layer if exact subscribers must see them.
 
 ### Rule 2 — Co-write children with their root
 

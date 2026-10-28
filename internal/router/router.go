@@ -239,13 +239,9 @@ func (b *Broadcaster) dispatchEvent(tx wal.Tx, sub *Subscriber, indices []int) (
 	subSchema := sub.Schema()
 	subTable := sub.Table()
 
-	// Multi-root guard: a tx touching >1 distinct PK of the subscriber's anchor
-	// table violates the one-root-per-tx writer-side discipline (spec §1.6).
-	// Per-subscriber tx drop: counter + log, but the connection stays open —
-	// the client resyncs from the primary API and the next well-formed tx is
-	// delivered normally. INVARIANT #2: this is the sole .Inc() site for
-	// tx_dropped_total{reason="multi_root"}.
-	if hasMultipleAnchorRoots(tx, subSchema, subTable) {
+	// Wildcard subscribers may see every row; the guard only stops an exact
+	// subscriber from receiving another root's rows and children.
+	if sub.Kind() == KindExact && hasMultipleAnchorRoots(tx, subSchema, subTable) {
 		b.metrics.TxDropped("multi_root").Inc()
 		b.log.Warn().
 			Str("subscriber_id", sub.ID()).

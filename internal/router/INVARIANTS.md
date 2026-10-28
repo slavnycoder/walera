@@ -32,13 +32,7 @@ Pre-sweep archaeology anchor: commit `de6b665` (pre-SWEEP-02 HEAD).
    tx drop, not a disconnect**: only the counter is incremented and a
    warning is logged. `sub.Drop()` is NOT called — the connection stays
    open and the next well-formed tx is delivered normally. Clients
-   resync from the primary API on their own. This is the stricter form
-   of spec §1.6: it fires for BOTH exact and wildcard subscribers (a tx
-   that touches `todo_lists:42` and `todo_lists:99` is dropped for an
-   exact subscriber on `todo_lists:42`, not only for wildcard
-   `todo_lists/all`). The cross-table child-of-other-root case
-   (e.g. `todo_lists:42 + tasks(todo_list_id=99)`) is **not** broker-
-   enforced — see README's Writer-side discipline section.
+   resync from the primary API on their own. The guard applies to KindExact subscribers only.
 
 3. **slow_consumer / tx_too_large drop sites.** Both reasons drive
    `sub.Drop(reason)` + `metrics.TxDropped(reason).Inc()` exclusively

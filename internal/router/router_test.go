@@ -1557,14 +1557,14 @@ func TestBroadcaster_MultiRoot_ExactDropsOnTwoPKs(t *testing.T) {
 	}
 }
 
-// TestBroadcaster_MultiRoot_WildcardDropsOnTwoPKs:
-// Wildcard subscribers are the primary signal of writer-side bulk-operation
-// bugs (spec §4.4). Same per-subscriber drop semantics as exact.
-func TestBroadcaster_MultiRoot_WildcardDropsOnTwoPKs(t *testing.T) {
+// Wildcard subscribers are authorized for every row of the table, so a
+// multi-root tx is delivered whole.
+func TestBroadcaster_MultiRoot_WildcardDelivers(t *testing.T) {
 	t.Parallel()
 
 	b, reg := mkBroadcaster(10000)
 	sub := mkWildcardSub("public", "todo_lists", 0, 8)
+	recordedFor(t, sub).useEncoder(b.enc.(*stubEncoder))
 	b.Register(sub)
 
 	tx := mkTx(pglogrepl.LSN(0x4010), 401,
@@ -1573,13 +1573,35 @@ func TestBroadcaster_MultiRoot_WildcardDropsOnTwoPKs(t *testing.T) {
 	)
 	b.routeTx(tx)
 
-	expectNoFrame(t, sub, 100*time.Millisecond)
-
-	if v := gatherCounter(t, reg, "walera_tx_dropped_total", "reason", "multi_root"); v != 1 {
-		t.Errorf("tx_dropped_total{reason=multi_root}: got %v; want 1", v)
+	ev := drainOne(t, sub, 200*time.Millisecond)
+	if got := len(ev.Tx.Changes); got != 2 {
+		t.Fatalf("delivered changes: got %d; want 2", got)
 	}
-	if got := sub.Reason(); got != "" {
-		t.Errorf("Reason: got %q; want empty (multi_root must not disconnect the subscriber)", got)
+	if v := gatherCounter(t, reg, "walera_tx_dropped_total", "reason", "multi_root"); v != 0 {
+		t.Errorf("tx_dropped_total{reason=multi_root}: got %v; want 0", v)
+	}
+}
+
+func TestBroadcaster_MultiRoot_WildcardBulkOverCapDropsTooLarge(t *testing.T) {
+	t.Parallel()
+
+	b, reg := mkBroadcaster(2)
+	sub := mkWildcardSub("public", "todo_lists", 0, 8)
+	b.Register(sub)
+
+	tx := mkTx(pglogrepl.LSN(0x4011), 402,
+		mkChange(wal.OpInsert, "public", "todo_lists", "1"),
+		mkChange(wal.OpInsert, "public", "todo_lists", "2"),
+		mkChange(wal.OpInsert, "public", "todo_lists", "3"),
+	)
+	b.routeTx(tx)
+
+	expectNoFrame(t, sub, 100*time.Millisecond)
+	if got := sub.Reason(); got != "tx_too_large" {
+		t.Fatalf("Reason: got %q; want tx_too_large", got)
+	}
+	if v := gatherCounter(t, reg, "walera_tx_dropped_total", "reason", "tx_too_large"); v != 1 {
+		t.Errorf("tx_dropped_total{reason=tx_too_large}: got %v; want 1", v)
 	}
 }
 
