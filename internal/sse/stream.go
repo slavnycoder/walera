@@ -203,6 +203,12 @@ func (h *Handler) stream(w http.ResponseWriter, r *http.Request, sub *router.Sub
 					break batch
 				}
 			}
+			select {
+			case <-sub.Done():
+				finish()
+				return
+			default:
+			}
 			if err := write(frames...); err != nil {
 				reason = writeFailureReason(err)
 				sub.Drop(reason)
