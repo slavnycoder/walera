@@ -1,7 +1,6 @@
 package app
 
 import (
-	"context"
 	"testing"
 	"time"
 
@@ -12,7 +11,6 @@ import (
 	"github.com/walera/walera/internal/limits"
 	"github.com/walera/walera/internal/metrics"
 	"github.com/walera/walera/internal/router"
-	"github.com/walera/walera/internal/sse"
 	"github.com/walera/walera/internal/wal"
 	"github.com/walera/walera/internal/walconn"
 )
@@ -30,15 +28,6 @@ func TestApp_MetricsRegistrySingleton(t *testing.T) {
 		t.Fatalf("InitializeApp: %v", err)
 	}
 	defer cleanup()
-
-	t.Cleanup(func() {
-		sctx, scancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer scancel()
-
-		if err := a.SSEPool.Shutdown(sctx); err != nil {
-			t.Logf("pool shutdown error: %v", err)
-		}
-	})
 
 	want := a.Metrics
 	if want == nil {
@@ -66,15 +55,6 @@ func TestApp_MetricsRegistrySingleton(t *testing.T) {
 	if got := a.Limits.Metrics(); got != want {
 		t.Errorf("Limits.Metrics() = %p; want %p", got, want)
 	}
-
-	poolMetrics := a.SSEPool.Metrics()
-	adapter, ok := poolMetrics.(*sse.PoolMetricsAdapter)
-	if !ok {
-		t.Fatalf("SSEPool.Metrics() type = %T; want *sse.PoolMetricsAdapter", poolMetrics)
-	}
-	if got := adapter.Registry(); got != want {
-		t.Errorf("PoolMetricsAdapter wraps registry %p; want %p", got, want)
-	}
 }
 
 func newSingletonTestConfig(t *testing.T) *AppConfig {
@@ -82,18 +62,12 @@ func newSingletonTestConfig(t *testing.T) *AppConfig {
 	return &AppConfig{
 		Log: LogConfig{Level: "info"},
 		HTTP: HTTPConfig{
-			Addr:                ":0",
-			MaxPayloadBytes:     10 * 1024 * 1024,
-			WriteTimeout:        5 * time.Second,
-			MaxHeaderBytes:      16 * 1024,
-			H2CEnabled:          false,
-			PProfAddr:           "",
-			PoolFactor:          1,
-			SubQueueSize:        32,
-			MaxWaitMs:           2,
-			DrainThresholdSubs:  0,
-			MaxBatchBytesPerSub: 65536,
-			BatchingDisabled:    false,
+			Addr:            ":0",
+			MaxPayloadBytes: 10 * 1024 * 1024,
+			WriteTimeout:    5 * time.Second,
+			MaxHeaderBytes:  16 * 1024,
+			H2CEnabled:      false,
+			PProfAddr:       "",
 		},
 		WAL: wal.Config{
 			PostgresDSN:             "postgres://a:b@127.0.0.1:1/db",

@@ -41,8 +41,6 @@ type App struct {
 
 	RouterIndex *router.Broadcaster
 
-	SSEPool *sse.WriterPool
-
 	SSEHandler *sse.Handler
 
 	HealthServer *health.Server

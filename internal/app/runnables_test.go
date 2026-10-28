@@ -47,11 +47,6 @@ func TestBuildRunnablesRunnableClosures(t *testing.T) {
 		t.Fatalf("InitializeApp: %v", err)
 	}
 	defer cleanup()
-	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-		_ = a.SSEPool.Shutdown(ctx)
-	})
 
 	closedTx := make(chan wal.Tx)
 	close(closedTx)

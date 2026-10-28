@@ -20,8 +20,8 @@
 #   exceeds the 10-minute PR-feedback budget on CI hardware. Two flaky
 #   integration tests (Test_SEC01_SlowReceiverDropped, Test06SlowConsumer)
 #   are quarantined via t.Skip; the same surface is covered by
-#   TestPoolSlowClientIsolation / TestPoolSlowClientIsolationStress in
-#   internal/sse, which DO run under test-race here.
+#   TestStream_SlowClientDoesNotStallOthers in internal/sse, which DOES
+#   run under test-race here.
 #
 # Relationship to existing workflows:
 #   - coverage.yml      per-package coverage gate (>= 85%); orthogonal.

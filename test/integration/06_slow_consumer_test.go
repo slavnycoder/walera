@@ -21,7 +21,7 @@ import (
 func Test06SlowConsumer(t *testing.T) {
 	t.Skip("flaky on slow CI hardware; tracked as Phase 11 follow-up. " +
 		"Slow-consumer behaviour is covered by internal/sse " +
-		"TestPoolSlowClientIsolation and TestPoolSlowClientIsolationStress.")
+		"TestStream_SlowClientDoesNotStallOthers.")
 	t.Parallel()
 	h := NewHarness(t)
 

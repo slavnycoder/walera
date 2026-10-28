@@ -6,15 +6,14 @@ narrative).
 
 ## State Machine Ordering
 
-1. **Breaker FSM** — Closed / Open / HalfOpen state transitions, the
-   `>FailureRateThreshold` sliding-window failure-rate trigger (debounced by
-   DebounceFloor sample count), and the `install-new-channel-before-close-old`
-   ordering of `signalClose` (so concurrent `WaitForClose()` readers cannot
-   receive a closed channel intended for the NEXT cycle) all live in
-   `internal/auth/breaker.go`'s package comment.
-   **This is the canonical home per REQUIREMENTS.md SWEEP-04 — do NOT
-   restate the FSM here.** Anchor: `internal/auth/breaker.go` top-of-file
-   package comment (pre-sweep de6b665).
+1. **Breaker FSM** — Closed / Open / HalfOpen state transitions, driven by
+   the `>FailureRateThreshold` sliding-window failure-rate trigger
+   (debounced by `DebounceFloor` sample count) and a `Cooldown`-gated
+   half-open probe. `Allow()` gates only NEW opens (`State != Open`);
+   subscriptions already streaming are unaffected by the breaker and are
+   instead governed by fail-closed refresh (invariant 4). There is no
+   stale-subscriber watcher goroutine — the breaker has no visibility into,
+   and no side effect on, existing subscribers. Anchor: `breaker.go:94-157`.
 
 ## Concurrency
 
@@ -34,21 +33,25 @@ narrative).
    "promoted-without-back-buffer" intermediate. Anchor: `subscriber.go:swapMap`
    (~line 308) (pre-sweep de6b665).
 
-4. **Stale-subs sampler.** `Subscribers.fanoutStaleRefreshes` walks the
-   registry under `mu`, builds a copy of stale-subscriber pointers
-   (`lastRefresh < now - ttlSeconds`), then RELEASES `mu` before scheduling
-   `time.AfterFunc`-driven `tryRefresh` calls. Releasing the mutex before
-   scheduling prevents a long jitter window from stalling `Add`/`Remove`.
-   The `walera_auth_breaker_stale_subscribers` gauge is set to `len(stale)`
-   per cohort, so observability shows fan-out cohort size. Anchor:
-   `registry.go:fanoutStaleRefreshes` (~line 91) (pre-sweep de6b665).
+4. **Fail-closed refresh.** Each subscriber runs its own `RefreshLoop`
+   ticking on its TTL; there is no central stale-subscriber watcher or
+   sampler — a subscriber's refresh is entirely self-scheduled.
+   `tryRefresh` retries through `s.backoffs` on `*ErrUnavailable`, but once
+   the chain exhausts those retries without a successful swap, the
+   subscriber is DROPPED (`Sub.Drop("auth_unavailable")`) rather than kept
+   alive on a stale whitelist — refresh failure fails closed, it never
+   fails open. A revoked grant (`attemptRevoked`) drops immediately with
+   `"auth_revoked"`, without waiting for backoff. Anchor:
+   `subscriber.go:tryRefresh,dropIfUnchanged` (~line 248-303).
 
 ## Lifecycle & Shutdown
 
-_(No auth-package lifecycle invariants required relocation. The
-`auth-breaker-fsm` and `auth-refresh-*` goroutines are spawned by `safego.Go`
-in the composition root and exit cleanly on `ctx.Done()` / `Sub.Done()` —
-these are local to their respective files and need no cross-file anchor.)_
+_(No auth-package lifecycle invariants required relocation. `Breaker.Run`
+is driven by an `app.Runnable` and `Subscriber.RefreshLoop` is launched
+with a plain `go` statement from `internal/sse/stream.go`; both exit
+cleanly on `ctx.Done()` / `Sub.Done()` and a panic in either crashes the
+process rather than being recovered — these are local to their
+respective files and need no cross-file anchor.)_
 
 ## Security / PII
 

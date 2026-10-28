@@ -38,6 +38,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   any goroutine (WAL reader, auth refresh, shutdown) now crashes the process
   so the orchestrator restarts it, instead of leaving it running without
   replication or without permission refresh.
+- SSE writer pool and its knobs (`http.pool_factor`, `http.sub_queue_size`,
+  `http.max_wait_ms`, `http.drain_threshold_subs`,
+  `http.max_batch_bytes_per_sub`, `http.batching_disabled`), the
+  `walera_pool_*` metrics, and the `sse-stress` / `sse-soak` flake jobs.
 
 ## [2.2.0] - 2026-06-08
 

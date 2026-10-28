@@ -315,7 +315,7 @@ token-bucket rate limiting belongs at the upstream proxy (traefik,
 NGINX, an ingress controller, etc.) where it can apply uniformly across
 replicas and shed pathological traffic before it consumes a Goroutine.
 
-#### `http.*` — SSE listener and writer pool
+#### `http.*` — SSE listener
 
 | Env var                                  | YAML key                                  | Default          | Purpose                                              | Safe value example       |
 | ---------------------------------------- | ----------------------------------------- | ---------------- | ---------------------------------------------------- | ------------------------ |
@@ -326,12 +326,6 @@ replicas and shed pathological traffic before it consumes a Goroutine.
 | `WALERA_HTTP_MAX_HEADER_BYTES`           | `http.max_header_bytes`                   | `16384`          | Max request-header byte size (stdlib pre-handler).   | `16384`                  |
 | `WALERA_HTTP_H2C_ENABLED`                | `http.h2c_enabled`                        | `true`           | Toggle unencrypted HTTP/2 (h2c, prior-knowledge).    | `true`                   |
 | `WALERA_HTTP_PPROF_ADDR`                 | `http.pprof_addr`                         | (unset/disabled) | Optional opt-in pprof listener (loopback default).   | `127.0.0.1:6060`         |
-| `WALERA_HTTP_POOL_FACTOR`                | `http.pool_factor`                        | `2`              | Writer-pool worker multiplier (× GOMAXPROCS).        | `2`                      |
-| `WALERA_HTTP_SUB_QUEUE_SIZE`             | `http.sub_queue_size`                     | `32`             | Per-subscriber `chan []byte` capacity.               | `32`                     |
-| `WALERA_HTTP_MAX_WAIT_MS`                | `http.max_wait_ms`                        | `2`              | Writer-pool batch lag ceiling (ms).                  | `2`                      |
-| `WALERA_HTTP_DRAIN_THRESHOLD_SUBS`       | `http.drain_threshold_subs`               | `0` (auto)       | Dirty-subscriber count that forces an immediate drain. | `0`                    |
-| `WALERA_HTTP_MAX_BATCH_BYTES_PER_SUB`    | `http.max_batch_bytes_per_sub`            | `65536`          | Per-subscriber buffered-frame byte cap.              | `65536`                  |
-| `WALERA_HTTP_BATCHING_DISABLED`          | `http.batching_disabled`                  | `false`          | Drain every writer-pool cycle.                       | `false`                  |
 | `WALERA_PPROF_ALLOW_PUBLIC`              | (env-only override)                       | unset            | Allow non-loopback pprof listener (dev only).        | unset                    |
 
 #### `log.*`, `health.*`, `shutdown.*`

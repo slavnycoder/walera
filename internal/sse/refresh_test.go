@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	dto "github.com/prometheus/client_model/go"
 	"github.com/rs/zerolog"
 
 	"github.com/walera/walera/internal/auth"
@@ -680,4 +681,43 @@ func TestRefresh_SwapsOpenSessionWhitelist_NoPermissionsCall(t *testing.T) {
 	if _, ok := sub.AuthMap.Load().Tables["users"]["name"]; !ok {
 		t.Errorf("whitelist not swapped: users.name missing")
 	}
+}
+
+func gatherCounterValue(t *testing.T, reg *metrics.Registry, family, labelName, labelVal string) float64 {
+	t.Helper()
+	mfs, err := reg.Gatherer().Gather()
+	if err != nil {
+		t.Fatalf("gather: %v", err)
+	}
+	for _, mf := range mfs {
+		if mf.GetName() != family {
+			continue
+		}
+		for _, m := range mf.GetMetric() {
+			if labelName == "" {
+				if m.GetCounter() == nil {
+					t.Fatalf("%s: child has no counter", family)
+				}
+				return m.GetCounter().GetValue()
+			}
+			if labelsContain(m.GetLabel(), labelName, labelVal) {
+				if m.GetCounter() == nil {
+					t.Fatalf("%s{%s=%q}: child has no counter", family, labelName, labelVal)
+				}
+				return m.GetCounter().GetValue()
+			}
+		}
+		t.Fatalf("%s: no child with %s=%q", family, labelName, labelVal)
+	}
+	t.Fatalf("metric family %q absent from gather output", family)
+	return 0
+}
+
+func labelsContain(pairs []*dto.LabelPair, name, value string) bool {
+	for _, p := range pairs {
+		if p.GetName() == name && p.GetValue() == value {
+			return true
+		}
+	}
+	return false
 }

@@ -1,4 +1,4 @@
-.PHONY: build test test-integration test-all lint vet clean docker k8s-deploy load-test perf-gate-baseline hooks deps-check config-check sse-stress sse-soak wal-stress lint-comments lint-comments-test comment-density comment-density-test check-changelog-date check-changelog-date-test
+.PHONY: build test test-integration test-all lint vet clean docker k8s-deploy load-test perf-gate-baseline hooks deps-check config-check wal-stress lint-comments lint-comments-test comment-density comment-density-test check-changelog-date check-changelog-date-test
 
 BINARY := cdc-sse
 CMD     := ./cmd/cdc-sse
@@ -106,37 +106,14 @@ config-check:
 	echo "$$bad"; \
 	exit 1
 
-# sse-stress runs the SSE package under the race detector with a
-# count=100 soak budget. Soak escalator only — the standard `go test`
-# invocation already runs the SSE tests (including
-# TestPoolSlowClientIsolationStress) once with -race. Phase 9 D-15: this
-# target is NOT wired into CI; Phase 11 picks it up.
-# Operators may override the per-cohort subscriber count via
-#   make sse-stress STRESS_SUBS=200
-# which forwards to the -stress-subs test flag.
-STRESS_SUBS ?= 100
-sse-stress:
-	go test -race -count=100 -run TestPoolSlowClientIsolationStress ./internal/sse -stress-subs=$(STRESS_SUBS)
-
-# sse-soak runs the FULL internal/sse unit suite under count=100 without
-# -race. SSE-08 flake guard: a regression that re-introduces the SSE-06
-# starvation surface (e.g. a future commit that re-skips attachCh /
-# shutdownCh observation in pollAllQueues) would surface as
-# TestPoolWorkerLoopStarvation_AttachAndShutdown failing a fraction of the
-# 100 runs. This is orthogonal to `make sse-stress`, which scopes to a
-# single -race test (TestPoolSlowClientIsolationStress) at -count=100.
-# Both are wired into the scheduled flake-detect workflow.
-sse-soak:
-	go test -timeout=30m -count=100 ./internal/sse
-
 # wal-stress runs the wal package under the race detector with a count=10
-# soak budget. Lower than sse-stress (-count=100) because the wal package's
+# soak budget — lower than other soak targets because the wal package's
 # integration tests run testcontainers; 100 iterations would take hours.
 # Soak escalator only — standard `go test -race` already runs the wal tests
-# once. Phase 10 D-12: this target is NOT wired into CI; Phase 11 picks it
-# up alongside sse-stress. Note: this target runs ./internal/wal (the unit
-# test package) only. The testcontainers-backed lifecycle tests live in
-# ./test/integration and are soaked via `make test-integration` directly.
+# once; this target is NOT wired into CI. Note: this target runs
+# ./internal/wal (the unit test package) only. The testcontainers-backed
+# lifecycle tests live in ./test/integration and are soaked via
+# `make test-integration` directly.
 wal-stress:
 	go test -race -count=10 ./internal/wal
 

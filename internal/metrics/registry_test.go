@@ -118,7 +118,6 @@ func TestRegistry_GatherIncludesAllMetrics(t *testing.T) {
 	r.PGConnectionStatus().Set(0)
 
 	r.WALStandbyACKFailures().Inc()
-	r.PoolWorkerDirtySubs("0").Set(0)
 
 	mfs, err := r.Gatherer().Gather()
 	if err != nil {
@@ -141,10 +140,6 @@ func TestRegistry_GatherIncludesAllMetrics(t *testing.T) {
 		"walera_limit_rejected_total",
 		"walera_pg_connection_status",
 		"walera_pg_reconnects_total",
-
-		"walera_pool_drain_batch_size",
-		"walera_pool_drain_duration_seconds",
-		"walera_pool_worker_dirty_subs",
 		"walera_refresh_ondemand_total",
 		"walera_route_lookup_duration_seconds",
 		"walera_routing_fan_out",
@@ -266,65 +261,6 @@ func TestRegistry_WALStandbyACKFailures_Registered(t *testing.T) {
 	if !found {
 		t.Errorf("series walera_wal_standby_ack_failures_total not in Gather() output")
 	}
-}
-
-func TestRegistry_PoolMetricsRegistered(t *testing.T) {
-	t.Parallel()
-	r := New()
-
-	r.PoolWorkerDirtySubs("0").Set(0)
-
-	mfs, err := r.Gatherer().Gather()
-	if err != nil {
-		t.Fatalf("Gather: %v", err)
-	}
-	byName := make(map[string]*dto.MetricFamily, len(mfs))
-	for _, mf := range mfs {
-		byName[mf.GetName()] = mf
-	}
-
-	for _, name := range []string{
-		"walera_pool_worker_dirty_subs",
-		"walera_pool_drain_batch_size",
-		"walera_pool_drain_duration_seconds",
-	} {
-		if _, ok := byName[name]; !ok {
-			t.Errorf("metric family %q missing from Gather() output", name)
-		}
-	}
-
-	checkBuckets := func(t *testing.T, name string, want []float64) {
-		t.Helper()
-		mf, ok := byName[name]
-		if !ok {
-			t.Fatalf("family %q missing", name)
-		}
-		ms := mf.GetMetric()
-		if len(ms) == 0 {
-			t.Fatalf("family %q has no Metric children (histogram should surface from registration)", name)
-		}
-		h := ms[0].GetHistogram()
-		if h == nil {
-			t.Fatalf("family %q is not a Histogram", name)
-		}
-		got := make([]float64, 0, len(h.GetBucket()))
-		for _, b := range h.GetBucket() {
-			got = append(got, b.GetUpperBound())
-		}
-		if len(got) != len(want) {
-			t.Fatalf("family %q bucket count: got %d %v; want %d %v",
-				name, len(got), got, len(want), want)
-		}
-		for i := range want {
-			if got[i] != want[i] {
-				t.Errorf("family %q bucket[%d]: got %v; want %v", name, i, got[i], want[i])
-			}
-		}
-	}
-	checkBuckets(t, "walera_pool_drain_batch_size",
-		[]float64{1, 4, 16, 64, 256, 1024})
-	checkBuckets(t, "walera_pool_drain_duration_seconds",
-		[]float64{0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0})
 }
 
 // TestRegistry_CoBeyondAnchorTotal_PreTouched asserts that walera_co_tx_beyond_anchor_total

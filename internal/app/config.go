@@ -92,18 +92,6 @@ type HTTPConfig struct {
 	H2CEnabled bool `koanf:"h2c_enabled"`
 
 	PProfAddr string `koanf:"pprof_addr"`
-
-	PoolFactor int `koanf:"pool_factor"`
-
-	SubQueueSize int `koanf:"sub_queue_size"`
-
-	MaxWaitMs int `koanf:"max_wait_ms"`
-
-	DrainThresholdSubs int `koanf:"drain_threshold_subs"`
-
-	MaxBatchBytesPerSub int `koanf:"max_batch_bytes_per_sub"`
-
-	BatchingDisabled bool `koanf:"batching_disabled"`
 }
 
 type ShutdownConfig struct {
@@ -129,12 +117,6 @@ func applyAppDefaults(k *koanf.Koanf) {
 	_ = k.Set("http.max_header_bytes", 16*1024)
 	_ = k.Set("http.h2c_enabled", true)
 	_ = k.Set("http.pprof_addr", "")
-	_ = k.Set("http.pool_factor", 2)
-	_ = k.Set("http.sub_queue_size", 32)
-	_ = k.Set("http.max_wait_ms", 2)
-	_ = k.Set("http.drain_threshold_subs", 0)
-	_ = k.Set("http.max_batch_bytes_per_sub", 65536)
-	_ = k.Set("http.batching_disabled", false)
 	_ = k.Set("shutdown.deadline", "10s")
 	_ = k.Set("shutdown.drain_deadline", "8s")
 
@@ -279,22 +261,6 @@ func validateHTTP(c *HTTPConfig) error {
 			}
 		}
 	}
-	if c.PoolFactor < 1 {
-		errs = append(errs, fmt.Errorf("http.pool_factor must be >= 1 (got %d)", c.PoolFactor))
-	}
-	if c.SubQueueSize < 1 {
-		errs = append(errs, fmt.Errorf("http.sub_queue_size must be >= 1 (got %d)", c.SubQueueSize))
-	}
-	if c.MaxWaitMs < 0 {
-		errs = append(errs, fmt.Errorf("http.max_wait_ms must be >= 0 (got %d)", c.MaxWaitMs))
-	}
-	if c.DrainThresholdSubs < 0 {
-		errs = append(errs, fmt.Errorf("http.drain_threshold_subs must be >= 0 (got %d)", c.DrainThresholdSubs))
-	}
-	if c.MaxBatchBytesPerSub < 1 {
-		errs = append(errs, fmt.Errorf("http.max_batch_bytes_per_sub must be >= 1 (got %d)", c.MaxBatchBytesPerSub))
-	}
-
 	for i, raw := range c.CORSOrigins {
 		if _, ok := canonicalOrigin(raw); !ok {
 			errs = append(errs, fmt.Errorf("http.cors_origins[%d] (%q) is not a valid URL with scheme and host", i, raw))

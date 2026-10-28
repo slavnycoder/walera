@@ -31,8 +31,6 @@ type authWiring struct {
 type dataPlaneWiring struct {
 	Encoder     *sse.Encoder
 	Broadcaster *router.Broadcaster
-	PoolMetrics *sse.PoolMetricsAdapter
-	Pool        *sse.WriterPool
 	Handler     *sse.Handler
 }
 
@@ -63,7 +61,6 @@ func InitializeApp(cfg AppConfig, logger zerolog.Logger, adminConn walconn.Admin
 		Limits:       aw.Limits,
 		Encoder:      dp.Encoder,
 		RouterIndex:  dp.Broadcaster,
-		SSEPool:      dp.Pool,
 		SSEHandler:   dp.Handler,
 		HealthServer: hw.HealthServer,
 		HTTPServer:   hw.MainServer,
@@ -129,22 +126,6 @@ func wireDataPlane(cfg AppConfig, logger zerolog.Logger, registry *metrics.Regis
 		Encoder: encoder,
 	})
 
-	poolMetrics := sse.NewPoolMetricsAdapter(registry)
-	writerPool := sse.NewPool(sse.PoolConfig{
-		PoolFactor:          cfg.HTTP.PoolFactor,
-		SubQueueSize:        cfg.HTTP.SubQueueSize,
-		MaxWaitMs:           cfg.HTTP.MaxWaitMs,
-		BatchingDisabled:    cfg.HTTP.BatchingDisabled,
-		DrainThresholdSubs:  cfg.HTTP.DrainThresholdSubs,
-		MaxBatchBytesPerSub: cfg.HTTP.MaxBatchBytesPerSub,
-		WriteTimeout:        cfg.HTTP.WriteTimeout,
-		HeartbeatInterval:   cfg.Router.HeartbeatInterval,
-	}, sse.PoolDeps{
-		Encoder: encoder,
-		Metrics: poolMetrics,
-		Logger:  logger,
-	})
-
 	handler := sse.NewHandler(
 		sse.Config{
 			Addr:              cfg.HTTP.Addr,
@@ -170,8 +151,6 @@ func wireDataPlane(cfg AppConfig, logger zerolog.Logger, registry *metrics.Regis
 	return dataPlaneWiring{
 		Encoder:     encoder,
 		Broadcaster: broadcaster,
-		PoolMetrics: poolMetrics,
-		Pool:        writerPool,
 		Handler:     handler,
 	}
 }

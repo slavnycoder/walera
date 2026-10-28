@@ -37,10 +37,6 @@ type Registry struct {
 
 	refreshOnDemandTotal *prometheus.CounterVec
 
-	poolWorkerDirtySubs *prometheus.GaugeVec
-	poolDrainBatchSize  prometheus.Histogram
-	poolDrainDuration   prometheus.Histogram
-
 	slowClientDrops prometheus.Counter
 }
 
@@ -78,9 +74,6 @@ func New() *Registry {
 		r.subscriberLifetime,
 		r.authRefreshTotal,
 		r.refreshOnDemandTotal,
-		r.poolWorkerDirtySubs,
-		r.poolDrainBatchSize,
-		r.poolDrainDuration,
 		r.slowClientDrops,
 	)
 
@@ -151,21 +144,6 @@ func newSSEMetrics(r *Registry) {
 			Buckets: prometheus.DefBuckets,
 		},
 	)
-
-	r.poolWorkerDirtySubs = prometheus.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "walera_pool_worker_dirty_subs",
-		Help: "Per-worker count of subscribers in the dirty list awaiting drain.",
-	}, []string{"worker_id"})
-	r.poolDrainBatchSize = prometheus.NewHistogram(prometheus.HistogramOpts{
-		Name:    "walera_pool_drain_batch_size",
-		Help:    "Number of dirty subscribers drained per drainAll cycle.",
-		Buckets: []float64{1, 4, 16, 64, 256, 1024},
-	})
-	r.poolDrainDuration = prometheus.NewHistogram(prometheus.HistogramOpts{
-		Name:    "walera_pool_drain_duration_seconds",
-		Help:    "Wall-clock duration of each drainAll cycle in seconds.",
-		Buckets: []float64{0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0},
-	})
 
 	r.slowClientDrops = prometheus.NewCounter(prometheus.CounterOpts{
 		Name: "walera_slow_client_drops_total",
@@ -348,18 +326,6 @@ func (r *Registry) AuthRefresh(result string) prometheus.Counter {
 
 func (r *Registry) RefreshOnDemand(result string) prometheus.Counter {
 	return r.refreshOnDemandTotal.WithLabelValues(result)
-}
-
-func (r *Registry) PoolWorkerDirtySubs(workerID string) prometheus.Gauge {
-	return r.poolWorkerDirtySubs.WithLabelValues(workerID)
-}
-
-func (r *Registry) PoolDrainBatchSize() prometheus.Histogram {
-	return r.poolDrainBatchSize
-}
-
-func (r *Registry) PoolDrainDuration() prometheus.Histogram {
-	return r.poolDrainDuration
 }
 
 func (r *Registry) SlowClientDrops() prometheus.Counter {

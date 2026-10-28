@@ -15,7 +15,7 @@ import (
 func Test_SEC01_SlowReceiverDropped(t *testing.T) {
 	t.Skip("flaky on slow CI hardware; tracked as Phase 11 follow-up. " +
 		"Slow-receiver drop is also covered by internal/sse " +
-		"TestPoolSlowClientIsolation and TestPoolSlowClientIsolationStress.")
+		"TestStream_SlowClientDoesNotStallOthers.")
 	t.Parallel()
 
 	h := NewHarness(t, WithWriteTimeout(200*time.Millisecond))

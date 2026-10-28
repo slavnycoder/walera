@@ -65,40 +65,19 @@ func (a *App) Shutdown(ctx context.Context, stop context.CancelFunc, txCh <-chan
 }
 
 func (a *App) shutdownStep1Wave(ctx context.Context, drainDeadline time.Duration) {
-	a.shutdownStep1WaveWithCallbacks(ctx, drainDeadline, nil, nil, nil, nil)
+	a.shutdownStep1WaveWithCallbacks(ctx, drainDeadline, nil, nil, nil)
 }
 
 func (a *App) shutdownStep1WaveWithCallbacks(
 	ctx context.Context,
 	drainDeadline time.Duration,
-	onPoolStart, onHTTPStart, onBroadcastStart, onPProfStart func(),
+	onHTTPStart, onBroadcastStart, onPProfStart func(),
 ) {
 
 	_ = ctx
 
 	var wg sync.WaitGroup
-	wg.Add(3)
-
-	go func() {
-		defer wg.Done()
-		if onPoolStart != nil {
-			onPoolStart()
-		}
-		stepStart := time.Now()
-		sctx, cancel := context.WithTimeout(context.Background(), 9*time.Second)
-		defer cancel()
-		if err := a.SSEPool.Shutdown(sctx); err != nil {
-			a.Logger.Warn().Err(err).
-				Str("step", "pool").
-				Int64("elapsed_ms", time.Since(stepStart).Milliseconds()).
-				Msg("pool.Shutdown did not fully drain in time")
-			return
-		}
-		a.Logger.Info().
-			Str("step", "pool").
-			Int64("elapsed_ms", time.Since(stepStart).Milliseconds()).
-			Msg("sse pool shutdown complete")
-	}()
+	wg.Add(2)
 
 	if a.PProfServer != nil {
 		wg.Add(1)

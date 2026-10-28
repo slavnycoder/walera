@@ -146,9 +146,9 @@ A single Walera pod runs the following components in-process:
   to be swappable for an out-of-process broadcaster (NATS / Redis
   Streams) without changing the producer or consumer surfaces.
 - **SSE handler.** A `net/http` stdlib mux serves `/sse/v1/{table}/{pk}`
-  and `/sse/v1/{table}/all`. Each connection runs a small bounded-queue
-  writer that applies the per-subscriber field whitelist and frames
-  events for SSE transport.
+  and `/sse/v1/{table}/all`. Each connection is written by its own
+  handler goroutine from a small bounded queue, applying the
+  per-subscriber field whitelist and framing events for SSE transport.
 - **Auth client.** Calls the external auth backend on subscription
   open and refreshes permission maps periodically. Wrapped in a custom
   circuit-breaker FSM that distinguishes new opens from established
@@ -186,9 +186,8 @@ to know about build tags, jump between a `wire.go` panic stub and a
 `DO NOT EDIT` `wire_gen.go`, or hold the provider-set graph in their
 head — they read the file. Wire's compile-time gate did pay off in
 v2.2: it forced the named-type discipline now living in
-`internal/walconn`, drove the DI-03 cycle break between `auth.Client`
-and `auth.Breaker`, and locked in the adapter-at-consumer pattern
-(`sse.PoolMetricsAdapter`). Once that discipline had crystallised in
+`internal/walconn` and drove the DI-03 cycle break between
+`auth.Client` and `auth.Breaker`. Once that discipline had crystallised in
 the code, wire's ongoing cognitive cost — two files per symbol, a
 generated indirection layer, wire-tax types like `MainHTTPServer` and
 `walBundle` that existed only as wire keys, a hidden cycle break
@@ -245,10 +244,6 @@ survives wire's removal.
   `NewBreaker`. The interface stays — it documents that the breaker
   only needs the `CheckAuth` capability of the client, not the full
   client surface.
-- **`sse.PoolMetricsAdapter` at the consumer.** DI-04 placed the
-  metrics adapter inside `internal/sse/` (the package that needs it),
-  not in the metrics producer. That remains the right shape: the
-  adapter lives next to the interface it adapts to.
 - **`[]Runnable` lifecycle and explicit cleanup chain.** The runnable
   abstraction (`runnable.go`) and the 5-step shutdown wave
   (`lifecycle.go`) are independent of the DI strategy; they composed

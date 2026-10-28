@@ -29,8 +29,6 @@ func BenchmarkInitializeApp(b *testing.B) {
 		}
 
 		cleanup()
-
-		_ = a.SSEPool.Shutdown(b.Context())
 		_ = a
 	}
 }
@@ -40,18 +38,12 @@ func newSingletonBenchConfig(b *testing.B) *AppConfig {
 	return &AppConfig{
 		Log: LogConfig{Level: "info"},
 		HTTP: HTTPConfig{
-			Addr:                ":0",
-			MaxPayloadBytes:     10 * 1024 * 1024,
-			WriteTimeout:        5 * time.Second,
-			MaxHeaderBytes:      16 * 1024,
-			H2CEnabled:          false,
-			PProfAddr:           "",
-			PoolFactor:          1,
-			SubQueueSize:        32,
-			MaxWaitMs:           2,
-			DrainThresholdSubs:  0,
-			MaxBatchBytesPerSub: 65536,
-			BatchingDisabled:    false,
+			Addr:            ":0",
+			MaxPayloadBytes: 10 * 1024 * 1024,
+			WriteTimeout:    5 * time.Second,
+			MaxHeaderBytes:  16 * 1024,
+			H2CEnabled:      false,
+			PProfAddr:       "",
 		},
 		WAL: wal.Config{
 			PostgresDSN:             "postgres://a:b@127.0.0.1:1/db",

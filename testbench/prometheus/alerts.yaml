@@ -21,7 +21,7 @@
 #   # ...run the demo, then `git restore testbench/prometheus/alerts.yaml` to revert.
 #
 # The `--web.enable-lifecycle` flag in the compose command-line enables /-/reload.
-# Note: many alerts use `for: 1m` (breaker open, PG disconnected, stale subscribers).
+# Note: many alerts use `for: 1m` (breaker open, PG disconnected).
 # The breaker + PG-restart scenarios in Plan 09-03 are paced so these alerts can
 # fire within a demo window without changing `for:` at all — `1m` is left alone in
 # the sed recipe above to preserve that property when only the longer durations
@@ -64,17 +64,7 @@ groups:
           component: auth
         annotations:
           summary: "Walera auth circuit breaker open"
-          description: "Bounded fail-open active; up to ~2min stale-permissions window for existing subscribers. Investigate auth backend logs."
-      - alert: WaleraAuthBreakerStaleSubscribersOutsideBreaker
-        expr: walera_auth_circuit_breaker_state == 0 and walera_auth_breaker_stale_subscribers > 0
-        for: 1m
-        labels:
-          severity: P1
-          app: walera
-          component: auth
-        annotations:
-          summary: "Walera has stale subscribers with no open breaker"
-          description: "Refresh logic bug. Subscribers operating with stale auth maps but no breaker reason. Inspect walera_auth_refresh_total{result}."
+          description: "New SSE opens are rejected with 503; established streams drop with auth_unavailable after TTL + retries. Investigate auth backend logs."
 
   - name: walera.subscribers
     interval: 30s

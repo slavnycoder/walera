@@ -53,13 +53,6 @@ func newTestApp(
 
 	reg := metrics.New()
 	enc := sse.NewEncoder(64 * 1024)
-	poolDeps := sse.PoolDeps{
-		Encoder: enc,
-		Metrics: sse.NewPoolMetricsAdapter(reg),
-		Logger:  zerolog.Nop(),
-	}
-
-	pool := sse.NewPool(sse.PoolConfig{PoolFactor: 1}, poolDeps)
 
 	bcast := router.New(router.Config{}, router.Deps{
 		Logger:  zerolog.Nop(),
@@ -84,7 +77,6 @@ func newTestApp(
 		Config:      cfg,
 		Logger:      logger,
 		Metrics:     reg,
-		SSEPool:     pool,
 		RouterIndex: bcast,
 		HTTPServer:  httpSrv,
 		PProfServer: pprofSrv,
@@ -117,10 +109,10 @@ func TestApp_ShutdownConcurrentWave(t *testing.T) {
 	t.Parallel()
 
 	logSink := &syncBuffer{}
-	a := newTestApp(t, logSink, 5*time.Second, 1*time.Second, false)
+	a := newTestApp(t, logSink, 5*time.Second, 1*time.Second, true)
 
 	var (
-		poolStart, httpStart, bcastStart atomic.Int64
+		httpStart, bcastStart atomic.Int64
 	)
 	now := func() int64 { return time.Now().UnixNano() }
 
@@ -130,13 +122,12 @@ func TestApp_ShutdownConcurrentWave(t *testing.T) {
 	a.shutdownStep1WaveWithCallbacks(
 		ctx,
 		1*time.Second,
-		func() { poolStart.Store(now()) },
 		func() { httpStart.Store(now()) },
 		func() { bcastStart.Store(now()) },
 		nil,
 	)
 
-	starts := []int64{poolStart.Load(), httpStart.Load(), bcastStart.Load()}
+	starts := []int64{httpStart.Load(), bcastStart.Load()}
 	for i, v := range starts {
 		if v == 0 {
 			t.Fatalf("start callback %d did not fire", i)
@@ -155,7 +146,7 @@ func TestApp_ShutdownStepOrdering(t *testing.T) {
 	t.Parallel()
 
 	logSink := &syncBuffer{}
-	a := newTestApp(t, logSink, 5*time.Second, 1*time.Second, false)
+	a := newTestApp(t, logSink, 5*time.Second, 1*time.Second, true)
 
 	var stopCalledAt atomic.Int64
 	stop := func() { stopCalledAt.Store(time.Now().UnixNano()) }
@@ -196,16 +187,13 @@ func TestApp_ShutdownStepOrdering(t *testing.T) {
 	}
 
 	var (
-		poolAt, httpAt, bcastAt time.Time
-		finalAt                 time.Time
-		havePool, haveHTTP      bool
-		haveBcast, haveFinal    bool
+		httpAt, bcastAt      time.Time
+		finalAt              time.Time
+		haveHTTP             bool
+		haveBcast, haveFinal bool
 	)
 	for _, e := range entries {
 		switch {
-		case e.Step == "pool":
-			poolAt = e.Time
-			havePool = true
 		case e.Step == "http":
 			httpAt = e.Time
 			haveHTTP = true
@@ -218,9 +206,6 @@ func TestApp_ShutdownStepOrdering(t *testing.T) {
 		}
 	}
 
-	if !havePool {
-		t.Fatal("missing Step-1 pool log line")
-	}
 	if !haveHTTP {
 		t.Fatal("missing Step-1 http log line")
 	}
@@ -236,7 +221,6 @@ func TestApp_ShutdownStepOrdering(t *testing.T) {
 		name string
 		at   time.Time
 	}{
-		{"pool", poolAt},
 		{"http", httpAt},
 		{"broadcast", bcastAt},
 	} {
