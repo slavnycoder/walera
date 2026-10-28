@@ -1697,3 +1697,24 @@ func TestBroadcaster_MultiRoot_NextTxStillDelivered(t *testing.T) {
 		t.Errorf("tx_dropped_total{reason=multi_root}: got %v; want 1", v)
 	}
 }
+
+// A dropped sub stays indexed until its stream deregisters; routing must skip it
+// instead of counting/logging slow_consumer for every tx.
+func TestBroadcaster_DroppedSubscriber_Skipped(t *testing.T) {
+	t.Parallel()
+
+	b, reg := mkBroadcaster(10000)
+	sub := mkWildcardSub("public", "todo_lists", 0, 1)
+	b.Register(sub)
+	sub.Drop("auth_revoked")
+
+	for i := range 3 {
+		b.routeTx(mkTx(pglogrepl.LSN(0x2000+i), uint32(200+i),
+			mkChange(wal.OpUpdate, "public", "todo_lists", "42")))
+	}
+
+	expectNoFrame(t, sub, 20*time.Millisecond)
+	if v := gatherCounter(t, reg, "walera_tx_dropped_total", "reason", "slow_consumer"); v != 0 {
+		t.Errorf("tx_dropped_total{reason=slow_consumer}: got %v; want 0", v)
+	}
+}

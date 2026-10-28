@@ -223,6 +223,12 @@ func (b *Broadcaster) dispatchEvent(tx wal.Tx, sub *Subscriber, indices []int) (
 	if tx.CommitLSN <= sub.StartLSN() {
 		return 0, 0
 	}
+	// Dropped but not yet deregistered: skip, or a full queue floods slow_consumer.
+	select {
+	case <-sub.Done():
+		return 0, 0
+	default:
+	}
 
 	// No filter means no grant: never deliver unfiltered rows.
 	if sub.Filter == nil {
