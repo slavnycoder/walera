@@ -29,6 +29,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   guard now applies only to exact (`/{table}/{pk}`) subscribers; wildcard
   (`/{table}/all`) subscribers, which are authorized for every row, no longer
   silently miss bulk writes.
+- **SSE writes are batched.** Frames already queued for a subscriber are
+  written with a single flush.
 - **SSE streams are written by their own handler goroutine.** No more
   shared writer pool, 1 ms busy-poll, or TCP hijack: a slow client only
   blocks itself, and in-process TLS / HTTP/2 work. Queue capacity now comes

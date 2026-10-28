@@ -193,12 +193,22 @@ func (h *Handler) stream(w http.ResponseWriter, r *http.Request, sub *router.Sub
 				return
 			default:
 			}
-			if err := write(frame); err != nil {
+			frames := [][]byte{frame}
+		batch:
+			for {
+				select {
+				case f := <-queue:
+					frames = append(frames, f)
+				default:
+					break batch
+				}
+			}
+			if err := write(frames...); err != nil {
 				reason = writeFailureReason(err)
 				sub.Drop(reason)
 				return
 			}
-			h.metrics.EventsSent(kind).Inc()
+			h.metrics.EventsSent(kind).Add(float64(len(frames)))
 			hb.Reset(h.cfg.HeartbeatInterval)
 		case <-hb.C:
 			if err := write(h.enc.EncodeHeartbeat()); err != nil {

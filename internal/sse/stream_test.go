@@ -2,6 +2,7 @@ package sse
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -173,11 +174,22 @@ type gatedWriter struct {
 	hdr     http.Header
 	gate    chan struct{}
 	blocked chan struct{}
+	flushes int
 }
 
 func (g *gatedWriter) Header() http.Header { return g.hdr }
 func (g *gatedWriter) WriteHeader(int)     {}
-func (g *gatedWriter) Flush()              {}
+func (g *gatedWriter) Flush() {
+	g.mu.Lock()
+	g.flushes++
+	g.mu.Unlock()
+}
+
+func (g *gatedWriter) flushCount() int {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.flushes
+}
 
 func (g *gatedWriter) Write(p []byte) (int, error) {
 	g.mu.Lock()
@@ -326,4 +338,52 @@ func TestStream_OpenAfterBroadcasterShutdown_GetsShutdownFrame(t *testing.T) {
 	if err := srv.Config.Shutdown(ctx); err != nil {
 		t.Fatalf("Shutdown: %v; want nil within 2s", err)
 	}
+}
+
+func TestStream_BatchesQueuedFramesIntoOneFlush(t *testing.T) {
+	t.Parallel()
+	kit := newTestHandler(t, nil, nil)
+	gw := &gatedWriter{hdr: http.Header{}, blocked: make(chan struct{})}
+	sub := router.NewSubscriber(router.SubscriberConfig{Kind: router.KindExact, Schema: "public", Table: "users", PK: "42"},
+		router.SubscriberDeps{Parent: context.Background()})
+	r := httptest.NewRequest(http.MethodGet, "/sse/v1/users/42", nil)
+	done := make(chan struct{})
+	go func() { defer close(done); kit.h.stream(gw, r, sub, nil) }()
+	kit.bc.firstSub(t)
+
+	gate := make(chan struct{})
+	gw.mu.Lock()
+	gw.gate = gate
+	gw.mu.Unlock()
+	if !sub.Send([]byte("data: 0\n\n")) {
+		t.Fatal("Send 0 returned false")
+	}
+	<-gw.blocked
+	for i := 1; i <= 5; i++ {
+		if !sub.Send([]byte(fmt.Sprintf("data: %d\n\n", i))) {
+			t.Fatalf("Send %d returned false", i)
+		}
+	}
+	before := gw.flushCount()
+	close(gate)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for !strings.Contains(gw.String(), "data: 5\n\n") {
+		if time.Now().After(deadline) {
+			t.Fatalf("frames not delivered: %q", gw.String())
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	// frame 0 + one batch for 1..5; a heartbeat may add one more.
+	if got := gw.flushCount() - before; got > 3 {
+		t.Fatalf("flushes for 6 frames = %d; want <= 3 (queued frames batched)", got)
+	}
+	body := gw.String()
+	for i := 0; i < 5; i++ {
+		if strings.Index(body, fmt.Sprintf("data: %d\n", i)) > strings.Index(body, fmt.Sprintf("data: %d\n", i+1)) {
+			t.Fatalf("frames out of order: %q", body)
+		}
+	}
+	sub.Drop("test")
+	<-done
 }
