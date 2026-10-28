@@ -84,7 +84,7 @@ func TestTryRefresh_OnDemandNotStarvedDuringBackoff(t *testing.T) {
 	var sum RefreshSummary
 	deadline := time.Now().Add(300 * time.Millisecond)
 	for time.Now().Before(deadline) {
-		if sum = reg.RefreshOwnByChannel("users:42", "u1", usersMap("u1", "id", "name")); sum.Busy == 0 {
+		if sum = reg.RefreshOwnByChannel("users:42", "u1", usersMap("u1", "id", "name"), time.Now()); sum.Busy == 0 {
 			break
 		}
 		time.Sleep(5 * time.Millisecond)
@@ -251,7 +251,7 @@ func TestRefreshOwnByChannel_OnlyOwnChannelUser(t *testing.T) {
 	reg.Add(otherUser)
 	reg.Add(otherChan)
 
-	sum := reg.RefreshOwnByChannel("users:42", "u1", usersMap("u1", "id", "name"))
+	sum := reg.RefreshOwnByChannel("users:42", "u1", usersMap("u1", "id", "name"), time.Now())
 	if sum.Matched != 1 || sum.Swapped != 1 {
 		t.Fatalf("summary = %+v; want Matched=1 Swapped=1", sum)
 	}
@@ -282,7 +282,7 @@ func TestRefreshOwnByChannel_FanOutMultipleOwnSubs(t *testing.T) {
 	reg.Add(a)
 	reg.Add(b)
 
-	sum := reg.RefreshOwnByChannel("users:42", "u1", usersMap("u1", "id", "name"))
+	sum := reg.RefreshOwnByChannel("users:42", "u1", usersMap("u1", "id", "name"), time.Now())
 	if sum.Matched != 2 || sum.Swapped != 2 {
 		t.Fatalf("summary = %+v; want Matched=2 Swapped=2", sum)
 	}
@@ -312,7 +312,7 @@ func TestRefreshOwnByChannel_SwappedAndBusy(t *testing.T) {
 	reg.Add(busy)
 
 	busy.refreshMu.Lock() // simulate an in-flight TTL refresh on one sub
-	sum := reg.RefreshOwnByChannel("users:42", "u1", usersMap("u1", "id", "name"))
+	sum := reg.RefreshOwnByChannel("users:42", "u1", usersMap("u1", "id", "name"), time.Now())
 	busy.refreshMu.Unlock()
 
 	if sum.Matched != 2 || sum.Swapped != 1 || sum.Busy != 1 {
@@ -337,7 +337,7 @@ func TestRefreshOwnByChannel_NoMatch(t *testing.T) {
 	reg := newTestRegistry(t)
 	reg.Add(ownSub(t, c, "u1", "users:42"))
 
-	sum := reg.RefreshOwnByChannel("users:777", "u1", usersMap("u1", "id", "name"))
+	sum := reg.RefreshOwnByChannel("users:777", "u1", usersMap("u1", "id", "name"), time.Now())
 	if sum.Matched != 0 {
 		t.Fatalf("summary = %+v; want Matched=0", sum)
 	}
@@ -387,7 +387,7 @@ func TestRefreshOwnByChannel_RaceWithFilterAndTTL(t *testing.T) {
 		go func() {
 			defer workers.Done()
 			for j := 0; j < 100; j++ {
-				reg.RefreshOwnByChannel("users:42", "u1", usersMap("u1", "id", "name"))
+				reg.RefreshOwnByChannel("users:42", "u1", usersMap("u1", "id", "name"), time.Now())
 			}
 		}()
 	}
@@ -421,10 +421,10 @@ func TestRefreshOwnByChannel_WildcardNotCrossMatched(t *testing.T) {
 	reg := newTestRegistry(t)
 	reg.Add(ownSub(t, c, "u1", "users:all"))
 
-	if sum := reg.RefreshOwnByChannel("users:42", "u1", usersMap("u1", "id", "name")); sum.Matched != 0 {
+	if sum := reg.RefreshOwnByChannel("users:42", "u1", usersMap("u1", "id", "name"), time.Now()); sum.Matched != 0 {
 		t.Errorf("exact channel matched a wildcard subscriber: %+v", sum)
 	}
-	if sum := reg.RefreshOwnByChannel("users:all", "u1", usersMap("u1", "id", "name")); sum.Matched != 1 || sum.Swapped != 1 {
+	if sum := reg.RefreshOwnByChannel("users:all", "u1", usersMap("u1", "id", "name"), time.Now()); sum.Matched != 1 || sum.Swapped != 1 {
 		t.Errorf("wildcard channel summary = %+v; want Matched=1 Swapped=1", sum)
 	}
 }
@@ -442,7 +442,7 @@ func TestRefreshOwnByChannel_AppliesGivenWhitelist_NoBackendCall(t *testing.T) {
 	fresh := usersMap("u1", "id", "name")
 	fresh.InitialData = json.RawMessage(`{"startup":"payload"}`)
 
-	sum := reg.RefreshOwnByChannel("users:42", "u1", fresh)
+	sum := reg.RefreshOwnByChannel("users:42", "u1", fresh, time.Now())
 	if sum.Matched != 1 || sum.Swapped != 1 {
 		t.Fatalf("summary = %+v; want Matched=1 Swapped=1", sum)
 	}
@@ -469,11 +469,36 @@ func TestRefreshOwnByChannel_RevokedDropsSub(t *testing.T) {
 	reg.Add(sub)
 
 	fresh := &Whitelist{UserID: "u1", Tables: map[string]map[string]struct{}{"orders": {}}}
-	sum := reg.RefreshOwnByChannel("users:42", "u1", fresh)
+	sum := reg.RefreshOwnByChannel("users:42", "u1", fresh, time.Now())
 	if sum.Matched != 1 || sum.Revoked != 1 {
 		t.Fatalf("summary = %+v; want Matched=1 Revoked=1", sum)
 	}
 	if r := sub.Sub.Reason(); r != "auth_revoked" {
 		t.Errorf("drop reason = %q; want auth_revoked", r)
+	}
+}
+
+// A TTL swap landing after OpenSession was fetched is newer; the stale on-demand
+// whitelist must not overwrite it (would re-expose a just-revoked field).
+func TestRefreshOwnByChannel_SkipsSubRefreshedAfterFetch(t *testing.T) {
+	t.Parallel()
+	srv := newScriptServer(t, func(_ int64, w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+	c, _ := newSubTestClient(t, srv.srv.URL)
+	sub := ownSub(t, c, "u1", "users:42")
+	reg := newTestRegistry(t)
+	reg.Add(sub)
+
+	fetchedAt := time.Now()
+	time.Sleep(time.Millisecond)
+	sub.swapMap(usersMap("u1", "id")) // TTL narrowed the whitelist after the fetch
+
+	sum := reg.RefreshOwnByChannel("users:42", "u1", usersMap("u1", "id", "email"), fetchedAt)
+	if sum.Matched != 1 || sum.Swapped != 1 {
+		t.Fatalf("summary = %+v; want Matched=1 Swapped=1 (already current)", sum)
+	}
+	if _, ok := sub.AuthMap.Load().Tables["users"]["email"]; ok {
+		t.Fatalf("stale on-demand whitelist overwrote a newer TTL swap: users.email re-exposed")
 	}
 }

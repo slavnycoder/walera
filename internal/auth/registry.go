@@ -70,7 +70,8 @@ type RefreshSummary struct {
 
 // RefreshOwnByChannel swaps fresh (from the caller's OpenSession) into userID's live
 // subs on channel. Exact match: no wildcard cross-match, no touching other users.
-func (r *Subscribers) RefreshOwnByChannel(channel, userID string, fresh *Whitelist) RefreshSummary {
+// A sub refreshed after fetchedAt is newer than fresh and is left as is.
+func (r *Subscribers) RefreshOwnByChannel(channel, userID string, fresh *Whitelist, fetchedAt time.Time) RefreshSummary {
 	r.mu.Lock()
 	matched := make([]*Subscriber, 0, 4)
 	for _, s := range r.subs {
@@ -86,7 +87,9 @@ func (r *Subscribers) RefreshOwnByChannel(channel, userID string, fresh *Whiteli
 			sum.Busy++
 			continue
 		}
-		if s.applyFetched(fresh, nil) == attemptRevoked {
+		if s.lastRefresh.Load() > fetchedAt.UnixNano() {
+			sum.Swapped++ // already current
+		} else if s.applyFetched(fresh, nil) == attemptRevoked {
 			sum.Revoked++
 		} else {
 			sum.Swapped++

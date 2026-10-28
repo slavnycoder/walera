@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const refreshBodyMaxBytes = 1024
@@ -58,6 +59,7 @@ func (h *Handler) serveRefresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	fetchedAt := time.Now()
 	authMap, _, ok := h.authenticate(w, r, channelStr)
 	if !ok {
 		return
@@ -70,7 +72,7 @@ func (h *Handler) serveRefresh(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Revocation beats a swap; a swap beats a concurrent Busy.
-	sum := h.authRegistry.RefreshOwnByChannel(channelStr, authMap.UserID, authMap)
+	sum := h.authRegistry.RefreshOwnByChannel(channelStr, authMap.UserID, authMap, fetchedAt)
 	switch {
 	case sum.Matched == 0:
 		h.metrics.RefreshOnDemand("no_live_subscriber").Inc()
