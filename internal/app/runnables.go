@@ -29,19 +29,6 @@ func buildRunnables(a *App, slotName wal.SlotName) []Runnable {
 		},
 	}
 
-	runs = append(runs, Runnable{
-		Name: "auth-stale-watcher",
-		Run: func(ctx context.Context) error {
-			a.SubRegistry.WatchBreaker(
-				ctx,
-				a.Breaker,
-				a.Config.Auth.Breaker.StaleRefreshJitter,
-				a.Config.Auth.DefaultTTLSeconds,
-			)
-			return nil
-		},
-	})
-
 	runs = append(runs,
 		Runnable{
 			Name: "router-ingest",

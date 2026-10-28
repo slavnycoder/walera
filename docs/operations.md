@@ -291,7 +291,6 @@ capacity, latency, or rate-limit budgets for a specific deployment.
 | `WALERA_AUTH_BREAKER_FAILURE_RATE_THRESHOLD`  | `auth.breaker.failure_rate_threshold`     | `0.5`     | Failure ratio that opens the breaker after the floor.            | `0.5`              |
 | `WALERA_AUTH_BREAKER_DEBOUNCE_FLOOR`          | `auth.breaker.debounce_floor`             | `20`      | Minimum sample size before the threshold can fire.               | `20`               |
 | `WALERA_AUTH_BREAKER_COOLDOWN`                | `auth.breaker.cooldown`                   | `30s`     | Open → HalfOpen transition delay.                                | `30s`              |
-| `WALERA_AUTH_BREAKER_STALE_REFRESH_JITTER`    | `auth.breaker.stale_refresh_jitter`       | `5s`      | Random jitter on background refresh scheduling.                  | `5s`               |
 | `WALERA_AUTH_ALLOW_PLAINTEXT`                 | (env-only)                                | unset     | Dev escape hatch — set to `1` to allow `http://` backends.       | unset              |
 
 #### `router.*` — subscriber indexes and fan-out

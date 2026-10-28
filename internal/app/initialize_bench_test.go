@@ -78,7 +78,6 @@ func newSingletonBenchConfig(b *testing.B) *AppConfig {
 				FailureRateThreshold: 0.5,
 				DebounceFloor:        10,
 				Cooldown:             10 * time.Second,
-				StaleRefreshJitter:   1 * time.Second,
 			},
 		},
 		Limits: limits.Config{

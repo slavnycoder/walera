@@ -13,12 +13,11 @@ type Registry struct {
 	subscriberDisconnects *prometheus.CounterVec
 	routeLookupDuration   prometheus.Histogram
 
-	authRequestsTotal    *prometheus.CounterVec
-	authRequestDuration  prometheus.Histogram
-	authBreakerState     prometheus.Gauge
-	authBreakerStaleSubs prometheus.Gauge
-	limitRejectedTotal   *prometheus.CounterVec
-	pgConnectionStatus   prometheus.Gauge
+	authRequestsTotal   *prometheus.CounterVec
+	authRequestDuration prometheus.Histogram
+	authBreakerState    prometheus.Gauge
+	limitRejectedTotal  *prometheus.CounterVec
+	pgConnectionStatus  prometheus.Gauge
 
 	pgReconnectsTotal prometheus.Counter
 	walLSNLagBytes    prometheus.Gauge
@@ -64,7 +63,6 @@ func New() *Registry {
 		r.authRequestsTotal,
 		r.authRequestDuration,
 		r.authBreakerState,
-		r.authBreakerStaleSubs,
 		r.limitRejectedTotal,
 		r.pgConnectionStatus,
 		r.pgReconnectsTotal,
@@ -197,12 +195,6 @@ func newAuthMetrics(r *Registry) {
 			Help: "Auth circuit breaker state (0=Closed, 1=Open, 2=HalfOpen).",
 		},
 	)
-	r.authBreakerStaleSubs = prometheus.NewGauge(
-		prometheus.GaugeOpts{
-			Name: "walera_auth_breaker_stale_subscribers",
-			Help: "Subscribers with last_refresh > 1.5×ttl_seconds (sampled by registry every 30s).",
-		},
-	)
 	r.authRefreshTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "walera_auth_refresh_total",
 		Help: "Per-subscriber auth refresh attempts by result (separates from handshake auth_requests_total).",
@@ -318,10 +310,6 @@ func (r *Registry) AuthRequestDuration() prometheus.Histogram {
 
 func (r *Registry) AuthBreakerState() prometheus.Gauge {
 	return r.authBreakerState
-}
-
-func (r *Registry) AuthBreakerStaleSubs() prometheus.Gauge {
-	return r.authBreakerStaleSubs
 }
 
 func (r *Registry) LimitRejected(kind string) prometheus.Counter {

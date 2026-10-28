@@ -473,7 +473,7 @@ func newRefreshFwdHandler(t *testing.T, fwdHeaders []string) (*Handler, *fakeAut
 		ForwardedHeaders:  fwdHeaders,
 		Breaker: auth.BreakerConfig{
 			WindowBuckets: 30, BucketSeconds: 1, FailureRateThreshold: 0.5,
-			DebounceFloor: 20, Cooldown: 30 * time.Second, StaleRefreshJitter: 5 * time.Second,
+			DebounceFloor: 20, Cooldown: 30 * time.Second,
 		},
 		Signing: auth.SigningConfig{Secret: strings.Repeat("k", 64), Kid: "v1"},
 	}

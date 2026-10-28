@@ -2,7 +2,6 @@ package auth
 
 import (
 	"context"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -47,9 +46,6 @@ type Breaker struct {
 	state  atomic.Uint32
 	window *window
 
-	closeMu sync.Mutex
-	closeCh chan struct{}
-
 	openedAt atomic.Int64
 
 	clock        func() time.Time
@@ -85,7 +81,6 @@ func NewBreaker(cfg BreakerConfig, deps BreakerDeps) *Breaker {
 		mc:           deps.Metrics,
 		probe:        deps.Prober,
 		window:       newWindow(),
-		closeCh:      make(chan struct{}),
 		clock:        time.Now,
 		tickInterval: tick,
 	}
@@ -125,20 +120,6 @@ func (b *Breaker) RecordResult(success bool) {
 			Uint64("total_samples", total).
 			Msg("auth: circuit breaker opened")
 	}
-}
-
-func (b *Breaker) WaitForClose() <-chan struct{} {
-	b.closeMu.Lock()
-	defer b.closeMu.Unlock()
-	return b.closeCh
-}
-
-func (b *Breaker) signalClose() {
-	b.closeMu.Lock()
-	old := b.closeCh
-	b.closeCh = make(chan struct{})
-	close(old)
-	b.closeMu.Unlock()
 }
 
 func (b *Breaker) Run(ctx context.Context) {
@@ -204,7 +185,6 @@ func (b *Breaker) transitionToClosed() {
 	}
 	b.openedAt.Store(0)
 	b.mc.AuthBreakerState().Set(0)
-	b.signalClose()
 	b.log.Info().Str("breaker_state", "closed").Msg("auth: circuit breaker closed")
 }
 

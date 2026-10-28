@@ -156,7 +156,6 @@ func newTestHandler(t *testing.T, cors []string, lcfg *limits.Config) *testHandl
 			FailureRateThreshold: 0.5,
 			DebounceFloor:        20,
 			Cooldown:             30 * time.Second,
-			StaleRefreshJitter:   5 * time.Second,
 		},
 		Signing: auth.SigningConfig{
 			Secret: strings.Repeat("k", 64),

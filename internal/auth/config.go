@@ -73,8 +73,6 @@ type BreakerConfig struct {
 	DebounceFloor int `koanf:"debounce_floor"`
 
 	Cooldown time.Duration `koanf:"cooldown"`
-
-	StaleRefreshJitter time.Duration `koanf:"stale_refresh_jitter"`
 }
 
 // DocsURL points operators at the auth-feature documentation. Included in
@@ -91,7 +89,6 @@ func ApplyDefaults(k *koanf.Koanf) {
 	_ = k.Set("auth.breaker.failure_rate_threshold", 0.5)
 	_ = k.Set("auth.breaker.debounce_floor", 20)
 	_ = k.Set("auth.breaker.cooldown", "30s")
-	_ = k.Set("auth.breaker.stale_refresh_jitter", "5s")
 	_ = k.Set("auth.signing.kid", "v1")
 }
 

@@ -193,7 +193,6 @@ auth:
     failure_rate_threshold: 0.5
     debounce_floor: 5
     cooldown: 2s
-    stale_refresh_jitter: 100ms
 limits:
   global_concurrent: %d
   per_user_concurrent: %d

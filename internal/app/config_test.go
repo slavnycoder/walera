@@ -346,10 +346,6 @@ func TestConfigPhase3Defaults(t *testing.T) {
 	if cfg.Auth.Breaker.Cooldown != 30*time.Second {
 		t.Errorf("Auth.Breaker.Cooldown: got %s; want 30s", cfg.Auth.Breaker.Cooldown)
 	}
-	if cfg.Auth.Breaker.StaleRefreshJitter != 5*time.Second {
-		t.Errorf("Auth.Breaker.StaleRefreshJitter: got %s; want 5s", cfg.Auth.Breaker.StaleRefreshJitter)
-	}
-
 	if cfg.Limits.GlobalConcurrent != 50000 {
 		t.Errorf("Limits.GlobalConcurrent: got %d; want 50000", cfg.Limits.GlobalConcurrent)
 	}

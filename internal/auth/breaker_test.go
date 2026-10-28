@@ -48,7 +48,6 @@ func newTestBreaker(t *testing.T, probe func(ctx context.Context) error) (*Break
 		FailureRateThreshold: 0.5,
 		DebounceFloor:        20,
 		Cooldown:             30 * time.Second,
-		StaleRefreshJitter:   5 * time.Second,
 	}
 
 	if probe == nil {
@@ -152,8 +151,6 @@ func TestBreaker_OpenToHalfOpenAfterCooldownProbeSuccess(t *testing.T) {
 	successProbe := func(ctx context.Context) error { return nil }
 	b, now := newTestBreaker(t, successProbe)
 
-	ch1 := b.WaitForClose()
-
 	for i := 0; i < 21; i++ {
 		b.RecordResult(false)
 	}
@@ -168,12 +165,6 @@ func TestBreaker_OpenToHalfOpenAfterCooldownProbeSuccess(t *testing.T) {
 	}
 	if v := gatherSingleGauge(t, b.mc, "walera_auth_circuit_breaker_state"); v != 0 {
 		t.Errorf("gauge: got %v; want 0", v)
-	}
-
-	select {
-	case <-ch1:
-	case <-time.After(100 * time.Millisecond):
-		t.Fatal("WaitForClose channel did not fire after Open→Closed")
 	}
 }
 
@@ -216,48 +207,6 @@ func TestBreaker_ProbeNon200ResponseCountsAsReachable(t *testing.T) {
 	}
 	if v := gatherSingleGauge(t, b.mc, "walera_auth_circuit_breaker_state"); v != 0 {
 		t.Errorf("gauge: got %v; want 0", v)
-	}
-}
-
-func TestBreaker_WaitForCloseChannelCyclesAcrossTransitions(t *testing.T) {
-	t.Parallel()
-	successProbe := func(ctx context.Context) error { return nil }
-	b, now := newTestBreaker(t, successProbe)
-	for cycle := 0; cycle < 5; cycle++ {
-		ch := b.WaitForClose()
-
-		for i := 0; i < 21; i++ {
-			b.RecordResult(false)
-		}
-		if got := b.State(); got != StateOpen {
-			t.Fatalf("cycle %d: precondition state should be StateOpen, got %v", cycle, got)
-		}
-
-		now.Add(int64(31 * time.Second))
-		b.tickFSM(context.Background())
-		if got := b.State(); got != StateClosed {
-			t.Fatalf("cycle %d: state after probe success: got %v; want StateClosed", cycle, got)
-		}
-
-		select {
-		case <-ch:
-		case <-time.After(100 * time.Millisecond):
-			t.Fatalf("cycle %d: WaitForClose channel did not fire", cycle)
-		}
-
-		newCh := b.WaitForClose()
-		if newCh == ch {
-			t.Fatalf("cycle %d: new channel reference equals old", cycle)
-		}
-		select {
-		case <-newCh:
-			t.Fatalf("cycle %d: freshly created channel is already closed", cycle)
-		default:
-		}
-
-		for i := 0; i < windowBuckets; i++ {
-			b.window.tick()
-		}
 	}
 }
 

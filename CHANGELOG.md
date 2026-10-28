@@ -18,6 +18,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `auth_unavailable` after its retries, so a revoked user can no longer keep
   streaming for the whole duration of an auth-backend outage.
 
+### Removed
+
+- Breaker-close stale-refresh fan-out (`auth.breaker.stale_refresh_jitter`,
+  `walera_auth_breaker_stale_subscribers`, alert
+  `WaleraAuthBreakerStaleSubscribersOutsideBreaker`). Fail-closed refresh
+  leaves no stale subscribers for it to catch.
+
 ## [2.2.0] - 2026-06-08
 
 ### Security

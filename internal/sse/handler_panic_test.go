@@ -28,7 +28,6 @@ func newHandlerPanicValidDeps(t *testing.T) (Config, Deps) {
 			FailureRateThreshold: 0.5,
 			DebounceFloor:        20,
 			Cooldown:             30 * time.Second,
-			StaleRefreshJitter:   5 * time.Second,
 		},
 	}
 	breaker := auth.NewBreaker(authCfg.Breaker, auth.BreakerDeps{

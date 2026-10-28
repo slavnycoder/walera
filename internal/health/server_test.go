@@ -311,7 +311,6 @@ func TestMetrics_ContainsPhase3Metrics(t *testing.T) {
 		"walera_auth_requests_total",
 		"walera_auth_request_duration_seconds",
 		"walera_auth_circuit_breaker_state",
-		"walera_auth_breaker_stale_subscribers",
 		"walera_limit_rejected_total",
 		"walera_pg_connection_status",
 	}

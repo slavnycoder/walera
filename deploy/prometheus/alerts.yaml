@@ -74,16 +74,6 @@ spec:
           annotations:
             summary: "Walera auth circuit breaker open"
             description: "New SSE opens are rejected with 503; established streams drop with auth_unavailable after TTL + retries. Investigate auth backend logs."
-        - alert: WaleraAuthBreakerStaleSubscribersOutsideBreaker
-          expr: walera_auth_circuit_breaker_state == 0 and walera_auth_breaker_stale_subscribers > 0
-          for: 1m
-          labels:
-            severity: P1
-            app: walera
-            component: auth
-          annotations:
-            summary: "Walera has stale subscribers with no open breaker"
-            description: "Refresh logic bug. Subscribers operating with stale auth maps but no breaker reason. Inspect walera_auth_refresh_total{result}."
 
     - name: walera.subscribers
       interval: 30s

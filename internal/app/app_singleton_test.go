@@ -120,7 +120,6 @@ func newSingletonTestConfig(t *testing.T) *AppConfig {
 				FailureRateThreshold: 0.5,
 				DebounceFloor:        10,
 				Cooldown:             10 * time.Second,
-				StaleRefreshJitter:   1 * time.Second,
 			},
 		},
 		Limits: limits.Config{

@@ -63,7 +63,6 @@ func TestLoadKoanf_EnvTransform_MultiLevelRemap(t *testing.T) {
 	t.Setenv("WALERA_AUTH_BREAKER_FAILURE_RATE_THRESHOLD", "0.75")
 	t.Setenv("WALERA_AUTH_BREAKER_DEBOUNCE_FLOOR", "4")
 	t.Setenv("WALERA_AUTH_BREAKER_COOLDOWN", "11s")
-	t.Setenv("WALERA_AUTH_BREAKER_STALE_REFRESH_JITTER", "2s")
 	k, err := config.LoadKoanf("", nil)
 	if err != nil {
 		t.Fatalf("LoadKoanf: %v", err)
@@ -91,9 +90,6 @@ func TestLoadKoanf_EnvTransform_MultiLevelRemap(t *testing.T) {
 	}
 	if got := k.String("auth.breaker.cooldown"); got != "11s" {
 		t.Errorf("auth.breaker.cooldown = %q; want 11s", got)
-	}
-	if got := k.String("auth.breaker.stale_refresh_jitter"); got != "2s" {
-		t.Errorf("auth.breaker.stale_refresh_jitter = %q; want 2s", got)
 	}
 }
 

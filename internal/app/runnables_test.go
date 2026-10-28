@@ -76,7 +76,7 @@ func TestBuildRunnablesRunnableClosures(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	for _, name := range []string{"auth-breaker-fsm", "auth-stale-watcher", "router-ingest", "metrics-sampler"} {
+	for _, name := range []string{"auth-breaker-fsm", "router-ingest", "metrics-sampler"} {
 		r, ok := byName[name]
 		if !ok {
 			t.Fatalf("missing runnable %q", name)
