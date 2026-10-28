@@ -37,9 +37,9 @@ func (h *Handler) serveRefreshPreflight(w http.ResponseWriter, r *http.Request) 
 // breaker semantics) but issues a SINGLE backend fetch for the whole group and
 // returns an aggregate result; there is no TTL backoff.
 //
-// Admission control mirrors the handshake but is symmetric within this one short
-// request: AcquireGlobal first (before auth), AcquirePerUser after OpenSession
-// yields the user_id, both released on return.
+// Admission: only the global semaphore. The per-user counter caps concurrent
+// streams and is held for a stream's lifetime, so taking it here would 429 a
+// user with a full set of streams.
 //
 // Status codes:
 //   - 200 {"refreshed":N}     the caller's N subscriber(s) were re-authorized and swapped
@@ -49,7 +49,6 @@ func (h *Handler) serveRefreshPreflight(w http.ResponseWriter, r *http.Request) 
 //     or the re-fetch revoked access and the subscriber was dropped (auth_revoked)
 //   - 404 {"reason":"no_live_subscriber"}  the caller has no live stream on the channel
 //   - 409 {"reason":"refresh_in_progress"} a refresh is already in flight (Retry-After: 1)
-//   - 429                     per-user refresh concurrency exceeded
 //   - 503 {"reason":"auth_unavailable"}    the backend re-fetch failed (Retry-After: 5)
 //   - 503 (status only)       global concurrency exhausted (Retry-After: 5)
 func (h *Handler) serveRefresh(w http.ResponseWriter, r *http.Request) {
@@ -81,21 +80,13 @@ func (h *Handler) serveRefresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 3. Per-user admission, after OpenSession yields the user_id (mirrors the
-	//    handshake order: global before auth, per-user after). Released on return.
-	if ok, _ := h.limits.AcquirePerUser(authMap.UserID); !ok {
-		h.writeStatusOnlyError(w, r, http.StatusTooManyRequests, 0)
-		return
-	}
-	defer h.limits.ReleasePerUser(authMap.UserID)
-
 	if _, allowed := authMap.Tables[table]; !allowed {
 		h.metrics.RefreshOnDemand("not_allowed").Inc()
 		h.writeJSONReason(w, r, http.StatusForbidden, "not_allowed")
 		return
 	}
 
-	// 4. Synchronously refresh the caller's own live subscriber(s) on the channel.
+	// 3. Synchronously refresh the caller's own live subscriber(s) on the channel.
 	//    Branch precedence keeps a partial success from hiding behind a concurrent
 	//    failure: an authoritative revocation beats everything, then any swap beats
 	//    Busy/Unavailable, then a real backend failure, then in-flight (Busy).

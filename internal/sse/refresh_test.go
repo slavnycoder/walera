@@ -627,20 +627,35 @@ func TestRefresh_GlobalLimitExhausted_503(t *testing.T) {
 	}
 }
 
-func TestRefresh_PerUserLimitExhausted_429(t *testing.T) {
+func TestRefresh_PerUserSlotsFull_StillRefreshes(t *testing.T) {
 	t.Parallel()
-	kit := newTestHandler(t, nil, &limits.Config{GlobalConcurrent: 1024, PerUserConcurrentMax: 1})
-	validMapBackend(kit.backend) // OpenSession authenticates the caller as u1
-	// Occupy u1's only per-user slot so the refresh's AcquirePerUser fails after
-	// OpenSession yields the user_id (mirrors the handshake order).
+	kit := newTestHandler(t, nil, &limits.Config{GlobalConcurrent: 1024, PerUserConcurrentMax: 2})
+	sub := registerLiveSub(t, kit, "u1", "users:42", "users", "id")
+	refreshBackend(kit.backend, map[string][]string{"users": {"id"}}, map[string][]string{"users": {"id", "name"}}, 200)
+
+	// u1 holds one of two slots (its live stream). Refresh must not consume the
+	// other one, and must not fail when all are taken.
 	if ok, _ := kit.limits.AcquirePerUser("u1"); !ok {
-		t.Fatal("precondition: could not acquire the single per-user slot")
+		t.Fatal("precondition: acquire slot 1")
 	}
 	defer kit.limits.ReleasePerUser("u1")
 
 	w, _ := postRefresh(kit.h, `{"channel":"users:42"}`, true)
-	if w.Code != http.StatusTooManyRequests {
-		t.Fatalf("status = %d; want 429 (per-user limit)", w.Code)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d; want 200 with a free slot (body=%s)", w.Code, w.Body.String())
+	}
+	if ok, _ := kit.limits.AcquirePerUser("u1"); !ok {
+		t.Fatal("refresh leaked a per-user slot")
+	}
+	defer kit.limits.ReleasePerUser("u1")
+
+	// Both slots now held, as with PerUserConcurrentMax live streams.
+	w, _ = postRefresh(kit.h, `{"channel":"users:42"}`, true)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d; want 200 with all per-user slots full (body=%s)", w.Code, w.Body.String())
+	}
+	if _, ok := sub.AuthMap.Load().Tables["users"]["name"]; !ok {
+		t.Errorf("whitelist not swapped: users.name missing")
 	}
 }
 
