@@ -1,11 +1,8 @@
 package auth
 
 import (
-	"errors"
 	"fmt"
 )
-
-var ErrBreakerOpen = errors.New("auth: circuit breaker open")
 
 type ErrUnauthorized struct{ Body []byte }
 

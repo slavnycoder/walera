@@ -75,10 +75,8 @@ Walera is a Go service that streams PostgreSQL row-level changes to clients over
 - **Sharded subscription index (ROUTE-02).** The index shards on `xxhash.Sum64String(key)
 - **Zero allocation for the hot path.** `xxhash.Sum64String` takes a string directly.
 - **Assembly-optimized on amd64/arm64.** The k8s pod runs on amd64; the asm path is
-### Circuit Breaker: Hand-rolled FSM (primary) with gobreaker v2 as reference
-- **The spec defines custom state semantics.** AUTH-04 requires: ">50% failure rate over
-- **The FSM is small.** Three states (Closed / Open / HalfOpen), two transitions
-- **On-close broadcast.** A `chan struct{}` closed by the FSM's state transition gives
+### Circuit Breaker: removed
+- Removed 2026-10-28: refresh is fail-closed and re-calls `/auth/sessions`; there is no circuit breaker.
 ### Schema Validation Library: None needed
 ### Build Tooling: golangci-lint v2 `v2.12.2`
 - `exhaustive`: The pgoutput message-type switch (`case *pglogrepl.InsertMessageV2`,
@@ -122,7 +120,6 @@ Walera is a Go service that streams PostgreSQL row-level changes to clients over
 | `github.com/spf13/viper` | Global state, `fsnotify` watcher not needed for k8s (restarts handle config changes), heavier transitive dep tree than koanf. | `koanf/v2` |
 | `go.uber.org/ratelimit` | AIMD/leaky-bucket — sleeps the caller. Moot anyway; SSE rate limiting is no longer done in-process. | upstream proxy (traefik / NGINX / ingress) |
 | `go.uber.org/zap` | Comparable allocation performance to zerolog but more verbose API (explicit `zap.String()` fields everywhere). No allocation advantage over zerolog for this use case; zerolog is simpler for the contextual-logger-per-subscriber pattern. | `zerolog` |
-| `github.com/sony/gobreaker` (v1 or v2) for the auth breaker | v1 uses fixed-interval counter reset, not a sliding window. v2 adds bucket-period rolling window but still can't express the "bounded fail-open for existing subs / fail-closed for new opens" posture without external scaffolding. | Hand-rolled FSM in `internal/auth/breaker.go` (~120 lines) |
 | Binary pgoutput mode | Spec explicitly defers binary mode to post-MVP. Text mode is sufficient at 5k tx/s on 4 CPUs. Binary decoding adds non-trivial implementation complexity for marginal throughput gain. | `pgoutput` text mode (default in pglogrepl) |
 | `pgbouncer` in the replication path | PgBouncer does not support the PostgreSQL replication protocol. The replication connection must connect directly to PostgreSQL. Spec §10.4 explicitly calls this out. | Direct `pgconn` connection to PostgreSQL |
 | `Last-Event-ID` resume + persistent replication slot | Persistent slot accumulates WAL during downtime; on restart Walera would replay all accumulated changes to 0 connected subscribers — pure disk waste. Spec §1.4 explicitly rejects this. Walera makes no continuity guarantee across reconnect — clients resync state from the primary API on reconnect (PROJECT.md §Out of Scope). | Temporary slot (`CREATE_REPLICATION_SLOT ... TEMPORARY`) |
@@ -140,7 +137,6 @@ Walera is a Go service that streams PostgreSQL row-level changes to clients over
 - Context7 `/jackc/pgx` — v5 connection pool patterns
 - Context7 `/rs/zerolog` — zero-allocation benchmarks, slog bridge (`NewSlogHandler`)
 - Context7 `/knadh/koanf` — YAML + env provider patterns, v2 import paths
-- Context7 `/sony/gobreaker` — state machine API; confirmed `Interval` is cyclic reset not sliding window
 - Context7 `/cespare/xxhash` — `Sum64String` API, assembly optimization
 - Context7 `/golangci/golangci-lint` — v2 config format, linter list
 - Context7 `/testcontainers/testcontainers-go` — postgres module, `WithInitScripts`

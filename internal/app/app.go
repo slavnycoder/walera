@@ -31,8 +31,6 @@ type App struct {
 
 	AuthClient *auth.Client
 
-	Breaker *auth.Breaker
-
 	Limits *limits.Limits
 
 	Encoder *sse.Encoder

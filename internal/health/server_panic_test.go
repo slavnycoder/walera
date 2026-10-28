@@ -14,16 +14,11 @@ type panicTestPgChecker struct{}
 
 func (panicTestPgChecker) CheckPG(_ context.Context) error { return errors.New("stub") }
 
-type panicTestAuthChecker struct{}
-
-func (panicTestAuthChecker) CheckAuth(_ context.Context) error { return nil }
-
 func validHealthDeps() Deps {
 	return Deps{
-		Logger:      zerolog.Nop(),
-		PgChecker:   panicTestPgChecker{},
-		AuthChecker: panicTestAuthChecker{},
-		Metrics:     metrics.New(),
+		Logger:    zerolog.Nop(),
+		PgChecker: panicTestPgChecker{},
+		Metrics:   metrics.New(),
 	}
 }
 
@@ -38,11 +33,6 @@ func TestNewHealth_PanicsOnNilDeps(t *testing.T) {
 			name:    "PgChecker",
 			mutate:  func(d *Deps) { d.PgChecker = nil },
 			wantMsg: "health.New: Deps.PgChecker is required",
-		},
-		{
-			name:    "AuthChecker",
-			mutate:  func(d *Deps) { d.AuthChecker = nil },
-			wantMsg: "health.New: Deps.AuthChecker is required",
 		},
 		{
 			name:    "Metrics",

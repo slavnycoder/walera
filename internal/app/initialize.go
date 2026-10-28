@@ -23,7 +23,6 @@ type coreWiring struct {
 
 type authWiring struct {
 	AuthClient *auth.Client
-	Breaker    *auth.Breaker
 	Limits     *limits.Limits
 }
 
@@ -55,7 +54,6 @@ func InitializeApp(cfg AppConfig, logger zerolog.Logger, adminConn walconn.Admin
 		WalReader:    cw.WalReader,
 		TxCh:         cw.TxCh,
 		AuthClient:   aw.AuthClient,
-		Breaker:      aw.Breaker,
 		Limits:       aw.Limits,
 		Encoder:      dp.Encoder,
 		RouterIndex:  dp.Broadcaster,
@@ -85,17 +83,9 @@ func wireCore(cfg AppConfig, logger zerolog.Logger) coreWiring {
 
 func wireAuth(cfg AppConfig, logger zerolog.Logger, registry *metrics.Registry) authWiring {
 	authClient := auth.New(cfg.Auth, auth.Deps{
-		Breaker: nil,
 		Logger:  logger,
 		Metrics: registry,
 	})
-	breaker := auth.NewBreaker(cfg.Auth.Breaker, auth.BreakerDeps{
-		Prober:  authClient,
-		Logger:  logger,
-		Metrics: registry,
-	})
-
-	authClient.SetBreaker(breaker)
 
 	lim := limits.New(cfg.Limits, limits.Deps{
 		Logger:  logger,
@@ -104,7 +94,6 @@ func wireAuth(cfg AppConfig, logger zerolog.Logger, registry *metrics.Registry) 
 
 	return authWiring{
 		AuthClient: authClient,
-		Breaker:    breaker,
 		Limits:     lim,
 	}
 }
@@ -148,10 +137,9 @@ func wireDataPlane(cfg AppConfig, logger zerolog.Logger, registry *metrics.Regis
 
 func wireHTTP(cfg AppConfig, logger zerolog.Logger, cw coreWiring, aw authWiring, handler *sse.Handler) httpWiring {
 	healthSrv := health.New(cfg.Health, health.Deps{
-		Logger:      logger,
-		PgChecker:   cw.WalReader,
-		AuthChecker: aw.AuthClient,
-		Metrics:     cw.Registry,
+		Logger:    logger,
+		PgChecker: cw.WalReader,
+		Metrics:   cw.Registry,
 	})
 	healthSrv.SetCORSOrigins(cfg.HTTP.CORSOrigins)
 

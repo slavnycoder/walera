@@ -191,8 +191,10 @@ func Test04AuthLifecycle(t *testing.T) {
 		}
 
 		// Narrow the whitelist (drop email) and wait for the refresh loop
-		// (TTL=1s) to pick it up before mutating data again.
-		base := h.Auth.PermissionsRequestCount()
+		// (TTL=1s) to pick it up before mutating data again. Refresh now
+		// replays the client's own credentials to /auth/sessions, so growth
+		// in RequestCount is the observable signal.
+		base := h.Auth.RequestCount()
 		h.Auth.SetMap("test-token", "test-user", []string{"users"},
 			map[string][]string{"users": {"id", "name"}})
 		waitForRefresh(t, h, base, 1, 10*time.Second)

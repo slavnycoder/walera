@@ -14,6 +14,25 @@ import (
 	"time"
 )
 
+// rawHandshake issues a bare SSE handshake and reports the status code and
+// Retry-After header, without establishing a streaming connection.
+func rawHandshake(ctx context.Context, baseURL, channel, token string) (int, string) {
+	u := strings.TrimRight(baseURL, "/") + "/sse/v1/" + channel
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return 0, ""
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("X-Request-ID", "test-raw-handshake")
+	req.Header.Set("Accept", "text/event-stream")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return 0, ""
+	}
+	defer resp.Body.Close() //nolint:errcheck
+	return resp.StatusCode, resp.Header.Get("Retry-After")
+}
+
 // assertAbsentInLogs fails the test if any of the given canary strings (secrets,
 // PII, bearer tokens) appears in the binary's captured stderr. Enforces the
 // "never log row data, tokens, or secrets" constraint.
@@ -63,19 +82,21 @@ func expectNoTxWithin(t *testing.T, events <-chan SSEEvent, errCh <-chan error, 
 }
 
 // waitForRefresh blocks until the mock auth has served at least n more
-// user-permission refreshes than base, so a mid-stream SetMap is guaranteed to
-// have been picked up before the test proceeds.
+// /auth/sessions requests than base, so a mid-stream SetMap is guaranteed to
+// have been picked up before the test proceeds. Refresh now replays the
+// client's own credentials to the same session endpoint used at handshake
+// time, so RequestCount is the only observable signal.
 func waitForRefresh(t *testing.T, h *Harness, base, n int64, deadline time.Duration) {
 	t.Helper()
 	end := time.Now().Add(deadline)
 	for time.Now().Before(end) {
-		if h.Auth.PermissionsRequestCount()-base >= n {
+		if h.Auth.RequestCount()-base >= n {
 			return
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
 	t.Fatalf("auth refresh did not advance by %d within %v (delta=%d)",
-		n, deadline, h.Auth.PermissionsRequestCount()-base)
+		n, deadline, h.Auth.RequestCount()-base)
 }
 
 func decodeTxPayload(t *testing.T, data []byte) txEventPayload {

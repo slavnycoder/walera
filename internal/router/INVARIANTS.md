@@ -102,6 +102,5 @@ in `(*Broadcaster).Shutdown`'s godoc and in doc.go invariants 4 + 8._
 
 ## State Machine Ordering
 
-_Not applicable — the router has no FSM. See internal/auth/INVARIANTS.md
-for the breaker FSM and internal/sse/INVARIANTS.md for the drain
-sequence._
+_Not applicable — the router has no FSM. See internal/sse/INVARIANTS.md
+for the drain sequence._

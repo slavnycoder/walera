@@ -15,7 +15,7 @@
 - **Endpoint shape**: `GET /sse/v1/{table}/{pk}` for a single row, or
   `GET /sse/v1/{table}/all` for a whole-table wildcard stream.
 - **Auth model**: bearer token. Walera does NOT validate the token itself —
-  it forwards it to YOUR backend's `/auth/permissions` endpoint, which
+  it forwards it to YOUR backend's `/auth/sessions` endpoint, which
   returns a per-user table/column whitelist.
 - **Delivery model**: at-most-once. No replay buffer. If a client
   disconnects, missed events are gone — clients must refetch state from
@@ -115,20 +115,27 @@ as a dev/demo convenience only.
 
 ### 2. Auth Backend Side (YOU implement this)
 
-Walera calls your backend on every SSE connection open AND periodically to
-refresh permissions:
+Walera calls your backend on EVERY SSE connection open AND on every
+periodic refresh thereafter — same endpoint, same credentials (bearer
+and/or forwarded cookies/headers), replayed verbatim:
 
 ```http
-GET /auth/permissions?channel=orders%3A42
+POST /auth/sessions
 Authorization: Bearer <user-token>
 X-Request-ID: <uuid>
+Content-Type: application/json
 Accept: application/json
+
+{"channel": "orders:42"}
 ```
 
 Channel format:
-- Single row: `orders:42` (URL-encoded as `orders%3A42`)
+- Single row: `orders:42`
 - Whole table: `orders:all`
-- Health probe: `_health` (no Authorization header)
+
+There is no separate refresh endpoint and no shared service-side secret
+— refresh re-authenticates exactly like the initial open, so a revoked
+token or expired session is caught on the next TTL tick.
 
 Required response shape (`200 OK`):
 
@@ -157,11 +164,12 @@ Status codes Walera interprets:
 | `401` | Token invalid → 401 to client. |
 | `403` | Token valid, not allowed → 403 to client. |
 | `404` | Treat as revoked. |
-| `5xx` / timeout | Walera returns `503` on open; existing streams fail-open briefly via the breaker (AUTH-04). |
+| `5xx` / timeout | Walera returns `503` on open; an established stream whose refresh keeps failing drops with `auth_unavailable` after retries (fail-closed — there is no fail-open window). |
 
-On a **background refresh**, returning 401/403/404 or a 200 map that no
-longer contains the subscribed table closes the stream with
-`event: error / data: {"reason":"auth_revoked"}`.
+On a **background refresh**, returning 401/403/404, a `200` for a
+different `user_id`, or a 200 map that no longer contains the subscribed
+table closes the stream with `event: error / data: {"reason":"auth_revoked"}`
+(or `"auth_unavailable"` for the 5xx/timeout case above).
 
 Implementation rules:
 - Endpoint must respond < 2s (default timeout).
@@ -246,7 +254,7 @@ Operational endpoints:
 | Endpoint | Purpose |
 | --- | --- |
 | `GET /healthz` | Liveness (WAL reader connected). |
-| `GET /readyz` | Readiness (PG + auth healthy). |
+| `GET /readyz` | Readiness (PG healthy; does not probe the auth backend). |
 | `GET /metrics` | Prometheus. |
 
 Kubernetes deploy: `kubectl apply -k deploy/k8s/`. Pod sizing per spec:
@@ -285,8 +293,8 @@ Kubernetes deploy: `kubectl apply -k deploy/k8s/`. Pod sizing per spec:
 
 ### "Add live updates for X to our React/Vue/Svelte app"
 - Confirm tables are in the publication.
-- Add `/auth/permissions` endpoint to backend (returns `{user_id, tables,
-  ttl_seconds}`).
+- Add a `/auth/sessions` endpoint to backend (returns `{user_id, tables,
+  ttl_seconds}`); Walera calls it on open and on every refresh.
 - Add a hook/composable using `fetchEventSource` to
   `${WALERA_URL}/sse/v1/{table}/{pk}`.
 - Implement refetch-on-reconnect against existing REST endpoint.
@@ -295,14 +303,14 @@ Kubernetes deploy: `kubectl apply -k deploy/k8s/`. Pod sizing per spec:
 Run through:
 1. Is Y in `CREATE PUBLICATION ... FOR TABLE`?
 2. Does Y have a PRIMARY KEY (or `REPLICA IDENTITY FULL`)?
-3. Does the user's `/auth/permissions` response include `Y` in `tables`?
+3. Does the user's `/auth/sessions` response include `Y` in `tables`?
 4. Is the column being updated in the column whitelist?
 5. Check `/metrics` for `walera_wal_messages_dropped_total`.
 
 ### "How do I revoke a user's stream right now?"
-Make their next `/auth/permissions` refresh return 401/403/404, or a 200
-map that omits the subscribed table. Stream closes with `auth_revoked`
-within `ttl_seconds`.
+Make their next `/auth/sessions` refresh return 401/403/404, a `200` for
+a different `user_id`, or a 200 map that omits the subscribed table.
+Stream closes with `auth_revoked` within `ttl_seconds`.
 
 ### "Can I run two Walera instances for HA?"
 Not in MVP — single-instance only. Each instance would create its own

@@ -69,14 +69,6 @@ func envTransform(key, value string) (string, any) {
 }
 
 var multiLevelEnvKeys = map[string]string{
-	"auth.breaker_bucket_seconds":         "auth.breaker.bucket_seconds",
-	"auth.breaker_cooldown":               "auth.breaker.cooldown",
-	"auth.breaker_debounce_floor":         "auth.breaker.debounce_floor",
-	"auth.breaker_failure_rate_threshold": "auth.breaker.failure_rate_threshold",
-	"auth.breaker_window_buckets":         "auth.breaker.window_buckets",
-	"auth.signing_secret":                 "auth.signing.secret",
-	"auth.signing_kid":                    "auth.signing.kid",
-
 	"wal.bootstrap_create_roles": "wal.bootstrap.create_roles",
 	"wal.bootstrap_mode":         "wal.bootstrap.mode",
 	"wal.bootstrap_tables":       "wal.bootstrap.tables",

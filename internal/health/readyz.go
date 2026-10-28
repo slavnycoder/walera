@@ -47,18 +47,10 @@ func (s *Server) probe(ctx context.Context) {
 		s.metricsReg.PGConnectionStatus().Set(0)
 	}
 
-	authErr := s.authClient.CheckAuth(probeCtx)
-
 	var state *readyState
 	switch {
 	case !pgOK:
 		state = &readyState{healthy: false, reason: "pg disconnected", checkedAt: now}
-	case authErr != nil:
-		state = &readyState{
-			healthy:   false,
-			reason:    "auth backend unavailable: " + authErr.Error(),
-			checkedAt: now,
-		}
 	default:
 		state = &readyState{healthy: true, reason: "", checkedAt: now}
 	}

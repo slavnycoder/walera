@@ -80,15 +80,15 @@ Walera's runtime fails in three places: the auth backend, the
 PostgreSQL replication connection, and the per-subscriber send path.
 Each has a defined posture.
 
-- **Auth backend unavailable.** A circuit breaker around the auth
-  client trips when the failure rate over a sliding window crosses a
-  threshold. Walera is fail-closed in both directions: new SSE opens
-  are rejected with `503` while the breaker is open, and an
+- **Auth backend unavailable.** Walera is fail-closed in both
+  directions, with no circuit breaker and no fail-open window: new SSE
+  opens are rejected with `503` after `auth.request_timeout`, and an
   already-established subscription whose periodic refresh keeps
-  failing (including while the breaker is open) retries with backoff
-  and then drops with `auth_unavailable`, so a revoked grant lives at
-  most initial jitter (< TTL/2) + TTL + 13s backoff + 4 ×
-  `auth.request_timeout` (≈ 1.5 × TTL + 21s at defaults). See
+  failing retries with backoff and then drops with `auth_unavailable`,
+  so a revoked grant lives at most initial jitter (< TTL/2) + TTL + 13s
+  backoff + 4 × `auth.request_timeout` (≈ 1.5 × TTL + 21s at defaults).
+  Refresh re-authenticates with the client's own credentials against
+  the same `/auth/sessions` endpoint used at handshake time. See
   [ADR 0002: Auth Model](./adr/0002-auth-model.md) for the rationale.
 - **PostgreSQL replication slot dropped or unreachable.** Walera uses a
   temporary replication slot that is created at startup and dropped
@@ -128,7 +128,7 @@ restrictive posture documented in [Auth](./auth.md#wildcard-streams).
 That document is the canonical location for the wildcard-stream policy;
 it is not duplicated here.
 
-For the full auth backend contract, status codes, circuit-breaker
+For the full auth backend contract, status codes, backend-outage
 behavior, and an example backend implementation, see
 [Auth](./auth.md).
 
@@ -151,9 +151,11 @@ A single Walera pod runs the following components in-process:
   handler goroutine from a small bounded queue, applying the
   per-subscriber field whitelist and framing events for SSE transport.
 - **Auth client.** Calls the external auth backend on subscription
-  open and refreshes permission maps periodically. Wrapped in a custom
-  circuit-breaker FSM that distinguishes new opens from established
-  streams.
+  open and replays the same call periodically to refresh permission
+  maps. Fail-closed throughout: a backend outage rejects new opens
+  with `503` and drops established streams with `auth_unavailable`
+  once refresh retries exhaust — there is no circuit breaker and no
+  fail-open window.
 - **Metrics endpoint.** Exposes Prometheus counters, gauges, and
   histograms (subscriber count, WAL lag, auth failure rate, fan-out
   latency, slow-client drops, etc.) on `/metrics`.
@@ -195,8 +197,10 @@ generated indirection layer, wire-tax types like `MainHTTPServer` and
 inside `NewBreaker`, and a reserved-for-future `ctx` parameter on
 `InitializeApp` — outweighed the gate it provided.
 
-The DI-03 cycle now appears as three explicit, sequential lines at
-the call site:
+At the time wire was removed, the DI-03 cycle appeared as three
+explicit, sequential lines at the call site — visible to anyone
+reading `initialize.go`, rather than hidden inside a constructor's
+post-init hook:
 
 ```go
 authClient := auth.New(cfg.Auth, auth.Deps{Breaker: nil, ...})
@@ -204,8 +208,11 @@ breaker := auth.NewBreaker(cfg.Auth.Breaker, auth.BreakerDeps{Prober: authClient
 authClient.SetBreaker(breaker) // init-only; guarded by sync.Once
 ```
 
-The cycle is no longer hidden inside a constructor's post-init hook —
-it is visible to anyone reading `initialize.go`.
+The circuit breaker itself was removed on 2026-10-28 (refresh is now
+fail-closed and simply re-calls `/auth/sessions` with the client's own
+credentials — see [ADR 0002](./adr/0002-auth-model.md#amendment-2026-10-28)),
+so `wireAuth` no longer has a cycle to break: `authClient := auth.New(cfg.Auth, auth.Deps{Logger: logger, Metrics: registry})`
+is now the entire auth-client wiring step.
 
 Two contract changes that previously lived as `WR-03` / `WR-05`
 comment markers in the wire era are now encoded directly in the
@@ -238,13 +245,6 @@ survives wire's removal.
   unambiguous keys when two `*pgx.Conn` values had different roles;
   they stay because they encode a semantic boundary in the type
   system.
-- **`auth.Prober` interface and the two-step cycle break.** The
-  `auth.New` / `auth.NewBreaker(BreakerDeps{Prober: client, ...})` /
-  `client.SetBreaker(breaker)` sequence (DI-03) is now three explicit
-  lines in `InitializeApp` instead of one hidden hook inside
-  `NewBreaker`. The interface stays — it documents that the breaker
-  only needs the `CheckAuth` capability of the client, not the full
-  client surface.
 - **`[]Runnable` lifecycle and explicit cleanup chain.** The runnable
   abstraction (`runnable.go`) and the shutdown wave (`lifecycle.go`)
   are independent of the DI strategy; they composed cleanly under wire

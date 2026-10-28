@@ -23,12 +23,14 @@ they were not granted.
 ## Backend contract
 
 The auth backend is a plain HTTP service operated by the same team
-that owns the underlying data. Walera calls it once per subscription
-open and again periodically while the subscription is live (to refresh
-the permission map). The contract is intentionally minimal: one
-endpoint, one request shape, one response shape.
+that owns the underlying data. Walera calls a single endpoint,
+`POST /auth/sessions`, once per subscription open and then again every
+TTL while the subscription is live — refresh is not a different call,
+it is the exact same request replayed with the exact same credentials
+the client supplied at open time. The contract is intentionally
+minimal: one endpoint, one request shape, one response shape.
 
-Walera sends:
+Walera sends, on both open and every refresh:
 
 - The bearer token the client supplied (`Authorization: Bearer …`),
   when present.
@@ -45,15 +47,16 @@ The backend returns:
 - `401` / `403` / `404` (deny — with semantics described under
   [Status codes](#status-codes)), or
 - `5xx` or a timeout (treated as a transport failure; see
-  [Circuit breaker behavior](#circuit-breaker-behavior)).
+  [Backend outage](#backend-outage)).
 
 ## Forwarding cookies and headers
 
 Some auth backends key their decision on credentials the client carries
 outside the bearer token — a session cookie, a tenant header, an
 `X-Forwarded-For` chain. Walera can thread a configured allowlist of the
-client's cookies and headers from the SSE handshake into the
-**session-open** call to the backend.
+client's cookies and headers from the SSE handshake into every call to
+the backend — the session open and every periodic refresh, since
+refresh replays the same call.
 
 Two config keys control this, both **name allowlists** (not values):
 
@@ -67,10 +70,10 @@ Behavior:
 - **Empty means off.** When a list is unset (or empty), nothing of that
   kind is forwarded. There is no default allowlist — forwarding is
   strictly opt-in per deployment.
-- **Open only, never refresh.** Forwarding happens only on the session
-  **open** call (`POST /auth/sessions`). The periodic permission
-  refresh (`POST /auth/permissions`) is HMAC-signed by Walera and never
-  carries forwarded client credentials.
+- **Open and refresh, identically.** Forwarding applies to every call
+  Walera makes to `POST /auth/sessions` — the session open and every
+  periodic refresh carry the same allowlisted cookies/headers captured
+  at handshake time.
 - **Bearer is optional when a credential is forwarded.** Historically
   the open required `Authorization: Bearer …`. With forwarding enabled,
   the open proceeds as long as **at least one** credential is present —
@@ -90,8 +93,7 @@ Behavior:
   they appear in `auth.forwarded_headers` (any casing):
 
   `Authorization`, `Host`, `Content-Length`, `Content-Type`, `Accept`,
-  `Connection`, `Transfer-Encoding`, `Cookie`, `X-Request-Id`,
-  `X-Walera-Sig`, `X-Walera-Kid`.
+  `Connection`, `Transfer-Encoding`, `Cookie`, `X-Request-Id`.
 
   Forwarded headers are applied first; Walera's own headers always win.
 - **Values are never logged.** Forwarded cookie and header *values* are
@@ -105,10 +107,12 @@ bearer was supplied.
 
 ## Request format
 
-Walera uses two endpoints, both `POST` with a JSON body, both rooted at
-`<WALERA_AUTH_BACKEND_URL>`.
-
-On every subscription **open**, Walera calls `POST /auth/sessions`:
+Walera uses a single endpoint, `POST /auth/sessions` with a JSON body,
+rooted at `<WALERA_AUTH_BACKEND_URL>`. Every subscription **open** calls
+it, and so does every periodic **refresh** while the subscription is
+live — refresh re-issues the identical request with the identical
+credentials the client supplied at open time (same bearer, same
+forwarded cookies/headers):
 
 ```http
 POST /auth/sessions
@@ -124,26 +128,9 @@ X-Request-ID: <request-id>
 - `Authorization` is sent only when the client supplied a bearer; with
   cookie/header forwarding it may be absent (see
   [Forwarding cookies and headers](#forwarding-cookies-and-headers)).
-
-While a subscription is live, Walera periodically **refreshes** the
-permission map via `POST /auth/permissions`. The refresh is authenticated
-by Walera itself with an HMAC signature over the `user_id` (headers
-`X-Walera-Sig` / `X-Walera-Kid`), not by the client's bearer, and never
-carries forwarded client credentials:
-
-```http
-POST /auth/permissions
-Content-Type: application/json
-Accept: application/json
-X-Walera-Sig: <hmac>
-X-Walera-Kid: <key-id>
-X-Request-ID: <request-id>
-
-{"user_id":"alice","channel":"orders:42","ts":1718000000,"nonce":"…"}
-```
-
-- For Walera's own readiness probes the `user_id` / channel is `_health`;
-  the probe rides the same HMAC-signed refresh path and carries no bearer.
+- There is no separate refresh endpoint, no service-side secret, and no
+  readiness-probe sentinel channel — readiness tracks PostgreSQL only
+  (see [Backend outage](#backend-outage)).
 
 ## Response format
 
@@ -225,11 +212,16 @@ a per-session correlation identifier.
 | `429`             | Backend rate limiting; treated as a transient denial. Surfaced to the client.                   |
 | `5xx` or timeout  | Treated as a transport failure. On open, returns `503`. On refresh, behavior depends on state.  |
 
-On a background permission refresh, a `401`, `403`, `404`, or a `200`
-that drops the previously-allowed table disconnects the established
-stream with `auth_revoked`. This keeps the runtime contract honest:
-permission changes propagate to active subscribers, not just to new
-opens.
+On a background refresh, a `401`, `403`, `404`, or a `200` that drops
+the previously-allowed table disconnects the established stream with
+`auth_revoked`. This includes an expired token — the client is expected
+to reconnect with a fresh token, not to be kept alive on a stale one.
+A `200` whose `user_id` differs from the stream's user also revokes the
+stream (`auth_revoked`): refresh re-authenticates with the client's own
+credentials, so a token that now resolves to a different identity is
+treated the same as an explicit revocation. This keeps the runtime
+contract honest: permission changes (and identity changes) propagate to
+active subscribers, not just to new opens.
 
 ## Wildcard streams
 
@@ -250,26 +242,28 @@ allows wildcard subscriptions for sensitive tables would defeat the
 field-whitelist guarantee, because the row identifiers themselves
 become a side channel.
 
-## Circuit breaker behavior
+## Backend outage
 
-Walera wraps the auth client in a circuit breaker so that a
-misbehaving backend cannot cascade into a runtime-wide outage. When
-the failure rate over a sliding window crosses a threshold (above 50%
-sustained), the breaker opens and Walera shifts posture:
+Walera has no circuit breaker and no fail-open window — every posture
+is fail-closed:
 
-- **Established subscriptions** re-check permissions every TTL. If the
-  backend is unreachable (including while the breaker is open), Walera
-  retries with backoff (1s, 3s, 9s) and then drops the stream with
-  `auth_unavailable`. Worst case, a grant outlives its revocation by the
+- **New subscription attempts** get `503` as soon as the call to
+  `/auth/sessions` exceeds `auth.request_timeout` (default 2s) or the
+  backend returns a 5xx/timeout. There is no retry on the open path;
+  the client is expected to reconnect.
+- **Established subscriptions** re-check permissions every TTL by
+  replaying the same `/auth/sessions` call. If the backend is
+  unreachable, Walera retries with backoff (1s, 3s, 9s) and then drops
+  the stream with `auth_unavailable` rather than keeping it alive on a
+  stale whitelist. Worst case, a grant outlives its revocation by the
   initial refresh jitter (< TTL/2) + TTL + 13s of backoff + 4 ×
-  `auth.request_timeout` (≈ 1.5 × TTL + 21s at defaults). This is
-  fail-closed.
-- **New subscription attempts** are rejected with `503` while the
-  breaker is open, so reconnecting clients do not hammer a failing
-  backend.
+  `auth.request_timeout` (≈ 1.5 × TTL + 21s at defaults).
 
-When the failure rate drops back below the threshold the breaker
-returns to closed and normal authorization resumes.
+Readiness (`GET /readyz`) tracks PostgreSQL only — it does not probe
+the auth backend, so an auth outage never makes an otherwise-healthy
+pod fail its readiness check. See
+[ADR 0002: Auth Model — Amendment](./adr/0002-auth-model.md#amendment-2026-10-28)
+for the rationale.
 
 See [ADR 0002: Auth Model](./adr/0002-auth-model.md) for the
 delegation rationale and [ADR 0003: Slow Client Policy](./adr/0003-slow-client-policy.md)
@@ -283,8 +277,11 @@ lookup that the rest of the product uses.
 
 ```python
 # views.py
+import json
+
 from django.http import JsonResponse
-from django.views.decorators.http import require_GET
+from django.views.decorators.csrf import csrf_exempt
+from django.views.decorators.http import require_POST
 
 TOKENS = {
     "alice-token": {
@@ -294,10 +291,6 @@ TOKENS = {
     "bob-token": {
         "user_id": "bob",
         "tables": {"orders": ["id", "status"]},
-    },
-    "service-token": {
-        "user_id": "walera-service",
-        "tables": {"_health": ["id"]},
     },
 }
 
@@ -309,19 +302,19 @@ def bearer_token(request):
     return header.removeprefix("Bearer ").strip()
 
 
-@require_GET
-def walera_permissions(request):
-    channel = request.GET.get("channel", "")
+@csrf_exempt
+@require_POST
+def walera_sessions(request):
+    try:
+        channel = json.loads(request.body or b"{}").get("channel", "")
+    except json.JSONDecodeError:
+        return JsonResponse({"reason": "invalid_channel"}, status=404)
+
     token = bearer_token(request)
     permissions = TOKENS.get(token)
 
     if permissions is None:
         return JsonResponse({"reason": "unauthorized"}, status=401)
-
-    if channel == "_health":
-        if "_health" in permissions["tables"]:
-            return JsonResponse({**permissions, "ttl_seconds": 60})
-        return JsonResponse({"reason": "forbidden"}, status=403)
 
     table, sep, pk = channel.partition(":")
     if not sep or not table or not pk:
@@ -336,10 +329,10 @@ def walera_permissions(request):
 ```python
 # urls.py
 from django.urls import path
-from .views import walera_permissions
+from .views import walera_sessions
 
 urlpatterns = [
-    path("auth/permissions", walera_permissions),
+    path("auth/sessions", walera_sessions),
 ]
 ```
 

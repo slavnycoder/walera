@@ -31,7 +31,7 @@ func Test13SecHandshakeAdmission(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
-		hitsBefore := h.Auth.PermissionsRequestCount()
+		hitsBefore := h.Auth.RequestCount()
 
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet,
 			h.Binary.BaseURL()+"/sse/v1/users/42", nil)
@@ -63,8 +63,8 @@ func Test13SecHandshakeAdmission(t *testing.T) {
 		}
 
 		time.Sleep(50 * time.Millisecond)
-		if hitsAfter := h.Auth.PermissionsRequestCount(); hitsAfter != hitsBefore {
-			t.Errorf("auth backend received %d permission call(s) for a 400-rejected handshake; want 0",
+		if hitsAfter := h.Auth.RequestCount(); hitsAfter != hitsBefore {
+			t.Errorf("auth backend received %d /auth/sessions call(s) for a 400-rejected handshake; want 0",
 				hitsAfter-hitsBefore)
 		}
 	})

@@ -45,6 +45,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- HMAC-signed `POST /auth/permissions`, `auth.signing.*`,
+  `auth.health_channel`, the auth circuit breaker (`auth.breaker.*`,
+  `walera_auth_circuit_breaker_state`, alert `WaleraAuthBreakerOpen`) and the
+  auth-backend readiness probe. The backend contract is now a single
+  endpoint, `POST /auth/sessions`; readiness tracks Postgres only. New alert:
+  `WaleraAuthRefreshUnavailable`.
 - Breaker-close stale-refresh fan-out (`auth.breaker.stale_refresh_jitter`,
   `walera_auth_breaker_stale_subscribers`, alert
   `WaleraAuthBreakerStaleSubscribersOutsideBreaker`). Fail-closed refresh

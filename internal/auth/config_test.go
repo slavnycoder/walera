@@ -14,7 +14,6 @@ func newK(t *testing.T) *koanf.Koanf {
 	k := koanf.New(".")
 	auth.ApplyDefaults(k)
 	_ = k.Set("auth.backend_url", "https://auth.example/test")
-	_ = k.Set("auth.signing.secret", strings.Repeat("a", 32))
 	return k
 }
 
@@ -25,12 +24,6 @@ func TestLoadConfig_Defaults(t *testing.T) {
 	}
 	if cfg.DefaultTTLSeconds != 60 {
 		t.Errorf("DefaultTTLSeconds = %d; want 60 (refresh is always on)", cfg.DefaultTTLSeconds)
-	}
-	if cfg.HealthChannel != "_health" {
-		t.Errorf("HealthChannel = %q; want _health", cfg.HealthChannel)
-	}
-	if cfg.Breaker.WindowBuckets != 30 {
-		t.Errorf("Breaker.WindowBuckets = %d; want 30", cfg.Breaker.WindowBuckets)
 	}
 }
 
@@ -67,56 +60,6 @@ func TestLoadConfig_HTTPSOverrideAccepted(t *testing.T) {
 	_ = k.Set("auth.backend_url", "http://insecure.example")
 	if _, err := auth.LoadConfig(k); err != nil {
 		t.Fatalf("LoadConfig with override: %v", err)
-	}
-}
-
-func TestLoadConfig_BreakerCooldownLessThanRequestTimeout(t *testing.T) {
-	k := newK(t)
-	_ = k.Set("auth.request_timeout", "5s")
-	_ = k.Set("auth.breaker.cooldown", "1s")
-	_, err := auth.LoadConfig(k)
-	if err == nil {
-		t.Fatal("LoadConfig: err = nil; want cooldown<timeout error")
-	}
-	if !strings.Contains(err.Error(), "auth.breaker.cooldown vs auth.request_timeout") {
-		t.Errorf("err = %q; want pair-comparison error", err.Error())
-	}
-}
-
-func TestLoadConfig_RequiresSigningSecret(t *testing.T) {
-	k := newK(t)
-	_ = k.Set("auth.signing.secret", "")
-	_, err := auth.LoadConfig(k)
-	if err == nil || !strings.Contains(err.Error(), "auth.signing.secret is required") {
-		t.Fatalf("LoadConfig: err = %v; want signing.secret required", err)
-	}
-}
-
-func TestLoadConfig_RejectsShortSigningSecret(t *testing.T) {
-	k := newK(t)
-	_ = k.Set("auth.signing.secret", strings.Repeat("a", 31))
-	_, err := auth.LoadConfig(k)
-	if err == nil || !strings.Contains(err.Error(), "auth.signing.secret") {
-		t.Fatalf("LoadConfig: err = %v; want too-short error", err)
-	}
-}
-
-func TestLoadConfig_RequiresSigningKid(t *testing.T) {
-	k := newK(t)
-	_ = k.Set("auth.signing.kid", "")
-	_, err := auth.LoadConfig(k)
-	if err == nil || !strings.Contains(err.Error(), "auth.signing.kid is required") {
-		t.Fatalf("LoadConfig: err = %v; want signing.kid required", err)
-	}
-}
-
-func TestLoadConfig_DefaultKid(t *testing.T) {
-	cfg, err := auth.LoadConfig(newK(t))
-	if err != nil {
-		t.Fatalf("LoadConfig: %v", err)
-	}
-	if cfg.Signing.Kid != "v1" {
-		t.Errorf("Signing.Kid = %q; want v1", cfg.Signing.Kid)
 	}
 }
 
@@ -203,8 +146,6 @@ func TestLoadConfig_ForwardedHeaders_RejectsReserved(t *testing.T) {
 		"content-type",
 		"X-Request-Id",
 		"x-request-id",
-		"X-Walera-Sig",
-		"X-Walera-Kid",
 		"Host",
 	}
 	for _, name := range cases {

@@ -64,16 +64,16 @@ spec:
     - name: walera.auth
       interval: 30s
       rules:
-        - alert: WaleraAuthBreakerOpen
-          expr: walera_auth_circuit_breaker_state == 1
-          for: 1m
+        - alert: WaleraAuthRefreshUnavailable
+          expr: sum(rate(walera_auth_refresh_total{result="unavailable"}[5m])) > 0
+          for: 2m
           labels:
             severity: P1
             app: walera
             component: auth
           annotations:
-            summary: "Walera auth circuit breaker open"
-            description: "New SSE opens are rejected with 503; established streams drop with auth_unavailable after TTL + retries. Investigate auth backend logs."
+            summary: "Walera cannot reach the auth backend for permission refresh"
+            description: "Established streams drop with auth_unavailable and new opens get 503. Investigate auth backend availability."
 
     - name: walera.subscribers
       interval: 30s

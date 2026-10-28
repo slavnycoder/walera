@@ -113,7 +113,6 @@ func TestRegistry_GatherIncludesAllMetrics(t *testing.T) {
 
 	r.AuthRequests("ok").Inc()
 	r.AuthRequestDuration().Observe(0.001)
-	r.AuthBreakerState().Set(0)
 	r.LimitRejected("global_concurrent").Inc()
 	r.PGConnectionStatus().Set(0)
 
@@ -131,7 +130,6 @@ func TestRegistry_GatherIncludesAllMetrics(t *testing.T) {
 	sort.Strings(got)
 
 	wantWalera := []string{
-		"walera_auth_circuit_breaker_state",
 		"walera_auth_refresh_total",
 		"walera_auth_request_duration_seconds",
 		"walera_auth_requests_total",

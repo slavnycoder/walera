@@ -199,18 +199,8 @@ router:
 auth:
   backend_url: %q
   default_ttl_seconds: 1
-  health_channel: _health
   request_timeout: 2s
-%s  signing:
-    secret: %q
-    kid: %q
-  breaker:
-    window_buckets: 30
-    bucket_seconds: 1
-    failure_rate_threshold: 0.5
-    debounce_floor: 5
-    cooldown: 2s
-limits:
+%slimits:
   global_concurrent: %d
   per_user_concurrent: %d
 health:
@@ -219,7 +209,7 @@ metrics:
   sample_interval: 1s
 shutdown:
   deadline: 5s
-`, pgDSN, bootstrapLines, addr, writeTimeoutLine, mockAuthURL, forwardedLines, IntegrationSigningSecret, IntegrationSigningKid, sc.globalConcurrent, sc.perUserConcurrent)
+`, pgDSN, bootstrapLines, addr, writeTimeoutLine, mockAuthURL, forwardedLines, sc.globalConcurrent, sc.perUserConcurrent)
 
 	cfgFile := filepath.Join(t.TempDir(), "walera-test.yaml")
 	if err := os.WriteFile(cfgFile, []byte(cfg), 0o644); err != nil {

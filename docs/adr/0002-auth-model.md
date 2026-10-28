@@ -59,3 +59,10 @@ field-level whitelisting on the outgoing event stream.
 - [Auth](../auth.md)
 - [Architecture overview](../architecture.md)
 - [ADR 0003: Slow Client Policy](./0003-slow-client-policy.md)
+
+## Amendment (2026-10-28)
+
+The HMAC-signed refresh endpoint and the circuit breaker were removed.
+Refresh re-calls `POST /auth/sessions` with the client's own credentials,
+so logout and token expiry reach live streams; a failed refresh drops the
+stream (fail-closed). Readiness no longer probes the auth backend.

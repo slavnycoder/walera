@@ -5,7 +5,6 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -15,24 +14,19 @@ import (
 	"github.com/walera/walera/internal/metrics"
 )
 
-// newForwardingTestClient mirrors newSignedTestClient but wires the forwarded
+// newForwardingTestClient mirrors newTestClient but wires the forwarded
 // cookie/header allowlists so ForwardedFromRequest and OpenSession exercise the
 // forwarding path.
-func newForwardingTestClient(t *testing.T, baseURL string, cookies, headers []string) (*Client, *fakeBreaker, *metrics.Registry) {
+func newForwardingTestClient(t *testing.T, baseURL string, cookies, headers []string) (*Client, *metrics.Registry) {
 	t.Helper()
-	fb := &fakeBreaker{}
 	mc := metrics.New()
 	cfg := Config{
-		BackendURL:     baseURL,
-		RequestTimeout: 2 * time.Second,
-		Signing: SigningConfig{
-			Secret: strings.Repeat("k", 64),
-			Kid:    "v1",
-		},
+		BackendURL:       baseURL,
+		RequestTimeout:   2 * time.Second,
 		ForwardedCookies: cookies,
 		ForwardedHeaders: headers,
 	}
-	return New(cfg, Deps{Logger: zerolog.Nop(), Breaker: fb, Metrics: mc}), fb, mc
+	return New(cfg, Deps{Logger: zerolog.Nop(), Metrics: mc}), mc
 }
 
 // capturedRequest records what the backend saw, guarded for the race detector.
@@ -87,7 +81,7 @@ func TestClient_OpenSession_ForwardsAllowlistedCookies(t *testing.T) {
 	t.Parallel()
 	srv, cap := newCaptureServer(t)
 
-	c, _, _ := newForwardingTestClient(t, srv.URL, []string{"session", "csrf"}, nil)
+	c, _ := newForwardingTestClient(t, srv.URL, []string{"session", "csrf"}, nil)
 
 	r, _ := http.NewRequest(http.MethodGet, "http://example/sse", nil)
 	r.AddCookie(&http.Cookie{Name: "session", Value: "sess-abc"})
@@ -117,7 +111,7 @@ func TestClient_OpenSession_ForwardsAllowlistedHeaders(t *testing.T) {
 	t.Parallel()
 	srv, cap := newCaptureServer(t)
 
-	c, _, _ := newForwardingTestClient(t, srv.URL, nil, []string{"X-Tenant-Id", "X-Trace"})
+	c, _ := newForwardingTestClient(t, srv.URL, nil, []string{"X-Tenant-Id", "X-Trace"})
 
 	r, _ := http.NewRequest(http.MethodGet, "http://example/sse", nil)
 	r.Header.Set("X-Tenant-Id", "tenant-7")
@@ -148,7 +142,7 @@ func TestClient_OpenSession_ReservedHeadersNeverOverridden(t *testing.T) {
 	t.Parallel()
 	srv, cap := newCaptureServer(t)
 
-	c, _, _ := newForwardingTestClient(t, srv.URL, nil, []string{"X-Tenant-Id"})
+	c, _ := newForwardingTestClient(t, srv.URL, nil, []string{"X-Tenant-Id"})
 	fwd := ForwardedAuth{
 		Headers: http.Header{
 			"X-Tenant-Id":   []string{"tenant-7"},
@@ -182,7 +176,7 @@ func TestClient_OpenSession_EmptyBearerWithCookieIsAllowed(t *testing.T) {
 	t.Parallel()
 	srv, cap := newCaptureServer(t)
 
-	c, fb, mc := newForwardingTestClient(t, srv.URL, []string{"session"}, nil)
+	c, mc := newForwardingTestClient(t, srv.URL, []string{"session"}, nil)
 	fwd := ForwardedAuth{
 		Cookies: []*http.Cookie{{Name: "session", Value: "sess-abc"}},
 	}
@@ -202,9 +196,6 @@ func TestClient_OpenSession_EmptyBearerWithCookieIsAllowed(t *testing.T) {
 	if v, ok := cap.cookie("session"); !ok || v != "sess-abc" {
 		t.Errorf("session cookie: got (%q,%v); want (sess-abc,true)", v, ok)
 	}
-	if last, ok := fb.Last(); !ok || !last {
-		t.Errorf("breaker last: got (%v,%v); want (true,true)", last, ok)
-	}
 	if v := gatherCounter(t, mc, "walera_auth_requests_total", "result", "ok"); v != 1 {
 		t.Errorf("ok counter: got %v; want 1", v)
 	}
@@ -216,7 +207,7 @@ func TestClient_OpenSession_EmptyBearerWithHeaderIsAllowed(t *testing.T) {
 	t.Parallel()
 	srv, cap := newCaptureServer(t)
 
-	c, _, _ := newForwardingTestClient(t, srv.URL, nil, []string{"X-Tenant-Id"})
+	c, _ := newForwardingTestClient(t, srv.URL, nil, []string{"X-Tenant-Id"})
 	fwd := ForwardedAuth{
 		Headers: http.Header{"X-Tenant-Id": []string{"tenant-7"}},
 	}
@@ -237,7 +228,7 @@ func TestClient_OpenSession_EmptyBearerNoCreds(t *testing.T) {
 	t.Parallel()
 	srv, cap := newCaptureServer(t)
 
-	c, fb, mc := newForwardingTestClient(t, srv.URL, []string{"session"}, []string{"X-Tenant-Id"})
+	c, mc := newForwardingTestClient(t, srv.URL, []string{"session"}, []string{"X-Tenant-Id"})
 	_, err := c.OpenSession(context.Background(), "", ForwardedAuth{}, "users:42", "req-fwd-6")
 	var ue *ErrUnauthorized
 	if !errors.As(err, &ue) {
@@ -249,10 +240,6 @@ func TestClient_OpenSession_EmptyBearerNoCreds(t *testing.T) {
 	if cap.wasCalled() {
 		t.Error("backend WAS called; want no backend call when credentials are missing")
 	}
-	// Missing-credential short-circuit records a successful breaker result.
-	if last, ok := fb.Last(); !ok || !last {
-		t.Errorf("breaker last: got (%v,%v); want (true,true)", last, ok)
-	}
 	if v := gatherCounter(t, mc, "walera_auth_requests_total", "result", "unauthorized"); v != 1 {
 		t.Errorf("unauthorized counter: got %v; want 1", v)
 	}
@@ -262,7 +249,7 @@ func TestClient_ForwardedFromRequest_FiltersCookies(t *testing.T) {
 	t.Parallel()
 
 	// Cookie names are case-sensitive: "Session" must NOT match allowlist "session".
-	c, _, _ := newForwardingTestClient(t, "http://unused", []string{"session", "csrf"}, nil)
+	c, _ := newForwardingTestClient(t, "http://unused", []string{"session", "csrf"}, nil)
 
 	r, _ := http.NewRequest(http.MethodGet, "http://example/sse", nil)
 	r.AddCookie(&http.Cookie{Name: "session", Value: "sess-abc"})
@@ -298,7 +285,7 @@ func TestClient_ForwardedFromRequest_FiltersHeaders(t *testing.T) {
 
 	// Header names are case-insensitive: a request header "x-tenant-id" must
 	// match allowlist entry "X-Tenant-Id".
-	c, _, _ := newForwardingTestClient(t, "http://unused", nil, []string{"X-Tenant-Id"})
+	c, _ := newForwardingTestClient(t, "http://unused", nil, []string{"X-Tenant-Id"})
 
 	r, _ := http.NewRequest(http.MethodGet, "http://example/sse", nil)
 	r.Header.Set("x-tenant-id", "tenant-7") // different casing in
@@ -318,7 +305,7 @@ func TestClient_ForwardedFromRequest_FeatureOffYieldsEmpty(t *testing.T) {
 	t.Parallel()
 
 	// No allowlists configured -> ForwardedFromRequest returns Empty().
-	c, _, _ := newForwardingTestClient(t, "http://unused", nil, nil)
+	c, _ := newForwardingTestClient(t, "http://unused", nil, nil)
 
 	r, _ := http.NewRequest(http.MethodGet, "http://example/sse", nil)
 	r.AddCookie(&http.Cookie{Name: "session", Value: "sess-abc"})

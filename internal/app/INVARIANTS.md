@@ -11,16 +11,9 @@ narrative).
 step (`pprof` when `a.PProfServer != nil`, `http`, `broadcast`). A panic
 in any of them crashes the process so the orchestrator restarts it.
 
-§2 — DI-03 cycle break encapsulated inside wireAuth.
-The sole production call site of `authClient.SetBreaker(breaker)` is
-`initialize.go:186`, between `wireAuth`'s opening (line 174) and closing
-(line 206). No other call site exists. `SetBreaker` is guarded by
-`sync.Once` internally so the install is init-only. Anchor:
-`initialize.go:174-206` (pre-sweep `de6b665`).
-
 ## Lifecycle & Shutdown
 
-§3 — 5-step shutdown sequence (`lifecycle.go`).
+§2 — 5-step shutdown sequence (`lifecycle.go`).
 `(*App).Shutdown` runs:
 
 1. pool drain
@@ -37,7 +30,7 @@ before `wg.Wait`. Anchor: `lifecycle.go:200-310` (pre-sweep `de6b665`).
 
 ## Security / PII
 
-§4 — PII-clean log surface.
+§3 — PII-clean log surface.
 `internal/app` emits no log statements that include row data, tokens, or
 secrets; structured fields are limited to identifiers (`subscriber_id`,
 `channel`, `table`, `pk`, `commit_lsn`, `tx_id`, `reason`). Anchor:

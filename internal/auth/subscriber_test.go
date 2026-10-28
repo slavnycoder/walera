@@ -63,11 +63,6 @@ func newSubTestClient(t *testing.T, server string) (*Client, *metrics.Registry) 
 	cfg := Config{
 		BackendURL:     server,
 		RequestTimeout: 2 * time.Second,
-		HealthChannel:  "_health",
-		Signing: SigningConfig{
-			Secret: "kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk",
-			Kid:    "v1",
-		},
 	}
 	c := New(cfg, Deps{Logger: zerolog.Nop(), Metrics: mc})
 	return c, mc

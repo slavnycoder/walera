@@ -17,13 +17,8 @@ type PgChecker interface {
 	CheckPG(ctx context.Context) error
 }
 
-type AuthChecker interface {
-	CheckAuth(ctx context.Context) error
-}
-
 type Server struct {
 	reader     PgChecker
-	authClient AuthChecker
 	metricsReg *metrics.Registry
 	cfg        Config
 	readyCache atomic.Pointer[readyState]
@@ -41,17 +36,12 @@ type Deps struct {
 
 	PgChecker PgChecker
 
-	AuthChecker AuthChecker
-
 	Metrics *metrics.Registry
 }
 
 func validateDeps(d Deps) {
 	if d.PgChecker == nil {
 		panic("health.New: Deps.PgChecker is required")
-	}
-	if d.AuthChecker == nil {
-		panic("health.New: Deps.AuthChecker is required")
 	}
 	if d.Metrics == nil {
 		panic("health.New: Deps.Metrics is required")
@@ -60,13 +50,12 @@ func validateDeps(d Deps) {
 
 func New(cfg Config, deps Deps) *Server {
 	validateDeps(deps)
-	return newServerInternal(deps.PgChecker, deps.AuthChecker, deps.Metrics, cfg, deps.Logger)
+	return newServerInternal(deps.PgChecker, deps.Metrics, cfg, deps.Logger)
 }
 
-func newServerInternal(reader PgChecker, authClient AuthChecker, metricsReg *metrics.Registry, cfg Config, log zerolog.Logger) *Server {
+func newServerInternal(reader PgChecker, metricsReg *metrics.Registry, cfg Config, log zerolog.Logger) *Server {
 	return &Server{
 		reader:     reader,
-		authClient: authClient,
 		metricsReg: metricsReg,
 		cfg:        cfg,
 		log:        log,

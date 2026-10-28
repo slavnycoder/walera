@@ -27,10 +27,6 @@ import (
 	"github.com/walera/walera/internal/wal"
 )
 
-type sseTestProber func(ctx context.Context) error
-
-func (f sseTestProber) CheckAuth(ctx context.Context) error { return f(ctx) }
-
 type fakeBroadcaster struct {
 	mu             sync.Mutex
 	subs           []*router.Subscriber
@@ -89,7 +85,6 @@ func newFakeAuthBackend() *fakeAuthBackend {
 		fn(w, r)
 	}
 	mux.HandleFunc("/auth/sessions", handler)
-	mux.HandleFunc("/auth/permissions", handler)
 	b.srv = httptest.NewServer(mux)
 	return b
 }
@@ -117,7 +112,6 @@ type testHandlerKit struct {
 	bc         *fakeBroadcaster
 	backend    *fakeAuthBackend
 	limits     *limits.Limits
-	breaker    *auth.Breaker
 	authClient *auth.Client
 }
 
@@ -148,26 +142,9 @@ func newTestHandler(t *testing.T, cors []string, lcfg *limits.Config) *testHandl
 		BackendURL:        backend.srv.URL,
 		DefaultTTLSeconds: 60,
 		RequestTimeout:    2 * time.Second,
-		Breaker: auth.BreakerConfig{
-			WindowBuckets:        30,
-			BucketSeconds:        1,
-			FailureRateThreshold: 0.5,
-			DebounceFloor:        20,
-			Cooldown:             30 * time.Second,
-		},
-		Signing: auth.SigningConfig{
-			Secret: strings.Repeat("k", 64),
-			Kid:    "v1",
-		},
 	}
-	breaker := auth.NewBreaker(authCfg.Breaker, auth.BreakerDeps{
-		Prober:  sseTestProber(func(_ context.Context) error { return nil }),
-		Logger:  logger,
-		Metrics: m,
-	})
 	authClient := auth.New(authCfg, auth.Deps{
 		Logger:  logger,
-		Breaker: breaker,
 		Metrics: m,
 	})
 
@@ -193,7 +170,6 @@ func newTestHandler(t *testing.T, cors []string, lcfg *limits.Config) *testHandl
 		bc:         bc,
 		backend:    backend,
 		limits:     lim,
-		breaker:    breaker,
 		authClient: authClient,
 	}
 }

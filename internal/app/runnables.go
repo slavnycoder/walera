@@ -23,10 +23,6 @@ func buildRunnables(a *App, slotName wal.SlotName) []Runnable {
 				a.cancel()
 			},
 		},
-		{
-			Name: "auth-breaker-fsm",
-			Run:  func(ctx context.Context) error { a.Breaker.Run(ctx); return nil },
-		},
 	}
 
 	runs = append(runs,

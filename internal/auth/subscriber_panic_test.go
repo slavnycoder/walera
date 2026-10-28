@@ -40,7 +40,6 @@ func validSubscriberDeps(t *testing.T) SubscriberDeps {
 	c := New(Config{
 		BackendURL:     "http://127.0.0.1:1",
 		RequestTimeout: time.Second,
-		HealthChannel:  "_health",
 	}, Deps{Logger: zerolog.Nop(), Metrics: metrics.New()})
 	return SubscriberDeps{
 		Sub:     rsub,

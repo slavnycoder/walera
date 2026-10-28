@@ -229,16 +229,15 @@ Content-Type: application/json
 ```
 
 The full contract — status-code handling, refresh semantics, wildcard
-policy, circuit-breaker posture — lives in [`docs/auth.md`](./docs/auth.md).
+policy, backend-outage posture — lives in [`docs/auth.md`](./docs/auth.md).
 A minimal Django reference implementation is in that doc; the
 [demo backend](https://github.com/slavnycoder/walera-demo/blob/master/backend/app.py)
 shows a FastAPI version that doubles as the product API.
 
-When the auth backend goes sideways, Walera trips a circuit breaker
-and takes a fail-closed posture: established streams are dropped with
-`auth_unavailable` once a refresh fails past its retries, and new opens
-get `503`. This stops an auth outage from becoming a fleet-wide
-reconnect storm.
+When the auth backend goes sideways, Walera takes a fail-closed posture:
+established streams are dropped with `auth_unavailable` once a refresh
+fails past its retries, and new opens get `503` after `auth.request_timeout`.
+This stops an auth outage from becoming a fleet-wide reconnect storm.
 
 ---
 
@@ -359,13 +358,12 @@ documented in [`docs/delivery-semantics.md`](./docs/delivery-semantics.md).
 | Endpoint        | Purpose                                                |
 | --------------- | ------------------------------------------------------ |
 | `GET /healthz`  | Liveness. `200` when the WAL reader is connected.      |
-| `GET /readyz`   | Readiness. `200` when PostgreSQL and auth are healthy. |
+| `GET /readyz`   | Readiness. `200` when PostgreSQL is healthy (does not probe auth). |
 | `GET /metrics`  | Prometheus metrics.                                    |
 
 Key metrics: WAL lag histogram, PG slot lag gauge, connected-subscriber
-gauge, auth-failure counter (by status + breaker state), per-event
-fan-out latency histogram, slow-client disconnect counter, slot
-connection-state gauge.
+gauge, auth-failure counter (by status), per-event fan-out latency
+histogram, slow-client disconnect counter, slot connection-state gauge.
 
 Subscribers that cannot drain at WAL pace are disconnected rather
 than buffered indefinitely, keeping the per-subscriber memory

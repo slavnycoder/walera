@@ -66,17 +66,18 @@ wal:
 
 # Auth backend forwarding allowlists.
 # Most auth settings are environment-driven (WALERA_AUTH_* — e.g.
-# WALERA_AUTH_BACKEND_URL, WALERA_AUTH_SIGNING_SECRET) and are not shown here.
+# WALERA_AUTH_BACKEND_URL) and are not shown here.
 # The two keys below are name allowlists for client credentials that Walera
-# threads from the SSE handshake into the session-OPEN call only (never the
-# periodic refresh). Both are opt-in: leave them unset (or empty) to forward
+# threads from the SSE handshake into every call to the backend — the initial
+# session open and every periodic refresh, since refresh replays the same
+# client credentials. Both are opt-in: leave them unset (or empty) to forward
 # nothing. With forwarding enabled, the bearer token becomes optional — an open
 # is allowed when a bearer OR an allowlisted cookie/header is present, and is
 # rejected only when no credential at all is supplied. Reserved headers managed
 # by Walera (Authorization, Host, Content-Length, Content-Type, Accept,
-# Connection, Transfer-Encoding, Cookie, X-Request-Id, X-Walera-Sig,
-# X-Walera-Kid) can never be forwarded and are rejected at startup. Names must
-# be valid cookie/header tokens; values are never logged.
+# Connection, Transfer-Encoding, Cookie, X-Request-Id) can never be forwarded
+# and are rejected at startup. Names must be valid cookie/header tokens;
+# values are never logged.
 # auth:
 #   forwarded_cookies:
 #     - session_id

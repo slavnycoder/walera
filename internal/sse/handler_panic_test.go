@@ -1,7 +1,6 @@
 package sse
 
 import (
-	"context"
 	"testing"
 	"time"
 
@@ -21,24 +20,9 @@ func newHandlerPanicValidDeps(t *testing.T) (Config, Deps) {
 		BackendURL:        "http://127.0.0.1:1",
 		DefaultTTLSeconds: 60,
 		RequestTimeout:    time.Second,
-		HealthChannel:     "_health",
-		Breaker: auth.BreakerConfig{
-			WindowBuckets:        30,
-			BucketSeconds:        1,
-			FailureRateThreshold: 0.5,
-			DebounceFloor:        20,
-			Cooldown:             30 * time.Second,
-		},
 	}
-	breaker := auth.NewBreaker(authCfg.Breaker, auth.BreakerDeps{
-
-		Prober:  sseTestProber(func(_ context.Context) error { return nil }),
-		Logger:  logger,
-		Metrics: m,
-	})
 	authClient := auth.New(authCfg, auth.Deps{
 		Logger:  logger,
-		Breaker: breaker,
 		Metrics: m,
 	})
 	lim := limits.New(limits.Config{

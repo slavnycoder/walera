@@ -279,18 +279,12 @@ capacity, latency, or rate-limit budgets for a specific deployment.
 | `WALERA_WAL_RECONNECT_RESET_AFTER_SUCCESS_DURATION` | `wal.reconnect.reset_after_success_duration` | `60s`   | Healthy-run duration that resets the attempt counter.                | `60s`                |
 | `WALERA_WAL_LAG_SAMPLE_INTERVAL`              | `wal.lag_sample_interval`                 | `5s`          | Cadence for `pg_wal_lsn_diff` polling.                               | `5s`                 |
 
-#### `auth.*` — auth client / circuit breaker
+#### `auth.*` — auth client
 
 | Env var                                       | YAML key                                  | Default   | Purpose                                                          | Safe value example |
 | --------------------------------------------- | ----------------------------------------- | --------- | ---------------------------------------------------------------- | ------------------ |
 | `WALERA_AUTH_DEFAULT_TTL_SECONDS`             | `auth.default_ttl_seconds`                | `60`      | Default permission-map TTL when the backend omits `ttl_seconds`. | `60`               |
-| `WALERA_AUTH_HEALTH_CHANNEL`                  | `auth.health_channel`                     | `_health` | Channel name used by the background auth probe.                  | `_health`          |
 | `WALERA_AUTH_REQUEST_TIMEOUT`                 | `auth.request_timeout`                    | `2s`      | Cap on every HTTP call to the auth backend.                      | `2s`               |
-| `WALERA_AUTH_BREAKER_WINDOW_BUCKETS`          | `auth.breaker.window_buckets`             | `30`      | Rolling-window bucket count for failure-rate calc.               | `30`               |
-| `WALERA_AUTH_BREAKER_BUCKET_SECONDS`          | `auth.breaker.bucket_seconds`             | `1`       | Bucket duration in seconds.                                      | `1`                |
-| `WALERA_AUTH_BREAKER_FAILURE_RATE_THRESHOLD`  | `auth.breaker.failure_rate_threshold`     | `0.5`     | Failure ratio that opens the breaker after the floor.            | `0.5`              |
-| `WALERA_AUTH_BREAKER_DEBOUNCE_FLOOR`          | `auth.breaker.debounce_floor`             | `20`      | Minimum sample size before the threshold can fire.               | `20`               |
-| `WALERA_AUTH_BREAKER_COOLDOWN`                | `auth.breaker.cooldown`                   | `30s`     | Open → HalfOpen transition delay.                                | `30s`              |
 | `WALERA_AUTH_ALLOW_PLAINTEXT`                 | (env-only)                                | unset     | Dev escape hatch — set to `1` to allow `http://` backends.       | unset              |
 
 #### `router.*` — subscriber indexes and fan-out
@@ -360,7 +354,7 @@ Key metrics surfaced for operations:
   fan-out time, plus the slot lag reported by PostgreSQL.
 - **Subscriber count.** Gauge of currently-connected SSE subscribers.
 - **Auth failures.** Counter of auth-backend errors, partitioned by
-  status code and whether the breaker was open.
+  status code.
 - **Fan-out latency.** Histogram of per-event broadcast latency from
   WAL decode to writer enqueue.
 - **Slow-client drops.** `walera_slow_client_drops_total` (unlabelled

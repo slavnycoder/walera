@@ -12,7 +12,6 @@ import (
 func validClientDeps() Deps {
 	return Deps{
 		Logger:  zerolog.Nop(),
-		Breaker: nopBreaker{},
 		Metrics: metrics.New(),
 	}
 }
@@ -48,4 +47,18 @@ func TestNewClient_PanicsOnNilDeps(t *testing.T) {
 			})
 		})
 	}
+}
+
+func assertPanicsWithValue(t *testing.T, want any, fn func()) {
+	t.Helper()
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatalf("expected panic with value %v; got no panic", want)
+		}
+		if r != want {
+			t.Fatalf("panic value: got %v (%T); want %v (%T)", r, r, want, want)
+		}
+	}()
+	fn()
 }

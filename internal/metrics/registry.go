@@ -15,7 +15,6 @@ type Registry struct {
 
 	authRequestsTotal   *prometheus.CounterVec
 	authRequestDuration prometheus.Histogram
-	authBreakerState    prometheus.Gauge
 	limitRejectedTotal  *prometheus.CounterVec
 	pgConnectionStatus  prometheus.Gauge
 
@@ -56,7 +55,6 @@ func New() *Registry {
 		r.routeLookupDuration,
 		r.authRequestsTotal,
 		r.authRequestDuration,
-		r.authBreakerState,
 		r.limitRejectedTotal,
 		r.pgConnectionStatus,
 		r.pgReconnectsTotal,
@@ -159,12 +157,6 @@ func newAuthMetrics(r *Registry) {
 			Name:    "walera_auth_request_duration_seconds",
 			Help:    "Auth backend request duration in seconds.",
 			Buckets: prometheus.DefBuckets,
-		},
-	)
-	r.authBreakerState = prometheus.NewGauge(
-		prometheus.GaugeOpts{
-			Name: "walera_auth_circuit_breaker_state",
-			Help: "Auth circuit breaker state (0=Closed, 1=Open, 2=HalfOpen).",
 		},
 	)
 	r.authRefreshTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
@@ -274,10 +266,6 @@ func (r *Registry) AuthRequests(result string) prometheus.Counter {
 
 func (r *Registry) AuthRequestDuration() prometheus.Histogram {
 	return r.authRequestDuration
-}
-
-func (r *Registry) AuthBreakerState() prometheus.Gauge {
-	return r.authBreakerState
 }
 
 func (r *Registry) LimitRejected(kind string) prometheus.Counter {

@@ -64,13 +64,6 @@ func newSingletonBenchConfig(b *testing.B) *AppConfig {
 			BackendURL:        "https://auth.example/test",
 			DefaultTTLSeconds: 60,
 			RequestTimeout:    5 * time.Second,
-			Breaker: auth.BreakerConfig{
-				WindowBuckets:        30,
-				BucketSeconds:        1,
-				FailureRateThreshold: 0.5,
-				DebounceFloor:        10,
-				Cooldown:             10 * time.Second,
-			},
 		},
 		Limits: limits.Config{
 			GlobalConcurrent: 50000,
