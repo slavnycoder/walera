@@ -211,32 +211,58 @@ func (s *Subscriber) RefreshLoop(ctx context.Context) {
 	}
 }
 
+// attemptResult classifies a single fetch+swap cycle.
+type attemptResult int
+
+const (
+	attemptSwapped     attemptResult = iota // fresh permissions fetched and swapped
+	attemptRevoked                          // channel no longer granted; subscriber dropped (auth_revoked)
+	attemptUnavailable                      // *ErrUnavailable (transient backend failure)
+	attemptFailed                           // other (non-revoked, non-unavailable) error
+)
+
+// refreshAttempt performs one permission re-fetch and, on success, the atomic
+// whitelist swap; on a definitive revocation it drops the subscriber. It records
+// the metric and logs exactly like the TTL path. It does NOT drop the subscriber
+// on a transient/unexpected error — that decision is left to the caller, because
+// the TTL path drops while the on-demand (best-effort) path keeps the stream
+// alive. Must be called with refreshMu held.
+func (s *Subscriber) refreshAttempt(ctx context.Context, attempt int) attemptResult {
+	fresh, err := s.client.RefreshPermissions(ctx, s.userID, s.channel, newRequestID())
+	s.recordRefreshResult(err)
+	if err == nil {
+		if !s.refreshMapAllowed(fresh) {
+			s.Sub.Drop("auth_revoked")
+			return attemptRevoked
+		}
+		s.swapMap(fresh)
+		return attemptSwapped
+	}
+	s.logRefreshError(err, attempt)
+	if isRevokedErr(err) {
+		s.Sub.Drop("auth_revoked")
+		return attemptRevoked
+	}
+	if _, isUnavailable := err.(*ErrUnavailable); !isUnavailable {
+		return attemptFailed
+	}
+	return attemptUnavailable
+}
+
 func (s *Subscriber) tryRefresh(ctx context.Context) {
 	if !s.refreshMu.TryLock() {
 		return
 	}
 	defer s.refreshMu.Unlock()
 
-	fresh, err := s.client.RefreshPermissions(ctx, s.userID, s.channel, newRequestID())
-	s.recordRefreshResult(err)
-	if err == nil {
-		if !s.refreshMapAllowed(fresh) {
-			s.Sub.Drop("auth_revoked")
-			return
-		}
-		s.swapMap(fresh)
+	switch s.refreshAttempt(ctx, 0) {
+	case attemptSwapped, attemptRevoked:
 		return
-	}
-	s.logRefreshError(err, 0)
-
-	if isRevokedErr(err) {
-		s.Sub.Drop("auth_revoked")
-		return
-	}
-
-	if _, isUnavailable := err.(*ErrUnavailable); !isUnavailable {
+	case attemptFailed:
 		s.Sub.Drop("auth_unavailable")
 		return
+	case attemptUnavailable:
+		// fall through to the backoff retry chain
 	}
 
 	for i, backoff := range s.backoffs {
@@ -247,29 +273,61 @@ func (s *Subscriber) tryRefresh(ctx context.Context) {
 			return
 		case <-time.After(backoff):
 		}
-		fresh, err = s.client.RefreshPermissions(ctx, s.userID, s.channel, newRequestID())
-		s.recordRefreshResult(err)
-		if err == nil {
-			if !s.refreshMapAllowed(fresh) {
-				s.Sub.Drop("auth_revoked")
-				return
-			}
-			s.swapMap(fresh)
+		switch s.refreshAttempt(ctx, i+1) {
+		case attemptSwapped, attemptRevoked:
 			return
-		}
-		s.logRefreshError(err, i+1)
-		if isRevokedErr(err) {
-			s.Sub.Drop("auth_revoked")
-			return
-		}
-		if _, isUnavailable := err.(*ErrUnavailable); !isUnavailable {
+		case attemptFailed:
 			s.Sub.Drop("auth_unavailable")
 			return
+		case attemptUnavailable:
+			// keep retrying
 		}
 	}
 
 	if s.breaker == nil || s.breaker.Allow() {
 		s.Sub.Drop("auth_unavailable")
+	}
+}
+
+// RefreshResult is the outcome of an on-demand synchronous refresh (RefreshOnce).
+type RefreshResult int
+
+const (
+	// RefreshSwapped: fresh permissions were fetched and the whitelist swapped.
+	RefreshSwapped RefreshResult = iota
+	// RefreshRevoked: the channel is no longer granted; the subscriber was
+	// dropped with reason auth_revoked (identical to the TTL path).
+	RefreshRevoked
+	// RefreshUnavailable: the backend re-fetch failed (transient or unexpected).
+	// The live whitelist is left intact and the stream is NOT dropped.
+	RefreshUnavailable
+	// RefreshBusy: another refresh (a TTL tick or breaker fan-out) currently
+	// holds refreshMu, so no fetch was performed by this call.
+	RefreshBusy
+)
+
+// RefreshOnce performs a single synchronous permission re-fetch and atomic
+// whitelist swap. It shares refreshMu — and therefore the swap/drop/guard
+// primitives — with the TTL loop and the breaker fan-out, so it can never race
+// or double-swap a concurrent refresh. Unlike the TTL tryRefresh it runs NO
+// backoff retries: a transient backend failure returns RefreshUnavailable and
+// leaves the current whitelist in place (best-effort, the stream is preserved).
+// A definitive revocation drops the subscriber (auth_revoked), exactly as TTL
+// does. If a concurrent refresh holds the lock, it returns RefreshBusy without
+// contacting the backend.
+func (s *Subscriber) RefreshOnce(ctx context.Context) RefreshResult {
+	if !s.refreshMu.TryLock() {
+		return RefreshBusy
+	}
+	defer s.refreshMu.Unlock()
+
+	switch s.refreshAttempt(ctx, 0) {
+	case attemptSwapped:
+		return RefreshSwapped
+	case attemptRevoked:
+		return RefreshRevoked
+	default: // attemptUnavailable, attemptFailed
+		return RefreshUnavailable
 	}
 }
 

@@ -61,6 +61,49 @@ func (r *Subscribers) Len() int {
 	return len(r.subs)
 }
 
+// RefreshSummary aggregates the per-subscriber outcomes of an on-demand refresh.
+type RefreshSummary struct {
+	Matched     int
+	Swapped     int
+	Revoked     int
+	Unavailable int
+	Busy        int
+}
+
+// RefreshOwnByChannel synchronously refreshes the live subscribers owned by
+// userID and subscribed to channel (the caller's-own scope used by
+// POST /sse/v1/refresh). Matching subscribers are snapshotted under the registry
+// lock, then each is refreshed off-lock — RefreshOnce performs a blocking backend
+// call and must never run while r.mu is held (mirrors fanoutStaleRefreshes). The
+// match is exact string equality on both channel and userID, so a wildcard
+// subscriber is not refreshed by an exact channel and vice versa, and one user's
+// POST can never refresh another user's stream. Returns the aggregate outcome.
+func (r *Subscribers) RefreshOwnByChannel(ctx context.Context, channel, userID string) RefreshSummary {
+	r.mu.Lock()
+	matched := make([]*Subscriber, 0, 4)
+	for _, s := range r.subs {
+		if s.channel == channel && s.userID == userID {
+			matched = append(matched, s)
+		}
+	}
+	r.mu.Unlock()
+
+	sum := RefreshSummary{Matched: len(matched)}
+	for _, s := range matched {
+		switch s.RefreshOnce(ctx) {
+		case RefreshSwapped:
+			sum.Swapped++
+		case RefreshRevoked:
+			sum.Revoked++
+		case RefreshUnavailable:
+			sum.Unavailable++
+		case RefreshBusy:
+			sum.Busy++
+		}
+	}
+	return sum
+}
+
 func (r *Subscribers) WatchBreaker(ctx context.Context, b *Breaker, jitter time.Duration, ttlSeconds int) {
 	for {
 		ch := b.WaitForClose()
