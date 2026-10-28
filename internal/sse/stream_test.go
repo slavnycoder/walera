@@ -10,6 +10,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rs/zerolog"
+
+	"github.com/walera/walera/internal/metrics"
 	"github.com/walera/walera/internal/router"
 )
 
@@ -208,5 +211,35 @@ func TestStream_ServerShutdownCompletesAfterDrop(t *testing.T) {
 	rest, _ := io.ReadAll(resp.Body)
 	if !strings.Contains(string(rest), "event: shutdown") {
 		t.Fatalf("body = %q; want shutdown frame", rest)
+	}
+}
+
+// A stream registering after Broadcaster.Shutdown's snapshot must still be released.
+func TestStream_OpenAfterBroadcasterShutdown_GetsShutdownFrame(t *testing.T) {
+	t.Parallel()
+	kit := newTestHandler(t, nil, nil)
+	validMapBackend(kit.backend)
+	bc := router.New(kit.h.routerCfg, router.Deps{
+		Logger:  zerolog.Nop(),
+		Metrics: metrics.New(),
+		Encoder: kit.h.enc,
+	})
+	kit.h.bc = bc
+	srv := newTestServer(t, kit.h)
+
+	if err := bc.Shutdown(context.Background(), time.Second); err != nil {
+		t.Fatalf("Broadcaster.Shutdown: %v", err)
+	}
+
+	resp := openStream(t, http.DefaultClient, srv.URL+"/sse/v1/users/42")
+	body, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(body), "event: shutdown") {
+		t.Fatalf("body = %q; want shutdown frame", body)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := srv.Config.Shutdown(ctx); err != nil {
+		t.Fatalf("Shutdown: %v; want nil within 2s", err)
 	}
 }

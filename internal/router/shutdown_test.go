@@ -248,3 +248,27 @@ func TestBroadcaster_Shutdown_MixedExactAndWildcard(t *testing.T) {
 		t.Fatalf("drainer goroutines did not exit within 1s")
 	}
 }
+
+func TestBroadcaster_RegisterAfterShutdown_DropsWithShutdown(t *testing.T) {
+	t.Parallel()
+
+	b, _, _ := newBroadcasterForShutdown(0)
+	if err := b.Shutdown(context.Background(), time.Second); err != nil {
+		t.Fatalf("Shutdown: %v", err)
+	}
+
+	late := NewSubscriber(
+		SubscriberConfig{Kind: KindExact, Schema: "public", Table: "t", PK: "late"},
+		SubscriberDeps{Parent: context.Background()},
+	)
+	b.Register(late)
+
+	select {
+	case <-late.Done():
+	default:
+		t.Fatal("subscriber registered after Shutdown was not dropped")
+	}
+	if got := late.Reason(); got != "shutdown" {
+		t.Fatalf("Reason = %q; want shutdown", got)
+	}
+}

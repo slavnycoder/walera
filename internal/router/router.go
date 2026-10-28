@@ -3,6 +3,7 @@ package router
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/jackc/pglogrepl"
@@ -24,6 +25,7 @@ type Broadcaster struct {
 	enc      encoderIface
 	exact    *index
 	wildcard *wildcardIndex
+	closed   atomic.Bool
 }
 
 type Deps struct {
@@ -60,6 +62,12 @@ func New(cfg Config, deps Deps) *Broadcaster {
 }
 
 func (b *Broadcaster) Register(sub *Subscriber) {
+	// Add before checking closed: either Shutdown's snapshot sees sub or we see closed.
+	defer func() {
+		if b.closed.Load() {
+			sub.Drop("shutdown")
+		}
+	}()
 	switch sub.Kind() {
 	case KindExact:
 		key := sub.Schema() + "." + sub.Table() + ":" + sub.PK()
@@ -359,6 +367,7 @@ func (b *Broadcaster) ExactLen() int { return b.exact.Len() }
 func (b *Broadcaster) WildcardLen() int { return b.wildcard.Len() }
 
 func (b *Broadcaster) Shutdown(ctx context.Context, drainDeadline time.Duration) error {
+	b.closed.Store(true)
 	subs := append(b.exact.Snapshot(), b.wildcard.Snapshot()...)
 
 	b.log.Debug().
