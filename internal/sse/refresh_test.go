@@ -7,11 +7,15 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/rs/zerolog"
 
 	"github.com/walera/walera/internal/auth"
+	"github.com/walera/walera/internal/limits"
 	"github.com/walera/walera/internal/metrics"
 	"github.com/walera/walera/internal/router"
 )
@@ -24,9 +28,9 @@ func colSet(cols ...string) map[string]struct{} {
 	return m
 }
 
-// registerLiveSub builds an auth.Subscriber (no TTL loop) and adds it to the
-// handler's registry, mimicking what stream.go does for a live SSE connection.
-func registerLiveSub(t *testing.T, kit *testHandlerKit, userID, channel, table string, cols ...string) *auth.Subscriber {
+// addLiveSub builds an auth.Subscriber (no TTL loop) and adds it to the given
+// registry, mimicking what stream.go does for a live SSE connection.
+func addLiveSub(t *testing.T, reg *auth.Subscribers, c *auth.Client, bk *auth.Breaker, userID, channel, table string, cols ...string) *auth.Subscriber {
 	t.Helper()
 	rsub := router.NewSubscriber(
 		router.SubscriberConfig{Kind: router.KindExact, Schema: "public", Table: table, PK: "42", BufferCap: 4},
@@ -39,17 +43,16 @@ func registerLiveSub(t *testing.T, kit *testHandlerKit, userID, channel, table s
 	}
 	asub := auth.NewSubscriber(
 		auth.SubscriberConfig{InitialMap: wl, UserID: userID, Channel: channel, DefaultTTL: 0},
-		auth.SubscriberDeps{
-			Sub:     rsub,
-			Client:  kit.authClient,
-			Breaker: kit.breaker,
-			Logger:  zerolog.Nop(),
-			Metrics: metrics.New(),
-		},
+		auth.SubscriberDeps{Sub: rsub, Client: c, Breaker: bk, Logger: zerolog.Nop(), Metrics: metrics.New()},
 	)
-	kit.authReg.Add(asub)
-	t.Cleanup(func() { kit.authReg.Remove(asub.ID()) })
+	reg.Add(asub)
+	t.Cleanup(func() { reg.Remove(asub.ID()) })
 	return asub
+}
+
+func registerLiveSub(t *testing.T, kit *testHandlerKit, userID, channel, table string, cols ...string) *auth.Subscriber {
+	t.Helper()
+	return addLiveSub(t, kit.authReg, kit.authClient, kit.breaker, userID, channel, table, cols...)
 }
 
 // refreshBackend scripts the fake auth backend to answer OpenSession
@@ -309,6 +312,274 @@ func TestRefresh_GetMethodNotAllowed_405(t *testing.T) {
 
 	if resp.StatusCode != http.StatusMethodNotAllowed {
 		t.Errorf("status = %d; want 405", resp.StatusCode)
+	}
+}
+
+func TestRefresh_MultipleOwnSubs_FanOut_200(t *testing.T) {
+	t.Parallel()
+	kit := newTestHandler(t, nil, nil)
+	// Same user, same channel, two live subscribers (two tabs).
+	a := registerLiveSub(t, kit, "u1", "users:42", "users", "id")
+	b := registerLiveSub(t, kit, "u1", "users:42", "users", "id")
+	refreshBackend(kit.backend, map[string][]string{"users": {"id"}}, map[string][]string{"users": {"id", "name"}}, 200)
+
+	w, _ := postRefresh(kit.h, `{"channel":"users:42"}`, true)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d; want 200 (body=%s)", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Refreshed int `json:"refreshed"`
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
+	if resp.Refreshed != 2 {
+		t.Errorf("refreshed = %d; want 2", resp.Refreshed)
+	}
+	for i, s := range []*auth.Subscriber{a, b} {
+		if _, ok := s.AuthMap.Load().Tables["users"]["name"]; !ok {
+			t.Errorf("sub %d not swapped", i)
+		}
+	}
+}
+
+// sessionFails scripts the backend so OpenSession (/auth/sessions) fails with the
+// given status/body and records whether /auth/permissions was ever contacted.
+func sessionFails(b *fakeAuthBackend, status int, body string) *atomic.Bool {
+	var permHit atomic.Bool
+	b.SetResp(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/auth/permissions" {
+			permHit.Store(true)
+			return
+		}
+		w.WriteHeader(status)
+		if body != "" {
+			_, _ = io.WriteString(w, body)
+		}
+	})
+	return &permHit
+}
+
+func TestRefresh_OpenSessionForbidden_403(t *testing.T) {
+	t.Parallel()
+	kit := newTestHandler(t, nil, nil)
+	registerLiveSub(t, kit, "u1", "users:42", "users", "id")
+	permHit := sessionFails(kit.backend, http.StatusForbidden, `{"reason":"backend_denied"}`)
+
+	w, _ := postRefresh(kit.h, `{"channel":"users:42"}`, true)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("status = %d; want 403", w.Code)
+	}
+	// OpenSession 403 forwards the backend's own body, NOT {"reason":"not_allowed"}.
+	if got := reasonOf(t, w); got != "backend_denied" {
+		t.Errorf("reason = %q; want backend_denied (backend body forwarded)", got)
+	}
+	if permHit.Load() {
+		t.Errorf("/auth/permissions was contacted after OpenSession failure")
+	}
+}
+
+func TestRefresh_OpenSessionUnauthorized_401(t *testing.T) {
+	t.Parallel()
+	kit := newTestHandler(t, nil, nil)
+	registerLiveSub(t, kit, "u1", "users:42", "users", "id")
+	permHit := sessionFails(kit.backend, http.StatusUnauthorized, `{"reason":"bad_token"}`)
+
+	w, _ := postRefresh(kit.h, `{"channel":"users:42"}`, true)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d; want 401", w.Code)
+	}
+	if permHit.Load() {
+		t.Errorf("/auth/permissions contacted after OpenSession 401")
+	}
+}
+
+func TestRefresh_OpenSessionUnavailable_503(t *testing.T) {
+	t.Parallel()
+	kit := newTestHandler(t, nil, nil)
+	registerLiveSub(t, kit, "u1", "users:42", "users", "id")
+	permHit := sessionFails(kit.backend, http.StatusInternalServerError, "")
+
+	w, _ := postRefresh(kit.h, `{"channel":"users:42"}`, true)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d; want 503", w.Code)
+	}
+	if got := w.Header().Get("Retry-After"); got != "5" {
+		t.Errorf("Retry-After = %q; want 5", got)
+	}
+	if permHit.Load() {
+		t.Errorf("/auth/permissions contacted after OpenSession 5xx")
+	}
+}
+
+func TestRefresh_Busy_503_KeepsStream(t *testing.T) {
+	t.Parallel()
+	kit := newTestHandler(t, nil, nil)
+	sub := registerLiveSub(t, kit, "u1", "users:42", "users", "id")
+
+	// A blocking /auth/permissions lets a background refresh hold refreshMu while
+	// the POST runs, so the POST observes RefreshBusy deterministically.
+	inflight := make(chan struct{}, 1)
+	proceed := make(chan struct{})
+	kit.backend.SetResp(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/auth/permissions" {
+			select {
+			case inflight <- struct{}{}:
+			default:
+			}
+			<-proceed
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write(permMapJSON("u1", map[string][]string{"users": {"id", "name"}}, 60))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(permMapJSON("u1", map[string][]string{"users": {"id"}}, 60))
+	})
+
+	var bg sync.WaitGroup
+	bg.Add(1)
+	go func() {
+		defer bg.Done()
+		kit.h.authRegistry.RefreshOwnByChannel(context.Background(), "users:42", "u1")
+	}()
+	<-inflight // background refresh now holds refreshMu inside the backend call
+
+	w, _ := postRefresh(kit.h, `{"channel":"users:42"}`, true)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d; want 503 (busy)", w.Code)
+	}
+	if got := reasonOf(t, w); got != "auth_unavailable" {
+		t.Errorf("reason = %q; want auth_unavailable", got)
+	}
+	if r := sub.Sub.Reason(); r != "" {
+		t.Errorf("sub dropped with reason %q; want kept alive while busy", r)
+	}
+
+	close(proceed)
+	bg.Wait()
+}
+
+func TestRefresh_InvalidRequestID_400(t *testing.T) {
+	t.Parallel()
+	kit := newTestHandler(t, nil, nil)
+	req := httptest.NewRequest(http.MethodPost, "/sse/v1/refresh", strings.NewReader(`{"channel":"users:42"}`))
+	req.Header.Set("Authorization", "Bearer valid")
+	req.Header.Set("X-Request-ID", "bad id with spaces")
+	w := httptest.NewRecorder()
+	kit.h.serveRefresh(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d; want 400", w.Code)
+	}
+	if got := errorOf(t, w); got != "invalid_request_id" {
+		t.Errorf("error = %q; want invalid_request_id", got)
+	}
+}
+
+func TestRefresh_OversizedBody_400(t *testing.T) {
+	t.Parallel()
+	kit := newTestHandler(t, nil, nil)
+	big := `{"channel":"users:42","pad":"` + strings.Repeat("x", 2048) + `"}`
+	w, _ := postRefresh(kit.h, big, true)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d; want 400 (oversized body)", w.Code)
+	}
+	if got := errorOf(t, w); got != "invalid_request" {
+		t.Errorf("error = %q; want invalid_request", got)
+	}
+}
+
+// newRefreshFwdHandler builds a handler whose auth client forwards the given
+// header allowlist, so the forwarded-credential scrub path can be exercised.
+func newRefreshFwdHandler(t *testing.T, fwdHeaders []string) (*Handler, *fakeAuthBackend, *auth.Subscribers, *auth.Client, *auth.Breaker) {
+	t.Helper()
+	backend := newFakeAuthBackend()
+	t.Cleanup(backend.Close)
+	logger := zerolog.Nop()
+	m := metrics.New()
+	authCfg := auth.Config{
+		BackendURL:        backend.srv.URL,
+		DefaultTTLSeconds: 60,
+		RequestTimeout:    2 * time.Second,
+		ForwardedHeaders:  fwdHeaders,
+		Breaker: auth.BreakerConfig{
+			WindowBuckets: 30, BucketSeconds: 1, FailureRateThreshold: 0.5,
+			DebounceFloor: 20, Cooldown: 30 * time.Second, StaleRefreshJitter: 5 * time.Second,
+		},
+		Signing: auth.SigningConfig{Secret: strings.Repeat("k", 64), Kid: "v1"},
+	}
+	breaker := auth.NewBreaker(authCfg.Breaker, auth.BreakerDeps{
+		Prober: sseTestProber(func(_ context.Context) error { return nil }), Logger: logger, Metrics: m,
+	})
+	authClient := auth.New(authCfg, auth.Deps{Logger: logger, Breaker: breaker, Metrics: m})
+	lim := limits.New(limits.Config{GlobalConcurrent: 1024, PerUserConcurrentMax: 10}, limits.Deps{Logger: logger, Metrics: m})
+	authReg := auth.NewSubscribers(auth.SubscribersDeps{Logger: logger, Metrics: m})
+	enc := NewEncoder(10 << 20)
+	pool := NewPool(PoolConfig{
+		PoolFactor: 1, SubQueueSize: 8, MaxWaitMs: 2, WriteTimeout: 5 * time.Second,
+		HeartbeatInterval: 200 * time.Millisecond, DrainThresholdSubs: 1,
+	}, PoolDeps{Encoder: enc, Metrics: newFakeMetrics(), Logger: logger})
+	t.Cleanup(func() { _ = pool.Shutdown(context.Background()) })
+	cfg := Config{
+		MaxPayloadBytes: 10 << 20, WriteTimeout: 5 * time.Second, HeartbeatInterval: 200 * time.Millisecond,
+		Router: router.Config{ExactBuffer: 16, WildcardBuffer: 32, MaxChangesPerTx: 10000, HeartbeatInterval: 200 * time.Millisecond},
+		Auth:   authCfg,
+	}
+	h := NewHandler(cfg, Deps{
+		Broadcaster: &fakeBroadcaster{},
+		Auth:        AuthDeps{Client: authClient, Subscribers: authReg, Breaker: breaker},
+		Limits:      lim, Pool: pool, Logger: logger, Metrics: m,
+	})
+	return h, backend, authReg, authClient, breaker
+}
+
+func TestRefresh_CredentialScrub_AndNoCredsToRefreshBackend(t *testing.T) {
+	t.Parallel()
+	h, backend, reg, client, breaker := newRefreshFwdHandler(t, []string{"X-Tenant"})
+	addLiveSub(t, reg, client, breaker, "u1", "users:42", "users", "id")
+
+	var mu sync.Mutex
+	var permHdr http.Header
+	backend.SetResp(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/auth/permissions" {
+			mu.Lock()
+			permHdr = r.Header.Clone()
+			mu.Unlock()
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write(permMapJSON("u1", map[string][]string{"users": {"id", "name"}}, 60))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(permMapJSON("u1", map[string][]string{"users": {"id"}}, 60))
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/sse/v1/refresh", strings.NewReader(`{"channel":"users:42"}`))
+	req.Header.Set("Authorization", "Bearer valid")
+	req.Header.Set("Cookie", "session=secret")
+	req.Header.Set("X-Tenant", "acme")
+	w := httptest.NewRecorder()
+	h.serveRefresh(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d; want 200 (body=%s)", w.Code, w.Body.String())
+	}
+	// (1) The request header map is scrubbed of all forwarded credentials.
+	for _, hdr := range []string{"Authorization", "Cookie", "X-Tenant"} {
+		if got := req.Header.Get(hdr); got != "" {
+			t.Errorf("%s not scrubbed from request: %q", hdr, got)
+		}
+	}
+	// (2) The refresh re-fetch (HMAC-signed /auth/permissions) carries NO caller
+	//     credentials — the security invariant of the refresh path.
+	mu.Lock()
+	defer mu.Unlock()
+	if permHdr == nil {
+		t.Fatal("/auth/permissions was not contacted")
+	}
+	for _, hdr := range []string{"Authorization", "Cookie", "X-Tenant"} {
+		if got := permHdr.Get(hdr); got != "" {
+			t.Errorf("refresh backend request leaked %s: %q", hdr, got)
+		}
+	}
+	if permHdr.Get("X-Walera-Sig") == "" {
+		t.Errorf("refresh backend request missing HMAC signature")
 	}
 }
 

@@ -185,6 +185,97 @@ func TestRefreshOwnByChannel_OnlyOwnChannelUser(t *testing.T) {
 	}
 }
 
+func TestRefreshOwnByChannel_FanOutMultipleOwnSubs(t *testing.T) {
+	t.Parallel()
+	// Same user, same channel, two distinct live subscribers (e.g. two tabs).
+	srv := newScriptServer(t, func(_ int64, w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(permissionsBody(t, map[string][]string{"users": {"id", "name"}}))
+	})
+	c, _ := newSubTestClient(t, srv.srv.URL)
+
+	a := ownSub(t, c, "u1", "users:42")
+	b := ownSub(t, c, "u1", "users:42")
+
+	reg := newTestRegistry(t)
+	reg.Add(a)
+	reg.Add(b)
+
+	sum := reg.RefreshOwnByChannel(context.Background(), "users:42", "u1")
+	if sum.Matched != 2 || sum.Swapped != 2 {
+		t.Fatalf("summary = %+v; want Matched=2 Swapped=2", sum)
+	}
+	for i, s := range []*Subscriber{a, b} {
+		if _, ok := s.AuthMap.Load().Tables["users"]["name"]; !ok {
+			t.Errorf("sub %d not refreshed: users.name missing", i)
+		}
+	}
+}
+
+func TestRefreshOwnByChannel_SwappedAndBusy(t *testing.T) {
+	t.Parallel()
+	// Two same-user/same-channel subs; one is mid-refresh (lock held) and must be
+	// reported Busy while the other swaps. Exercises the registry's mixed
+	// aggregation (Swapped>0 AND Busy>0) that the HTTP precedence relies on.
+	srv := newScriptServer(t, func(_ int64, w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(permissionsBody(t, map[string][]string{"users": {"id", "name"}}))
+	})
+	c, _ := newSubTestClient(t, srv.srv.URL)
+
+	free := ownSub(t, c, "u1", "users:42")
+	busy := ownSub(t, c, "u1", "users:42")
+
+	reg := newTestRegistry(t)
+	reg.Add(free)
+	reg.Add(busy)
+
+	busy.refreshMu.Lock() // simulate an in-flight TTL refresh on one sub
+	sum := reg.RefreshOwnByChannel(context.Background(), "users:42", "u1")
+	busy.refreshMu.Unlock()
+
+	if sum.Matched != 2 || sum.Swapped != 1 || sum.Busy != 1 {
+		t.Fatalf("summary = %+v; want Matched=2 Swapped=1 Busy=1", sum)
+	}
+	if _, ok := free.AuthMap.Load().Tables["users"]["name"]; !ok {
+		t.Errorf("free sub not refreshed")
+	}
+	if _, ok := busy.AuthMap.Load().Tables["users"]["name"]; ok {
+		t.Errorf("busy sub was refreshed despite held lock")
+	}
+}
+
+// denyBreaker reports the breaker as open (Allow() == false).
+type denyBreaker struct{}
+
+func (denyBreaker) Allow() bool { return false }
+
+func TestRefreshOnce_BreakerOpen_StillAttempts(t *testing.T) {
+	t.Parallel()
+	// Unlike the TTL RefreshLoop (which skips a tick when the breaker is open),
+	// the on-demand RefreshOnce performs its single attempt regardless of breaker
+	// state — the breaker gate lives in RefreshLoop, not in refreshAttempt.
+	srv := newScriptServer(t, func(_ int64, w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(permissionsBody(t, map[string][]string{"users": {"id", "name"}}))
+	})
+	c, _ := newSubTestClient(t, srv.srv.URL)
+	s := newTestSubscriber(t, subscriberTestOpts{
+		Client:     c,
+		Breaker:    denyBreaker{}, // breaker open
+		Channel:    "users:42",
+		UserID:     "u1",
+		InitialMap: usersMap("u1", "id"),
+	})
+
+	if got := s.RefreshOnce(context.Background()); got != RefreshSwapped {
+		t.Fatalf("RefreshOnce = %v; want RefreshSwapped (breaker must not short-circuit on-demand)", got)
+	}
+	if n := srv.calls.Load(); n != 1 {
+		t.Errorf("backend calls = %d; want 1 (single attempt performed)", n)
+	}
+}
+
 func TestRefreshOwnByChannel_NoMatch(t *testing.T) {
 	t.Parallel()
 	srv := newScriptServer(t, func(_ int64, w http.ResponseWriter, _ *http.Request) {

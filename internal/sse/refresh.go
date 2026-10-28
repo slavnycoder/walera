@@ -112,7 +112,17 @@ func (h *Handler) serveRefresh(w http.ResponseWriter, r *http.Request) {
 		h.writeJSONReason(w, r, http.StatusForbidden, "auth_revoked")
 	case sum.Unavailable > 0 || sum.Busy > 0:
 		// Transient backend failure (or a refresh already in flight): the stream is
-		// kept on its current whitelist; the caller may retry.
+		// kept on its current whitelist; the caller may retry. Logged here (not in
+		// the shared refreshAttempt, whose warn line is TTL-gated) so an explicitly
+		// requested on-demand refresh failure is observable even when the per-sub
+		// TTL loop is disabled. Channel/user_id are identifiers, not row data.
+		h.logger.Warn().
+			Str("channel", channelStr).
+			Str("user_id", authMap.UserID).
+			Int("matched", sum.Matched).
+			Int("unavailable", sum.Unavailable).
+			Int("busy", sum.Busy).
+			Msg("on-demand refresh did not complete")
 		h.writeReasonRetry(w, r, http.StatusServiceUnavailable, 5, "auth_unavailable")
 	default:
 		h.writeRefreshOK(w, r, sum.Swapped)
