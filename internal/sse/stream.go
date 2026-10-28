@@ -102,7 +102,6 @@ func (h *Handler) headersAndPreamble(
 		auth.SubscriberDeps{
 			Sub:     sub,
 			Client:  h.authClient,
-			Breaker: h.breaker,
 			Logger:  h.logger,
 			Metrics: h.metrics,
 		},

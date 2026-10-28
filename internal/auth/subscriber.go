@@ -29,10 +29,6 @@ var initialJitterFunc = func(ttl time.Duration) time.Duration {
 	return time.Duration(mathrand.Int64N(half))
 }
 
-type breakerHook interface {
-	Allow() bool
-}
-
 var defaultBackoffs = []time.Duration{1 * time.Second, 3 * time.Second, 9 * time.Second}
 
 type SubscriberConfig struct {
@@ -51,8 +47,6 @@ type SubscriberDeps struct {
 	Sub *router.Subscriber
 
 	Client *Client
-
-	Breaker breakerHook
 
 	Logger zerolog.Logger
 
@@ -82,8 +76,7 @@ type Subscriber struct {
 
 	PrevWhitelist atomic.Pointer[Whitelist]
 
-	client  *Client
-	breaker breakerHook
+	client *Client
 
 	// refreshMu guards one swap; the TTL chain holds it per attempt, never across a backoff sleep.
 	refreshMu sync.Mutex
@@ -135,7 +128,6 @@ func NewSubscriber(cfg SubscriberConfig, deps SubscriberDeps) *Subscriber {
 	s := &Subscriber{
 		Sub:      deps.Sub,
 		client:   deps.Client,
-		breaker:  deps.Breaker,
 		log:      deps.Logger,
 		mc:       deps.Metrics,
 		userID:   userID,
@@ -206,9 +198,6 @@ func (s *Subscriber) RefreshLoop(ctx context.Context) {
 		case <-s.Sub.Done():
 			return
 		case <-ticker.C:
-			if s.breaker != nil && !s.breaker.Allow() {
-				continue
-			}
 			s.tryRefresh(ctx)
 		}
 	}
@@ -302,9 +291,7 @@ func (s *Subscriber) tryRefresh(ctx context.Context) {
 		}
 	}
 
-	if s.breaker == nil || s.breaker.Allow() {
-		s.dropIfUnchanged(mapAtChainStart)
-	}
+	s.dropIfUnchanged(mapAtChainStart)
 }
 
 func (s *Subscriber) lockedAttempt(ctx context.Context, attempt int, requestID string) attemptResult {

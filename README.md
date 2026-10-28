@@ -233,10 +233,10 @@ A minimal Django reference implementation is in that doc; the
 shows a FastAPI version that doubles as the product API.
 
 When the auth backend goes sideways, Walera trips a circuit breaker
-and takes a **bounded fail-open** posture for established subscribers
-(events continue until each subscriber's permission TTL expires) and a
-**fail-closed** posture for new opens. This stops an auth outage from
-becoming a fleet-wide reconnect storm.
+and takes a fail-closed posture: established streams are dropped with
+`auth_unavailable` once a refresh fails past its retries, and new opens
+get `503`. This stops an auth outage from becoming a fleet-wide
+reconnect storm.
 
 ---
 

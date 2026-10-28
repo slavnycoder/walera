@@ -257,17 +257,17 @@ misbehaving backend cannot cascade into a runtime-wide outage. When
 the failure rate over a sliding window crosses a threshold (above 50%
 sustained), the breaker opens and Walera shifts posture:
 
-- **Established subscriptions** continue to receive events as long as
-  their last successful permission map is within its TTL. This is a
-  bounded fail-open posture for existing streams.
+- **Established subscriptions** re-check permissions every TTL. If the
+  backend is unreachable (including while the breaker is open), Walera
+  retries with backoff (1s, 3s, 9s) and then drops the stream with
+  `auth_unavailable`. A grant never outlives TTL + ~13s without a
+  successful check. This is fail-closed.
 - **New subscription attempts** are rejected with `503` while the
-  breaker is open. This is a fail-closed posture for new opens.
+  breaker is open, so reconnecting clients do not hammer a failing
+  backend.
 
 When the failure rate drops back below the threshold the breaker
-returns to closed and normal authorization resumes. The breaker design
-trades a bounded amount of stale-permission delivery against the
-operational reality that an auth-backend outage should not produce a
-fleet-wide reconnect storm.
+returns to closed and normal authorization resumes.
 
 See [ADR 0002: Auth Model](./adr/0002-auth-model.md) for the
 delegation rationale and [ADR 0003: Slow Client Policy](./adr/0003-slow-client-policy.md)

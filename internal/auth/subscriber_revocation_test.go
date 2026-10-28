@@ -4,18 +4,11 @@ import (
 	"context"
 	"net/http"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/jackc/pglogrepl"
 )
-
-// atomicBreaker is a breakerHook whose Allow() can be flipped from another
-// goroutine without racing the RefreshLoop that reads it.
-type atomicBreaker struct{ allow atomic.Bool }
-
-func (a *atomicBreaker) Allow() bool { return a.allow.Load() }
 
 // TestSubscriber_FilterWithLSN_NarrowingBoundary_NoLeak pins the exact LSN edge
 // after a grant is narrowed through the real swapMap path. A tx that commits at
@@ -58,69 +51,6 @@ func TestSubscriber_FilterWithLSN_NarrowingBoundary_NoLeak(t *testing.T) {
 	// not leak. This is the security guarantee.
 	if _, drop := s.FilterWithLSN(makeUpdateChange("orders", map[string]any{"email": "secret"}), 501); !drop {
 		t.Fatalf("commitLSN=501: drop=false; want true (email forbidden after narrowing)")
-	}
-}
-
-// TestSubscriber_BoundedFailOpen_RevokeTakesEffectAfterRecovery verifies the
-// bounded fail-open posture: while the breaker is open (auth outage) an existing
-// subscriber is NOT refreshed and keeps streaming on its last grant; once the
-// breaker recovers and the backend reports the user revoked, the subscriber is
-// dropped. Fail-open is bounded, not permanent.
-func TestSubscriber_BoundedFailOpen_RevokeTakesEffectAfterRecovery(t *testing.T) {
-	t.Parallel()
-
-	var hits atomic.Int64
-	srv := newScriptServer(t, func(_ int64, w http.ResponseWriter, _ *http.Request) {
-		hits.Add(1)
-		w.WriteHeader(http.StatusUnauthorized) // backend now revokes the user
-		_, _ = w.Write([]byte(`{"error":"revoked"}`))
-	})
-	c, _ := newSubTestClient(t, srv.srv.URL)
-
-	bk := &atomicBreaker{}
-	bk.allow.Store(false) // breaker OPEN — auth outage
-
-	initial := makeMap(t, 100, "id", "email")
-	initial.TTLSeconds = 0 // let DefaultTTL drive the cadence
-	s := newTestSubscriber(t, subscriberTestOpts{
-		Client:     c,
-		Breaker:    bk,
-		InitialMap: initial,
-		DefaultTTL: 15 * time.Millisecond,
-	})
-
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
-	go func() { defer close(done); s.RefreshLoop(ctx) }()
-	defer func() { cancel(); <-done }()
-
-	// During the outage the subscriber must not be refreshed or dropped.
-	time.Sleep(120 * time.Millisecond)
-	if got := hits.Load(); got != 0 {
-		t.Fatalf("auth calls during outage: got %d; want 0 (breaker gates refresh)", got)
-	}
-	if reason := s.Sub.Reason(); reason != "" {
-		t.Fatalf("sub dropped during outage: %q; want alive (bounded fail-open)", reason)
-	}
-	if _, ok := s.AuthMap.Load().Tables["orders"]["email"]; !ok {
-		t.Fatalf("grant changed during outage; want the original wide map intact")
-	}
-
-	// Breaker recovers: the next tick refreshes, the backend reports revoked,
-	// and the subscriber is dropped.
-	bk.allow.Store(true)
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if s.Sub.Reason() != "" {
-			break
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	if reason := s.Sub.Reason(); reason != "auth_revoked" {
-		t.Fatalf("post-recovery Sub.Reason: got %q; want auth_revoked", reason)
-	}
-	if hits.Load() == 0 {
-		t.Fatalf("backend never called after recovery; want >= 1")
 	}
 }
 
@@ -176,5 +106,38 @@ func TestSubscriber_ConcurrentSwapDropAndDelivery_RaceClean(t *testing.T) {
 	s.swapMap(makeMap(t, 0, "id"))
 	if _, drop := s.FilterWithLSN(makeUpdateChange("orders", map[string]any{"email": "x"}), pglogrepl.LSN(1000)); !drop {
 		t.Fatalf("post-revoke delivery leaked email; want drop")
+	}
+}
+
+// An auth outage must not extend a live grant past TTL + retry backoffs.
+func TestSubscriber_AuthOutage_DropsAfterTTL(t *testing.T) {
+	t.Parallel()
+
+	srv := newScriptServer(t, func(_ int64, w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	})
+	c, _ := newSubTestClient(t, srv.srv.URL)
+
+	initial := makeMap(t, 100, "id", "email")
+	initial.TTLSeconds = 0
+	s := newTestSubscriber(t, subscriberTestOpts{
+		Client:     c,
+		InitialMap: initial,
+		DefaultTTL: 15 * time.Millisecond,
+		Backoffs:   []time.Duration{time.Millisecond, time.Millisecond, time.Millisecond},
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { defer close(done); s.RefreshLoop(ctx) }()
+	defer func() { cancel(); <-done }()
+
+	select {
+	case <-s.Sub.Done():
+	case <-time.After(2 * time.Second):
+		t.Fatal("subscriber still alive 2s into an auth outage; want auth_unavailable drop")
+	}
+	if got := s.Sub.Reason(); got != "auth_unavailable" {
+		t.Fatalf("Sub.Reason = %q; want auth_unavailable", got)
 	}
 }

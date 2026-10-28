@@ -42,7 +42,7 @@ func addLiveSub(t *testing.T, reg *auth.Subscribers, c *auth.Client, bk *auth.Br
 	}
 	asub := auth.NewSubscriber(
 		auth.SubscriberConfig{InitialMap: wl, UserID: userID, Channel: channel, DefaultTTL: 0},
-		auth.SubscriberDeps{Sub: rsub, Client: c, Breaker: bk, Logger: zerolog.Nop(), Metrics: metrics.New()},
+		auth.SubscriberDeps{Sub: rsub, Client: c, Logger: zerolog.Nop(), Metrics: metrics.New()},
 	)
 	reg.Add(asub)
 	t.Cleanup(func() { reg.Remove(asub.ID()) })
@@ -66,7 +66,7 @@ func addTTLSub(t *testing.T, kit *testHandlerKit, ttl time.Duration) *auth.Subsc
 	wl := &auth.Whitelist{UserID: "u1", Tables: map[string]map[string]struct{}{"users": colSet("id")}}
 	asub := auth.NewSubscriber(
 		auth.SubscriberConfig{InitialMap: wl, UserID: "u1", Channel: "users:42", DefaultTTL: ttl},
-		auth.SubscriberDeps{Sub: rsub, Client: kit.authClient, Breaker: kit.breaker, Logger: zerolog.Nop(), Metrics: metrics.New()},
+		auth.SubscriberDeps{Sub: rsub, Client: kit.authClient, Logger: zerolog.Nop(), Metrics: metrics.New()},
 	)
 	kit.authReg.Add(asub)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -496,7 +496,7 @@ func newRefreshFwdHandler(t *testing.T, fwdHeaders []string) (*Handler, *fakeAut
 	}
 	h := NewHandler(cfg, Deps{
 		Broadcaster: &fakeBroadcaster{},
-		Auth:        AuthDeps{Client: authClient, Subscribers: authReg, Breaker: breaker},
+		Auth:        AuthDeps{Client: authClient, Subscribers: authReg},
 		Limits:      lim, Pool: pool, Logger: logger, Metrics: m,
 	})
 	return h, backend, authReg, authClient, breaker

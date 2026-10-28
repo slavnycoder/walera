@@ -73,7 +73,7 @@ spec:
             component: auth
           annotations:
             summary: "Walera auth circuit breaker open"
-            description: "Bounded fail-open active; up to ~2min stale-permissions window for existing subscribers. Investigate auth backend logs."
+            description: "New SSE opens are rejected with 503; established streams drop with auth_unavailable after TTL + retries. Investigate auth backend logs."
         - alert: WaleraAuthBreakerStaleSubscribersOutsideBreaker
           expr: walera_auth_circuit_breaker_state == 0 and walera_auth_breaker_stale_subscribers > 0
           for: 1m

@@ -70,7 +70,6 @@ func newHandlerPanicValidDeps(t *testing.T) (Config, Deps) {
 		Auth: AuthDeps{
 			Client:      authClient,
 			Subscribers: authReg,
-			Breaker:     breaker,
 		},
 		Limits:  lim,
 		Pool:    pool,
@@ -101,11 +100,6 @@ func TestNewHandler_PanicsOnNilDeps(t *testing.T) {
 			name:    "AuthSubscribers",
 			mutate:  func(d *Deps) { d.Auth.Subscribers = nil },
 			wantMsg: "sse.NewHandler: Deps.Auth.Subscribers is required",
-		},
-		{
-			name:    "Breaker",
-			mutate:  func(d *Deps) { d.Auth.Breaker = nil },
-			wantMsg: "sse.NewHandler: Deps.Auth.Breaker is required",
 		},
 		{
 			name:    "Limits",

@@ -160,7 +160,6 @@ func wireDataPlane(cfg AppConfig, logger zerolog.Logger, registry *metrics.Regis
 			Auth: sse.AuthDeps{
 				Client:      aw.AuthClient,
 				Subscribers: aw.SubRegistry,
-				Breaker:     aw.Breaker,
 			},
 			Limits:  aw.Limits,
 			Pool:    writerPool,

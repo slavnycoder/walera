@@ -13,6 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   defaults to `60` and `0` is rejected at startup. Previously the default
   was `0`, so a revoked user kept receiving a live stream until it
   disconnected.
+- **Auth refresh is fail-closed.** An open circuit breaker no longer skips
+  the periodic permission refresh. A failed refresh drops the stream with
+  `auth_unavailable` after its retries, so a revoked user can no longer keep
+  streaming for the whole duration of an auth-backend outage.
 
 ## [2.2.0] - 2026-06-08
 

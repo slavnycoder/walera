@@ -93,7 +93,6 @@ func buildRunWriterHandler(b *testing.B) (*Handler, *WriterPool) {
 		Auth: AuthDeps{
 			Client:      authClient,
 			Subscribers: authReg,
-			Breaker:     breaker,
 		},
 		Limits:  lim,
 		Pool:    pool,

@@ -72,7 +72,6 @@ type Handler struct {
 	authClient       *auth.Client
 	limits           *limits.Limits
 	authRegistry     *auth.Subscribers
-	breaker          *auth.Breaker
 	authCfg          auth.Config
 	logger           zerolog.Logger
 	metrics          *metrics.Registry
@@ -83,8 +82,6 @@ type AuthDeps struct {
 	Client *auth.Client
 
 	Subscribers *auth.Subscribers
-
-	Breaker *auth.Breaker
 }
 
 type Deps struct {
@@ -111,9 +108,6 @@ func validateDeps(deps Deps) {
 	if deps.Auth.Subscribers == nil {
 		panic("sse.NewHandler: Deps.Auth.Subscribers is required")
 	}
-	if deps.Auth.Breaker == nil {
-		panic("sse.NewHandler: Deps.Auth.Breaker is required")
-	}
 	if deps.Limits == nil {
 		panic("sse.NewHandler: Deps.Limits is required")
 	}
@@ -136,7 +130,6 @@ func NewHandler(cfg Config, deps Deps) *Handler {
 		authClient:       deps.Auth.Client,
 		limits:           deps.Limits,
 		authRegistry:     deps.Auth.Subscribers,
-		breaker:          deps.Auth.Breaker,
 		authCfg:          cfg.Auth,
 		logger:           deps.Logger,
 		metrics:          deps.Metrics,

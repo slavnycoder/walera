@@ -59,7 +59,6 @@ func TestTryRefresh_OnDemandNotStarvedDuringBackoff(t *testing.T) {
 	initial := usersMap("u1", "id")
 	s := newTestSubscriber(t, subscriberTestOpts{
 		Client:     c,
-		Breaker:    &stubBreakerHook{allow: true},
 		Channel:    "users:42",
 		UserID:     "u1",
 		InitialMap: initial,
@@ -121,7 +120,6 @@ func TestTryRefresh_BackoffChainCoalesces(t *testing.T) {
 
 	s := newTestSubscriber(t, subscriberTestOpts{
 		Client:     c,
-		Breaker:    &stubBreakerHook{allow: true},
 		Channel:    "users:42",
 		UserID:     "u1",
 		InitialMap: usersMap("u1", "id"),

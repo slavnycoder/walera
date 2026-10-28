@@ -18,10 +18,6 @@ import (
 	"github.com/walera/walera/internal/wal"
 )
 
-type stubBreakerHook struct{ allow bool }
-
-func (s *stubBreakerHook) Allow() bool { return s.allow }
-
 func permissionsBody(t *testing.T, tables map[string][]string) []byte {
 	t.Helper()
 	w := struct {
@@ -94,7 +90,6 @@ func newTestRouterSub(t *testing.T) *router.Subscriber {
 type subscriberTestOpts struct {
 	Sub        *router.Subscriber
 	Client     *Client
-	Breaker    breakerHook
 	InitialMap *Whitelist
 	UserID     string
 	Channel    string
@@ -134,7 +129,6 @@ func newTestSubscriber(t *testing.T, opts subscriberTestOpts) *Subscriber {
 		SubscriberDeps{
 			Sub:     opts.Sub,
 			Client:  opts.Client,
-			Breaker: opts.Breaker,
 			Logger:  opts.Log,
 			Metrics: opts.Metrics,
 			NowFunc: opts.NowFunc,
@@ -376,10 +370,8 @@ func TestSubscriber_RefreshTick_5xxRetriesThenDropsUnavailable(t *testing.T) {
 	})
 	c, _ := newSubTestClient(t, srv.srv.URL)
 
-	bk := &stubBreakerHook{allow: true}
 	s := newTestSubscriber(t, subscriberTestOpts{
 		Client:     c,
-		Breaker:    bk,
 		InitialMap: makeMap(t, 100, "id", "name"),
 		Backoffs:   []time.Duration{time.Millisecond, time.Millisecond, time.Millisecond},
 	})
@@ -391,65 +383,6 @@ func TestSubscriber_RefreshTick_5xxRetriesThenDropsUnavailable(t *testing.T) {
 	}
 	if reason := s.Sub.Reason(); reason != "auth_unavailable" {
 		t.Fatalf("Sub.Reason: got %q; want %q", reason, "auth_unavailable")
-	}
-}
-
-func TestSubscriber_RefreshTick_5xxTrippedBreakerNoDrop(t *testing.T) {
-	t.Parallel()
-
-	srv := newScriptServer(t, func(_ int64, w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusInternalServerError)
-	})
-	c, _ := newSubTestClient(t, srv.srv.URL)
-
-	bk := &stubBreakerHook{allow: false}
-	s := newTestSubscriber(t, subscriberTestOpts{
-		Client:     c,
-		Breaker:    bk,
-		InitialMap: makeMap(t, 100, "id", "name"),
-		Backoffs:   []time.Duration{time.Millisecond, time.Millisecond, time.Millisecond},
-	})
-
-	s.tryRefresh(context.Background())
-
-	if reason := s.Sub.Reason(); reason != "" {
-		t.Fatalf("Sub.Reason: got %q; want empty (breaker open → no drop)", reason)
-	}
-}
-
-func TestSubscriber_RefreshTick_BreakerOpenSkipsCall(t *testing.T) {
-	t.Parallel()
-
-	srv := newScriptServer(t, func(_ int64, w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(permissionsBody(t, map[string][]string{"orders": {"id"}}))
-	})
-	c, _ := newSubTestClient(t, srv.srv.URL)
-
-	bk := &stubBreakerHook{allow: false}
-	s := newTestSubscriber(t, subscriberTestOpts{
-		Client:     c,
-		Breaker:    bk,
-		InitialMap: makeMap(t, 100, "id"),
-		DefaultTTL: 20 * time.Millisecond,
-	})
-
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		s.RefreshLoop(ctx)
-	}()
-
-	time.Sleep(120 * time.Millisecond)
-	cancel()
-	<-done
-
-	if got := srv.calls.Load(); got != 0 {
-		t.Fatalf("server hits: got %d; want 0 (breaker open → no call)", got)
-	}
-	if reason := s.Sub.Reason(); reason != "" {
-		t.Fatalf("Sub.Reason: got %q; want empty", reason)
 	}
 }
 
@@ -579,10 +512,8 @@ func TestSubscriber_RefreshLoop_TickRefreshesMap(t *testing.T) {
 
 	initial := makeMap(t, 100, "id")
 	initial.TTLSeconds = 0
-	bk := &stubBreakerHook{allow: true}
 	s := newTestSubscriber(t, subscriberTestOpts{
 		Client:     c,
-		Breaker:    bk,
 		InitialMap: initial,
 		DefaultTTL: 20 * time.Millisecond,
 		LSNFunc:    func() pglogrepl.LSN { return syntheticLSN },
@@ -622,10 +553,8 @@ func TestSubscriber_RefreshLoop_ExitsOnSubDrop(t *testing.T) {
 
 	initial := makeMap(t, 100, "id")
 	initial.TTLSeconds = 0
-	bk := &stubBreakerHook{allow: true}
 	s := newTestSubscriber(t, subscriberTestOpts{
 		Client:     c,
-		Breaker:    bk,
 		InitialMap: initial,
 		DefaultTTL: 500 * time.Millisecond,
 	})
@@ -653,8 +582,6 @@ func TestSubscriber_RefreshLoop_ZeroTTLExitsCleanly(t *testing.T) {
 	})
 	c, _ := newSubTestClient(t, srv.srv.URL)
 
-	bk := &stubBreakerHook{allow: true}
-
 	m := &Whitelist{
 		UserID:     "user-1",
 		Tables:     map[string]map[string]struct{}{"orders": {"id": struct{}{}}},
@@ -673,7 +600,6 @@ func TestSubscriber_RefreshLoop_ZeroTTLExitsCleanly(t *testing.T) {
 		SubscriberDeps{
 			Sub:     rsub,
 			Client:  c,
-			Breaker: bk,
 			Metrics: metrics.New(),
 		},
 	)
@@ -700,10 +626,8 @@ func TestSubscriber_TryRefresh_UnknownErrorDropsUnavailable(t *testing.T) {
 	})
 	c, _ := newSubTestClient(t, srv.srv.URL)
 
-	bk := &stubBreakerHook{allow: true}
 	s := newTestSubscriber(t, subscriberTestOpts{
 		Client:     c,
-		Breaker:    bk,
 		InitialMap: makeMap(t, 100, "id"),
 		Backoffs:   []time.Duration{time.Millisecond, time.Millisecond, time.Millisecond},
 	})
@@ -945,7 +869,6 @@ func TestSubscriber_RefreshTick_IncrementsAuthRefreshMetric(t *testing.T) {
 		Client:     c,
 		InitialMap: makeMap(t, 100, "id"),
 		Backoffs:   []time.Duration{time.Millisecond, time.Millisecond, time.Millisecond},
-		Breaker:    &stubBreakerHook{allow: true},
 		Metrics:    mc,
 	})
 	s3.tryRefresh(context.Background())

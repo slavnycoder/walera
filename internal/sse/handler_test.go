@@ -209,7 +209,6 @@ func newTestHandler(t *testing.T, cors []string, lcfg *limits.Config) *testHandl
 		Auth: AuthDeps{
 			Client:      authClient,
 			Subscribers: authReg,
-			Breaker:     breaker,
 		},
 		Limits:  lim,
 		Pool:    pool,

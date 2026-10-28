@@ -82,13 +82,13 @@ Each has a defined posture.
 
 - **Auth backend unavailable.** A circuit breaker around the auth
   client trips when the failure rate over a sliding window crosses a
-  threshold. While the breaker is open, Walera takes a bounded
-  fail-open posture for already-established subscriptions (existing
-  streams continue to receive events as long as their last successful
-  permission map is still within its TTL) and a fail-closed posture for
-  new subscription attempts (new SSE opens are rejected with `503`).
-  See [ADR 0002: Auth Model](./adr/0002-auth-model.md) for the
-  rationale.
+  threshold. Walera is fail-closed in both directions: new SSE opens
+  are rejected with `503` while the breaker is open, and an
+  already-established subscription whose periodic refresh keeps
+  failing (including while the breaker is open) retries with backoff
+  and then drops with `auth_unavailable`, so a grant never outlives
+  TTL + ~13s without a successful check. See
+  [ADR 0002: Auth Model](./adr/0002-auth-model.md) for the rationale.
 - **PostgreSQL replication slot dropped or unreachable.** Walera uses a
   temporary replication slot that is created at startup and dropped
   automatically when the replication connection closes. If the
