@@ -40,9 +40,6 @@ func TestApp_MetricsRegistrySingleton(t *testing.T) {
 	if got := a.Breaker.Metrics(); got != want {
 		t.Errorf("Breaker.Metrics() = %p; want %p", got, want)
 	}
-	if got := a.SubRegistry.Metrics(); got != want {
-		t.Errorf("SubRegistry.Metrics() = %p; want %p", got, want)
-	}
 	if got := a.WalReader.Metrics(); got != want {
 		t.Errorf("WalReader.Metrics() = %p; want %p", got, want)
 	}

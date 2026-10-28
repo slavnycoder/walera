@@ -117,7 +117,6 @@ type testHandlerKit struct {
 	bc         *fakeBroadcaster
 	backend    *fakeAuthBackend
 	limits     *limits.Limits
-	authReg    *auth.Subscribers
 	breaker    *auth.Breaker
 	authClient *auth.Client
 }
@@ -179,29 +178,21 @@ func newTestHandler(t *testing.T, cors []string, lcfg *limits.Config) *testHandl
 		}
 	}
 	lim := limits.New(*lcfg, limits.Deps{Logger: logger, Metrics: m})
-	authReg := auth.NewSubscribers(auth.SubscribersDeps{
-		Logger:  logger,
-		Metrics: m,
-	})
 
 	cfg.Router = rcfg
 	cfg.Auth = authCfg
 	h := NewHandler(cfg, Deps{
 		Broadcaster: bc,
-		Auth: AuthDeps{
-			Client:      authClient,
-			Subscribers: authReg,
-		},
-		Limits:  lim,
-		Logger:  logger,
-		Metrics: m,
+		Auth:        AuthDeps{Client: authClient},
+		Limits:      lim,
+		Logger:      logger,
+		Metrics:     m,
 	})
 	return &testHandlerKit{
 		h:          h,
 		bc:         bc,
 		backend:    backend,
 		limits:     lim,
-		authReg:    authReg,
 		breaker:    breaker,
 		authClient: authClient,
 	}
@@ -960,20 +951,8 @@ func TestHandshake_HappyPath_RegistersSubscriberWithFilter(t *testing.T) {
 	if sub.Filter == nil {
 		t.Error("sub.Filter is nil after registration")
 	}
-	if got := kit.authReg.Len(); got != 1 {
-		t.Errorf("auth.Subscribers.Len() = %d; want 1", got)
-	}
 	sub.Drop("test")
 	_, _ = io.Copy(io.Discard, resp.Body)
-
-	deadline := time.Now().Add(1500 * time.Millisecond)
-	for time.Now().Before(deadline) {
-		if kit.authReg.Len() == 0 {
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Errorf("auth.Subscribers.Len() did not drain to 0; still %d", kit.authReg.Len())
 }
 
 func TestHandshake_HappyPathReleasesLimitsOnExit(t *testing.T) {

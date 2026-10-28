@@ -99,6 +99,8 @@ type subscriberTestOpts struct {
 	NowFunc    func() time.Time
 	LSNFunc    func() pglogrepl.LSN
 	Backoffs   []time.Duration
+	Bearer     string
+	Forwarded  ForwardedAuth
 }
 
 func newTestSubscriber(t *testing.T, opts subscriberTestOpts) *Subscriber {
@@ -118,6 +120,9 @@ func newTestSubscriber(t *testing.T, opts subscriberTestOpts) *Subscriber {
 	if opts.Metrics == nil {
 		opts.Metrics = metrics.New()
 	}
+	if opts.Bearer == "" && opts.Forwarded.Empty() {
+		opts.Bearer = "test-token"
+	}
 	return NewSubscriber(
 		SubscriberConfig{
 			InitialMap: opts.InitialMap,
@@ -125,6 +130,8 @@ func newTestSubscriber(t *testing.T, opts subscriberTestOpts) *Subscriber {
 			Channel:    opts.Channel,
 			DefaultTTL: opts.DefaultTTL,
 			Backoffs:   opts.Backoffs,
+			Bearer:     opts.Bearer,
+			Forwarded:  opts.Forwarded,
 		},
 		SubscriberDeps{
 			Sub:     opts.Sub,
@@ -450,52 +457,6 @@ func TestSubscriber_InitialRefreshJitterDistribution(t *testing.T) {
 	if mean < 10*time.Second || mean > 20*time.Second {
 		t.Fatalf("jitter mean %v out of [10s, 20s] (n=%d, max=%v, min=%v)",
 			mean, N, maxDelay, minDelay)
-	}
-}
-
-func TestSubscriber_TryRefreshCoalescesConcurrentCalls(t *testing.T) {
-	t.Parallel()
-
-	handlerStart := make(chan struct{})
-	handlerRelease := make(chan struct{})
-	srv := newScriptServer(t, func(_ int64, w http.ResponseWriter, _ *http.Request) {
-		select {
-		case handlerStart <- struct{}{}:
-		default:
-		}
-		<-handlerRelease
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(permissionsBody(t, map[string][]string{"orders": {"id"}}))
-	})
-	c, _ := newSubTestClient(t, srv.srv.URL)
-
-	s := newTestSubscriber(t, subscriberTestOpts{
-		Client:     c,
-		InitialMap: makeMap(t, 100, "id"),
-	})
-
-	var wg sync.WaitGroup
-	wg.Add(2)
-
-	go func() {
-		defer wg.Done()
-		s.tryRefresh(context.Background())
-	}()
-
-	<-handlerStart
-
-	go func() {
-		defer wg.Done()
-		s.tryRefresh(context.Background())
-	}()
-
-	time.Sleep(20 * time.Millisecond)
-
-	close(handlerRelease)
-	wg.Wait()
-
-	if got := srv.calls.Load(); got != 1 {
-		t.Fatalf("server hits: got %d; want 1 (concurrent refresh must coalesce)", got)
 	}
 }
 

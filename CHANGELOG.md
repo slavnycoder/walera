@@ -22,6 +22,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   streaming for the whole duration of an auth-backend outage.
 - **Router is fail-closed on a missing filter.** A subscriber registered
   without a whitelist filter now receives nothing instead of unfiltered rows.
+- **Permission refresh replays the client's own credentials.** Every TTL,
+  Walera re-calls `POST /auth/sessions` with the bearer / forwarded
+  cookies / headers the stream was opened with. Logout and token expiry now
+  end live streams (`auth_revoked`); a refresh that resolves to a different
+  `user_id` also revokes. The credentials are kept in memory for the stream's
+  lifetime and are never logged.
 
 ### Changed
 
@@ -54,6 +60,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `shutdown.drain_deadline`. `Broadcaster.Shutdown` now just drops every
   subscriber; the wait for streams to close is `http.Server.Shutdown`, bounded
   by `shutdown.deadline`. Old configs that still set the key are ignored.
+- `POST /sse/v1/refresh` and `walera_refresh_ondemand_total`. Clients whose
+  token expires reconnect with a fresh one.
 
 ## [2.2.0] - 2026-06-08
 

@@ -140,7 +140,6 @@ func TestRegistry_GatherIncludesAllMetrics(t *testing.T) {
 		"walera_limit_rejected_total",
 		"walera_pg_connection_status",
 		"walera_pg_reconnects_total",
-		"walera_refresh_ondemand_total",
 		"walera_route_lookup_duration_seconds",
 		"walera_routing_fan_out",
 		"walera_routing_index_size",

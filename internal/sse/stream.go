@@ -37,11 +37,10 @@ func (h *Handler) runWriter(
 	startLSN pglogrepl.LSN,
 	hs handshakeResult,
 ) {
-	sub, authSub, err := h.headersAndPreamble(w, r, table, pk, channelStr, kind, startLSN, hs)
+	sub, err := h.headersAndPreamble(w, r, table, pk, channelStr, kind, startLSN, hs)
 	if err != nil {
 		return
 	}
-	defer h.authRegistry.Remove(authSub.ID())
 
 	var initialFrame []byte
 	if len(hs.authMap.InitialData) > 0 {
@@ -66,7 +65,7 @@ func (h *Handler) headersAndPreamble(
 	kind router.Kind,
 	startLSN pglogrepl.LSN,
 	hs handshakeResult,
-) (sub *router.Subscriber, authSub *auth.Subscriber, err error) {
+) (sub *router.Subscriber, err error) {
 	sub = router.NewSubscriber(
 		router.SubscriberConfig{
 			Kind:     kind,
@@ -79,12 +78,14 @@ func (h *Handler) headersAndPreamble(
 	)
 
 	ttl := time.Duration(h.authCfg.DefaultTTLSeconds) * time.Second
-	authSub = auth.NewSubscriber(
+	authSub := auth.NewSubscriber(
 		auth.SubscriberConfig{
 			InitialMap: hs.authMap,
 			UserID:     hs.userID,
 			Channel:    channelStr,
 			DefaultTTL: ttl,
+			Bearer:     hs.bearer,
+			Forwarded:  hs.fwd,
 		},
 		auth.SubscriberDeps{
 			Sub:     sub,
@@ -94,8 +95,6 @@ func (h *Handler) headersAndPreamble(
 		},
 	)
 	sub.Filter = authSub.FilterWithLSN
-
-	h.authRegistry.Add(authSub)
 
 	go authSub.RefreshLoop(r.Context())
 
@@ -113,7 +112,7 @@ func (h *Handler) headersAndPreamble(
 		Str("client_ip", hs.clientIP).
 		Msg("sse subscriber connected")
 
-	return sub, authSub, nil
+	return sub, nil
 }
 
 // stream owns the response on the handler's goroutine for the subscriber's

@@ -127,6 +127,8 @@ func (h *Handler) writeJSONReason(w http.ResponseWriter, r *http.Request, status
 type handshakeResult struct {
 	authMap         *auth.Whitelist
 	requestID       string
+	bearer          string
+	fwd             auth.ForwardedAuth
 	clientIP        string
 	userID          string
 	globalAcquired  bool
@@ -135,7 +137,7 @@ type handshakeResult struct {
 
 // authenticate writes the error response on failure. Admission limits and table
 // authorization are the caller's job.
-func (h *Handler) authenticate(w http.ResponseWriter, r *http.Request, channelStr string) (*auth.Whitelist, string, bool) {
+func (h *Handler) authenticate(w http.ResponseWriter, r *http.Request, channelStr string, res *handshakeResult) bool {
 	authHdr := r.Header.Get("Authorization")
 	token := ""
 	if t, ok := strings.CutPrefix(authHdr, "Bearer "); ok {
@@ -145,7 +147,7 @@ func (h *Handler) authenticate(w http.ResponseWriter, r *http.Request, channelSt
 	if token == "" && fwd.Empty() {
 
 		h.writeStatusOnlyError(w, r, http.StatusUnauthorized, 0)
-		return nil, "", false
+		return false
 	}
 	requestID := r.Header.Get("X-Request-ID")
 	if requestID == "" {
@@ -153,28 +155,19 @@ func (h *Handler) authenticate(w http.ResponseWriter, r *http.Request, channelSt
 	} else if !validRequestID(requestID) {
 
 		h.writeJSONError(w, r, http.StatusBadRequest, "invalid_request_id")
-		return nil, "", false
+		return false
 	}
 
 	authMap, err := h.authClient.OpenSession(r.Context(), token, fwd, channelStr, requestID)
-	// Drop all forwarded credentials from our scope and from the request's
-	// header map ASAP — downstream code (auth.Subscriber, refresh loop)
-	// authenticates with HMAC over user_id, not the bearer/cookies/headers. The
-	// stream lives on r.Context() for its entire life, so scrubbing here shrinks
-	// the in-process window where these credentials are reachable from a memory
-	// dump or accidental log capture.
-	r.Header.Del("Authorization")
-	r.Header.Del("Cookie")
-	for name := range fwd.Headers {
-		r.Header.Del(name)
-	}
-	token = ""
-	fwd = auth.ForwardedAuth{}
 	if err != nil {
 		h.writeAuthError(w, r, err)
-		return nil, "", false
+		return false
 	}
-	return authMap, requestID, true
+	res.authMap = authMap
+	res.requestID = requestID
+	res.bearer = token
+	res.fwd = fwd
+	return true
 }
 
 func (h *Handler) runHandshake(w http.ResponseWriter, r *http.Request, table, channelStr string) (handshakeResult, bool) {
@@ -189,12 +182,11 @@ func (h *Handler) runHandshake(w http.ResponseWriter, r *http.Request, table, ch
 	ip := h.clientIP(r)
 	res.clientIP = ip
 
-	authMap, requestID, ok := h.authenticate(w, r, channelStr)
-	if !ok {
+	if !h.authenticate(w, r, channelStr, &res) {
 		return res, false
 	}
 
-	userID := authMap.UserID
+	userID := res.authMap.UserID
 	res.userID = userID
 	if ok, _ := h.limits.AcquirePerUser(userID); !ok {
 		h.writeStatusOnlyError(w, r, http.StatusTooManyRequests, 0)
@@ -202,12 +194,9 @@ func (h *Handler) runHandshake(w http.ResponseWriter, r *http.Request, table, ch
 	}
 	res.perUserAcquired = true
 
-	if _, ok := authMap.Tables[table]; !ok {
+	if _, ok := res.authMap.Tables[table]; !ok {
 		h.writeJSONReason(w, r, http.StatusForbidden, "not_allowed")
 		return res, false
 	}
-
-	res.authMap = authMap
-	res.requestID = requestID
 	return res, true
 }

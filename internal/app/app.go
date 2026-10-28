@@ -33,8 +33,6 @@ type App struct {
 
 	Breaker *auth.Breaker
 
-	SubRegistry *auth.Subscribers
-
 	Limits *limits.Limits
 
 	Encoder *sse.Encoder

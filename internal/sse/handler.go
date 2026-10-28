@@ -40,7 +40,6 @@ type Handler struct {
 	enc              *Encoder
 	authClient       *auth.Client
 	limits           *limits.Limits
-	authRegistry     *auth.Subscribers
 	authCfg          auth.Config
 	logger           zerolog.Logger
 	metrics          *metrics.Registry
@@ -49,8 +48,6 @@ type Handler struct {
 
 type AuthDeps struct {
 	Client *auth.Client
-
-	Subscribers *auth.Subscribers
 }
 
 type Deps struct {
@@ -72,9 +69,6 @@ func validateDeps(deps Deps) {
 	if deps.Auth.Client == nil {
 		panic("sse.NewHandler: Deps.Auth.Client is required")
 	}
-	if deps.Auth.Subscribers == nil {
-		panic("sse.NewHandler: Deps.Auth.Subscribers is required")
-	}
 	if deps.Limits == nil {
 		panic("sse.NewHandler: Deps.Limits is required")
 	}
@@ -92,7 +86,6 @@ func NewHandler(cfg Config, deps Deps) *Handler {
 		enc:              NewEncoder(cfg.MaxPayloadBytes),
 		authClient:       deps.Auth.Client,
 		limits:           deps.Limits,
-		authRegistry:     deps.Auth.Subscribers,
 		authCfg:          cfg.Auth,
 		logger:           deps.Logger,
 		metrics:          deps.Metrics,
@@ -105,8 +98,6 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /sse/v1/{table}/all", h.serveWildcard)
 	mux.HandleFunc("OPTIONS /sse/v1/{table}/{pk}", h.servePreflight)
 	mux.HandleFunc("OPTIONS /sse/v1/{table}/all", h.servePreflight)
-	mux.HandleFunc("POST /sse/v1/refresh", h.serveRefresh)
-	mux.HandleFunc("OPTIONS /sse/v1/refresh", h.serveRefreshPreflight)
 }
 
 func (h *Handler) servePreflight(w http.ResponseWriter, r *http.Request) {

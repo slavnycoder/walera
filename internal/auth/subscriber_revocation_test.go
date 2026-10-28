@@ -141,3 +141,80 @@ func TestSubscriber_AuthOutage_DropsAfterTTL(t *testing.T) {
 		t.Fatalf("Sub.Reason = %q; want auth_unavailable", got)
 	}
 }
+
+func TestSubscriber_RefreshReplaysClientCredentials(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name       string
+		bearer     string
+		wantAuth   string
+		wantCookie string
+	}{
+		{"bearer", "tok-1", "Bearer tok-1", "sess-1"},
+		{"cookie_only", "", "", "sess-1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var mu sync.Mutex
+			var gotPath, gotAuth, gotCookie string
+			srv := newScriptServer(t, func(_ int64, w http.ResponseWriter, r *http.Request) {
+				mu.Lock()
+				gotPath = r.URL.Path
+				gotAuth = r.Header.Get("Authorization")
+				if c, err := r.Cookie("session_id"); err == nil {
+					gotCookie = c.Value
+				}
+				mu.Unlock()
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write(permissionsBody(t, map[string][]string{"orders": {"id"}}))
+			})
+			c, _ := newSubTestClient(t, srv.srv.URL)
+			s := newTestSubscriber(t, subscriberTestOpts{
+				Client:     c,
+				InitialMap: makeMap(t, 100, "id", "name"),
+				Bearer:     tc.bearer,
+				Forwarded:  ForwardedAuth{Cookies: []*http.Cookie{{Name: "session_id", Value: "sess-1"}}},
+			})
+
+			s.tryRefresh(context.Background())
+
+			mu.Lock()
+			defer mu.Unlock()
+			if gotPath != "/auth/sessions" {
+				t.Errorf("refresh path = %q; want /auth/sessions", gotPath)
+			}
+			if gotAuth != tc.wantAuth {
+				t.Errorf("Authorization = %q; want %q", gotAuth, tc.wantAuth)
+			}
+			if gotCookie != tc.wantCookie {
+				t.Errorf("session_id cookie = %q; want %q", gotCookie, tc.wantCookie)
+			}
+			if r := s.Sub.Reason(); r != "" {
+				t.Fatalf("Sub.Reason = %q; want alive", r)
+			}
+			if _, ok := s.AuthMap.Load().Tables["orders"]["name"]; ok {
+				t.Error("refresh did not swap in the narrowed grant")
+			}
+		})
+	}
+}
+
+func TestSubscriber_RefreshDifferentUserRevokes(t *testing.T) {
+	t.Parallel()
+	srv := newScriptServer(t, func(_ int64, w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(permissionsBody(t, map[string][]string{"orders": {"id"}})) // user_id "user-1"
+	})
+	c, _ := newSubTestClient(t, srv.srv.URL)
+	s := newTestSubscriber(t, subscriberTestOpts{
+		Client:     c,
+		InitialMap: makeMap(t, 100, "id"),
+		UserID:     "someone-else",
+	})
+
+	s.tryRefresh(context.Background())
+
+	if got := s.Sub.Reason(); got != "auth_revoked" {
+		t.Fatalf("Sub.Reason = %q; want auth_revoked (refresh resolved to another user)", got)
+	}
+}

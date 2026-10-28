@@ -22,10 +22,9 @@ type coreWiring struct {
 }
 
 type authWiring struct {
-	AuthClient  *auth.Client
-	Breaker     *auth.Breaker
-	SubRegistry *auth.Subscribers
-	Limits      *limits.Limits
+	AuthClient *auth.Client
+	Breaker    *auth.Breaker
+	Limits     *limits.Limits
 }
 
 type dataPlaneWiring struct {
@@ -57,7 +56,6 @@ func InitializeApp(cfg AppConfig, logger zerolog.Logger, adminConn walconn.Admin
 		TxCh:         cw.TxCh,
 		AuthClient:   aw.AuthClient,
 		Breaker:      aw.Breaker,
-		SubRegistry:  aw.SubRegistry,
 		Limits:       aw.Limits,
 		Encoder:      dp.Encoder,
 		RouterIndex:  dp.Broadcaster,
@@ -99,21 +97,15 @@ func wireAuth(cfg AppConfig, logger zerolog.Logger, registry *metrics.Registry) 
 
 	authClient.SetBreaker(breaker)
 
-	subscribers := auth.NewSubscribers(auth.SubscribersDeps{
-		Logger:  logger,
-		Metrics: registry,
-	})
-
 	lim := limits.New(cfg.Limits, limits.Deps{
 		Logger:  logger,
 		Metrics: registry,
 	})
 
 	return authWiring{
-		AuthClient:  authClient,
-		Breaker:     breaker,
-		SubRegistry: subscribers,
-		Limits:      lim,
+		AuthClient: authClient,
+		Breaker:    breaker,
+		Limits:     lim,
 	}
 }
 
@@ -139,8 +131,7 @@ func wireDataPlane(cfg AppConfig, logger zerolog.Logger, registry *metrics.Regis
 		sse.Deps{
 			Broadcaster: broadcaster,
 			Auth: sse.AuthDeps{
-				Client:      aw.AuthClient,
-				Subscribers: aw.SubRegistry,
+				Client: aw.AuthClient,
 			},
 			Limits:  aw.Limits,
 			Logger:  logger,

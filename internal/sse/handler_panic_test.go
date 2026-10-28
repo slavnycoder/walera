@@ -41,7 +41,6 @@ func newHandlerPanicValidDeps(t *testing.T) (Config, Deps) {
 		Breaker: breaker,
 		Metrics: m,
 	})
-	authReg := auth.NewSubscribers(auth.SubscribersDeps{Logger: logger, Metrics: m})
 	lim := limits.New(limits.Config{
 		GlobalConcurrent:     1024,
 		PerUserConcurrentMax: 10,
@@ -59,13 +58,10 @@ func newHandlerPanicValidDeps(t *testing.T) (Config, Deps) {
 	}
 	deps := Deps{
 		Broadcaster: &fakeBroadcaster{},
-		Auth: AuthDeps{
-			Client:      authClient,
-			Subscribers: authReg,
-		},
-		Limits:  lim,
-		Logger:  logger,
-		Metrics: m,
+		Auth:        AuthDeps{Client: authClient},
+		Limits:      lim,
+		Logger:      logger,
+		Metrics:     m,
 	}
 	return cfg, deps
 }
@@ -86,11 +82,6 @@ func TestNewHandler_PanicsOnNilDeps(t *testing.T) {
 			name:    "AuthClient",
 			mutate:  func(d *Deps) { d.Auth.Client = nil },
 			wantMsg: "sse.NewHandler: Deps.Auth.Client is required",
-		},
-		{
-			name:    "AuthSubscribers",
-			mutate:  func(d *Deps) { d.Auth.Subscribers = nil },
-			wantMsg: "sse.NewHandler: Deps.Auth.Subscribers is required",
 		},
 		{
 			name:    "Limits",

@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	mathrand "math/rand/v2"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -41,6 +40,11 @@ type SubscriberConfig struct {
 	DefaultTTL time.Duration
 
 	Backoffs []time.Duration
+
+	// Bearer and Forwarded are the client's own credentials, replayed on every
+	// refresh so logout and token expiry reach a live stream. Never logged.
+	Bearer    string
+	Forwarded ForwardedAuth
 }
 
 type SubscriberDeps struct {
@@ -77,11 +81,8 @@ type Subscriber struct {
 	PrevWhitelist atomic.Pointer[Whitelist]
 
 	client *Client
-
-	// refreshMu guards one swap; the TTL chain holds it per attempt, never across a backoff sleep.
-	refreshMu sync.Mutex
-	// chainMu dedups TTL/breaker-fan-out chains across backoff sleeps. Lock order: chainMu → refreshMu.
-	chainMu sync.Mutex
+	bearer string
+	fwd    ForwardedAuth
 
 	lastRefresh atomic.Int64
 
@@ -128,6 +129,8 @@ func NewSubscriber(cfg SubscriberConfig, deps SubscriberDeps) *Subscriber {
 	s := &Subscriber{
 		Sub:      deps.Sub,
 		client:   deps.Client,
+		bearer:   cfg.Bearer,
+		fwd:      cfg.Forwarded,
 		log:      deps.Logger,
 		mc:       deps.Metrics,
 		userID:   userID,
@@ -213,7 +216,6 @@ const (
 )
 
 // applyFetched swaps or drops auth_revoked; transient errors are left to the caller.
-// Must hold refreshMu.
 func (s *Subscriber) applyFetched(fresh *Whitelist, err error) attemptResult {
 	if err == nil {
 		if !s.refreshMapAllowed(fresh) {
@@ -233,85 +235,40 @@ func (s *Subscriber) applyFetched(fresh *Whitelist, err error) attemptResult {
 	return attemptUnavailable
 }
 
-// refreshAttempt must hold refreshMu.
-func (s *Subscriber) refreshAttempt(ctx context.Context, attempt int, requestID string) attemptResult {
-	fresh, err := s.client.RefreshPermissions(ctx, s.userID, s.channel, requestID)
-	s.recordRefreshResult(err)
-	if err != nil {
-		s.logRefreshError(err, attempt)
-	}
-	return s.applyFetched(fresh, err)
-}
-
-// tryRefresh dedups on chainMu, not refreshMu, so an on-demand swap can land during
-// a backoff sleep; drops go through dropIfUnchanged so that swap isn't undone.
+// tryRefresh re-opens the session with the client's credentials. Only
+// *ErrUnavailable is retried; every other outcome swaps or drops.
 func (s *Subscriber) tryRefresh(ctx context.Context) {
-	if !s.chainMu.TryLock() {
-		return
-	}
-	defer s.chainMu.Unlock()
-
-	// swapMap always stores a new pointer, so a change means someone refreshed us.
-	// Sampled before attempt 0 so a swap racing attempt 0 isn't taken as baseline.
-	mapAtChainStart := s.AuthMap.Load()
-
-	switch s.lockedAttempt(ctx, 0, newRequestID()) {
-	case attemptSwapped, attemptRevoked:
-		return
-	case attemptFailed:
-		s.dropIfUnchanged(mapAtChainStart)
-		return
-	case attemptUnavailable:
-	}
-
-	for i, backoff := range s.backoffs {
+	for attempt := 0; ; attempt++ {
+		fresh, err := s.client.OpenSession(ctx, s.bearer, s.fwd, s.channel, newRequestID())
+		s.recordRefreshResult(err)
+		if err != nil {
+			s.logRefreshError(err, attempt)
+		}
+		switch s.applyFetched(fresh, err) {
+		case attemptSwapped, attemptRevoked:
+			return
+		case attemptFailed:
+			s.Sub.Drop("auth_unavailable")
+			return
+		case attemptUnavailable:
+		}
+		if attempt == len(s.backoffs) {
+			s.Sub.Drop("auth_unavailable")
+			return
+		}
 		select {
 		case <-ctx.Done():
 			return
 		case <-s.Sub.Done():
 			return
-		case <-time.After(backoff):
+		case <-time.After(s.backoffs[attempt]):
 		}
-		// A revocation drops without swapping AuthMap; don't refresh a dead sub.
-		select {
-		case <-s.Sub.Done():
-			return
-		default:
-		}
-		if s.AuthMap.Load() != mapAtChainStart {
-			return
-		}
-		switch s.lockedAttempt(ctx, i+1, newRequestID()) {
-		case attemptSwapped, attemptRevoked:
-			return
-		case attemptFailed:
-			s.dropIfUnchanged(mapAtChainStart)
-			return
-		case attemptUnavailable:
-		}
-	}
-
-	s.dropIfUnchanged(mapAtChainStart)
-}
-
-func (s *Subscriber) lockedAttempt(ctx context.Context, attempt int, requestID string) attemptResult {
-	s.refreshMu.Lock()
-	defer s.refreshMu.Unlock()
-	return s.refreshAttempt(ctx, attempt, requestID)
-}
-
-// dropIfUnchanged checks under refreshMu so it can't interleave with an in-flight swap.
-func (s *Subscriber) dropIfUnchanged(mapAtChainStart *Whitelist) {
-	s.refreshMu.Lock()
-	defer s.refreshMu.Unlock()
-	if s.AuthMap.Load() == mapAtChainStart {
-		s.Sub.Drop("auth_unavailable")
 	}
 }
 
 func (s *Subscriber) refreshMapAllowed(fresh *Whitelist) bool {
 	table := tableFromChannel(s.channel)
-	if table == "" || fresh == nil {
+	if table == "" || fresh == nil || fresh.UserID != s.userID {
 		return false
 	}
 	_, ok := fresh.Tables[table]
