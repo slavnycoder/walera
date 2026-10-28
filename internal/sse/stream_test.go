@@ -313,9 +313,7 @@ func TestStream_OpenAfterBroadcasterShutdown_GetsShutdownFrame(t *testing.T) {
 	kit.h.bc = bc
 	srv := newTestServer(t, kit.h)
 
-	if err := bc.Shutdown(context.Background(), time.Second); err != nil {
-		t.Fatalf("Broadcaster.Shutdown: %v", err)
-	}
+	bc.Shutdown()
 
 	resp := openStream(t, http.DefaultClient, srv.URL+"/sse/v1/users/42")
 	body, _ := io.ReadAll(resp.Body)

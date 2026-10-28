@@ -68,18 +68,15 @@ func TestBroadcaster_Shutdown_FansOutToAllSubscribers(t *testing.T) {
 	b, subs, wg := newBroadcasterForShutdown(N)
 
 	start := time.Now()
-	err := b.Shutdown(context.Background(), 5*time.Second)
+	b.Shutdown()
 	elapsed := time.Since(start)
-	if err != nil {
-		t.Fatalf("Shutdown returned err=%v; want nil", err)
-	}
 	if elapsed > 1*time.Second {
 		t.Errorf("Shutdown took %v; want <1s with 50 cooperative drainers", elapsed)
 	}
 
 	for i, s := range subs {
 		if got := s.Reason(); got != "shutdown" {
-			t.Errorf("sub[%d].Reason() = %q; want %q", i, got, "shutdown")
+			t.Fatalf("sub %d Reason = %q; want shutdown (Shutdown must drop synchronously)", i, got)
 		}
 		select {
 		case <-s.Done():
@@ -99,56 +96,6 @@ func TestBroadcaster_Shutdown_FansOutToAllSubscribers(t *testing.T) {
 	}
 }
 
-func TestBroadcaster_Shutdown_TimesOutWhenDrainStalls(t *testing.T) {
-	t.Parallel()
-
-	cfg := Config{
-		ExactBuffer:     16,
-		WildcardBuffer:  16,
-		MaxChangesPerTx: 10000,
-
-		HeartbeatInterval: 30 * time.Second,
-	}
-	b := New(cfg, Deps{
-		Logger:  zerolog.Nop(),
-		Metrics: metrics.New(),
-		Encoder: &stubEncoder{},
-	})
-
-	s := NewSubscriber(
-		SubscriberConfig{
-			Kind:      KindExact,
-			Schema:    "public",
-			Table:     "t",
-			PK:        "stuck",
-			BufferCap: 16,
-		},
-		SubscriberDeps{Parent: context.Background()},
-	)
-
-	s.reasonOnce.Do(func() {
-		r := "test_stalled"
-		s.reasonPtr.Store(&r)
-
-	})
-	b.Register(s)
-
-	start := time.Now()
-	err := b.Shutdown(context.Background(), 100*time.Millisecond)
-	elapsed := time.Since(start)
-	if err != context.DeadlineExceeded {
-		t.Fatalf("Shutdown returned err=%v; want context.DeadlineExceeded", err)
-	}
-	if elapsed < 90*time.Millisecond {
-		t.Errorf("Shutdown returned too early: elapsed=%v; want ~100ms", elapsed)
-	}
-	if elapsed > 500*time.Millisecond {
-		t.Errorf("Shutdown returned too late: elapsed=%v; want ~100ms", elapsed)
-	}
-
-	s.cancel()
-}
-
 func TestBroadcaster_Shutdown_EmptyIndexReturnsImmediately(t *testing.T) {
 	t.Parallel()
 
@@ -166,11 +113,8 @@ func TestBroadcaster_Shutdown_EmptyIndexReturnsImmediately(t *testing.T) {
 	})
 
 	start := time.Now()
-	err := b.Shutdown(context.Background(), 5*time.Second)
+	b.Shutdown()
 	elapsed := time.Since(start)
-	if err != nil {
-		t.Fatalf("Shutdown on empty broadcaster returned err=%v; want nil", err)
-	}
 	if elapsed > 10*time.Millisecond {
 		t.Errorf("Shutdown on empty broadcaster took %v; want <10ms", elapsed)
 	}
@@ -231,9 +175,7 @@ func TestBroadcaster_Shutdown_MixedExactAndWildcard(t *testing.T) {
 		t.Errorf("WildcardLen() = %d; want %d", b.WildcardLen(), N)
 	}
 
-	if err := b.Shutdown(context.Background(), 5*time.Second); err != nil {
-		t.Fatalf("Shutdown err=%v; want nil", err)
-	}
+	b.Shutdown()
 	for i, s := range all {
 		if got := s.Reason(); got != "shutdown" {
 			t.Errorf("all[%d].Reason() = %q; want %q", i, got, "shutdown")
@@ -253,9 +195,7 @@ func TestBroadcaster_RegisterAfterShutdown_DropsWithShutdown(t *testing.T) {
 	t.Parallel()
 
 	b, _, _ := newBroadcasterForShutdown(0)
-	if err := b.Shutdown(context.Background(), time.Second); err != nil {
-		t.Fatalf("Shutdown: %v", err)
-	}
+	b.Shutdown()
 
 	late := NewSubscriber(
 		SubscriberConfig{Kind: KindExact, Schema: "public", Table: "t", PK: "late"},

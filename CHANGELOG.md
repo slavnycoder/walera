@@ -49,6 +49,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `http.max_wait_ms`, `http.drain_threshold_subs`,
   `http.max_batch_bytes_per_sub`, `http.batching_disabled`), the
   `walera_pool_*` metrics, and the `sse-stress` / `sse-soak` flake jobs.
+- `shutdown.drain_deadline`. `Broadcaster.Shutdown` now just drops every
+  subscriber; the wait for streams to close is `http.Server.Shutdown`, bounded
+  by `shutdown.deadline`. Old configs that still set the key are ignored.
 
 ## [2.2.0] - 2026-06-08
 

@@ -42,7 +42,7 @@ func (a *App) Shutdown(ctx context.Context, stop context.CancelFunc, txCh <-chan
 	})
 	defer forceTimer.Stop()
 
-	a.shutdownStep1Wave(ctx, a.Config.Shutdown.DrainDeadline.Duration())
+	a.shutdownStep1Wave(ctx)
 
 	stop()
 	for range txCh {
@@ -64,13 +64,12 @@ func (a *App) Shutdown(ctx context.Context, stop context.CancelFunc, txCh <-chan
 	return nil
 }
 
-func (a *App) shutdownStep1Wave(ctx context.Context, drainDeadline time.Duration) {
-	a.shutdownStep1WaveWithCallbacks(ctx, drainDeadline, nil, nil, nil)
+func (a *App) shutdownStep1Wave(ctx context.Context) {
+	a.shutdownStep1WaveWithCallbacks(ctx, nil, nil, nil)
 }
 
 func (a *App) shutdownStep1WaveWithCallbacks(
 	ctx context.Context,
-	drainDeadline time.Duration,
 	onHTTPStart, onBroadcastStart, onPProfStart func(),
 ) {
 
@@ -130,15 +129,7 @@ func (a *App) shutdownStep1WaveWithCallbacks(
 			onBroadcastStart()
 		}
 		stepStart := time.Now()
-		bctx, cancel := context.WithTimeout(context.Background(), drainDeadline)
-		defer cancel()
-		if err := a.RouterIndex.Shutdown(bctx, drainDeadline); err != nil {
-			a.Logger.Warn().Err(err).
-				Str("step", "broadcast").
-				Int64("elapsed_ms", time.Since(stepStart).Milliseconds()).
-				Msg("routerIndex.Shutdown did not fully drain in time")
-			return
-		}
+		a.RouterIndex.Shutdown()
 		a.Logger.Info().
 			Str("step", "broadcast").
 			Int64("elapsed_ms", time.Since(stepStart).Milliseconds()).

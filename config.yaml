@@ -100,9 +100,7 @@ wal:
 metrics:
   sample_interval: 30s
 
-# Phase-4 graceful shutdown deadlines (D4-08, D4-26).
-# deadline is the hard cap on the entire shutdown sequence; drain_deadline is
-# the inner deadline for broadcaster.Shutdown. drain_deadline must be < deadline.
+# Phase-4 graceful shutdown deadline (D4-08, D4-26): hard cap on the entire
+# shutdown sequence.
 shutdown:
   deadline: 10s
-  drain_deadline: 8s

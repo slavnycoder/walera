@@ -25,12 +25,11 @@ import (
 
 func stringToNamedDurationHook() mapstructure.DecodeHookFuncType {
 	shutdownT := reflect.TypeOf(ShutdownDeadline(0))
-	drainT := reflect.TypeOf(DrainDeadline(0))
 	return func(f, t reflect.Type, data any) (any, error) {
 		if f.Kind() != reflect.String {
 			return data, nil
 		}
-		if t != shutdownT && t != drainT {
+		if t != shutdownT {
 			return data, nil
 		}
 
@@ -42,10 +41,7 @@ func stringToNamedDurationHook() mapstructure.DecodeHookFuncType {
 		if err != nil {
 			return data, err
 		}
-		if t == shutdownT {
-			return ShutdownDeadline(d), nil
-		}
-		return DrainDeadline(d), nil
+		return ShutdownDeadline(d), nil
 	}
 }
 
@@ -95,8 +91,7 @@ type HTTPConfig struct {
 }
 
 type ShutdownConfig struct {
-	Deadline      ShutdownDeadline `koanf:"deadline"`
-	DrainDeadline DrainDeadline    `koanf:"drain_deadline"`
+	Deadline ShutdownDeadline `koanf:"deadline"`
 }
 
 func canonicalOrigin(s string) (string, bool) {
@@ -118,7 +113,6 @@ func applyAppDefaults(k *koanf.Koanf) {
 	_ = k.Set("http.h2c_enabled", true)
 	_ = k.Set("http.pprof_addr", "")
 	_ = k.Set("shutdown.deadline", "10s")
-	_ = k.Set("shutdown.drain_deadline", "8s")
 
 	wal.ApplyDefaults(k)
 	auth.ApplyDefaults(k)
@@ -276,12 +270,6 @@ func validateShutdown(c *ShutdownConfig) error {
 	var errs []error
 	if c.Deadline <= 0 {
 		errs = append(errs, errors.New("shutdown.deadline must be > 0"))
-	}
-	if c.DrainDeadline <= 0 {
-		errs = append(errs, errors.New("shutdown.drain_deadline must be > 0"))
-	}
-	if c.DrainDeadline.Duration() > c.Deadline.Duration() {
-		errs = append(errs, errors.New("shutdown.drain_deadline must be <= shutdown.deadline"))
 	}
 	if len(errs) > 0 {
 		return fmt.Errorf("shutdown config: validation failed: %w", errors.Join(errs...))

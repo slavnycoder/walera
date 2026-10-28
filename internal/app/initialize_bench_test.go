@@ -78,8 +78,7 @@ func newSingletonBenchConfig(b *testing.B) *AppConfig {
 		Health:  health.Config{},
 		Metrics: metrics.Config{SampleInterval: 5 * time.Second},
 		Shutdown: ShutdownConfig{
-			Deadline:      ShutdownDeadline(10 * time.Second),
-			DrainDeadline: DrainDeadline(8 * time.Second),
+			Deadline: ShutdownDeadline(10 * time.Second),
 		},
 	}
 }

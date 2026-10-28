@@ -336,7 +336,6 @@ replicas and shed pathological traffic before it consumes a Goroutine.
 | `WALERA_LOG_DEV_MODE`                | `log.dev_mode`                 | `false` | Human-readable console writer (stderr).              | `false`            |
 | `WALERA_HEALTH_READYZ_PROBE_INTERVAL`| `health.readyz_probe_interval` | `5s`    | Cadence for the background readyz prober.            | `5s`               |
 | `WALERA_SHUTDOWN_DEADLINE`           | `shutdown.deadline`            | `10s`   | Hard cap on the entire shutdown sequence.            | `10s`              |
-| `WALERA_SHUTDOWN_DRAIN_DEADLINE`     | `shutdown.drain_deadline`      | `8s`    | Broadcaster drain deadline (`< shutdown.deadline`).  | `8s`               |
 
 ### Development-only
 

@@ -46,7 +46,7 @@ func (b *syncBuffer) String() string {
 func newTestApp(
 	t *testing.T,
 	logSink *syncBuffer,
-	shutdownDeadline, drainDeadline time.Duration,
+	shutdownDeadline time.Duration,
 	withPProf bool,
 ) *App {
 	t.Helper()
@@ -71,7 +71,6 @@ func newTestApp(
 
 	cfg := &AppConfig{}
 	cfg.Shutdown.Deadline = ShutdownDeadline(shutdownDeadline)
-	cfg.Shutdown.DrainDeadline = DrainDeadline(drainDeadline)
 
 	return &App{
 		Config:      cfg,
@@ -109,7 +108,7 @@ func TestApp_ShutdownConcurrentWave(t *testing.T) {
 	t.Parallel()
 
 	logSink := &syncBuffer{}
-	a := newTestApp(t, logSink, 5*time.Second, 1*time.Second, true)
+	a := newTestApp(t, logSink, 5*time.Second, true)
 
 	var (
 		httpStart, bcastStart atomic.Int64
@@ -121,7 +120,6 @@ func TestApp_ShutdownConcurrentWave(t *testing.T) {
 
 	a.shutdownStep1WaveWithCallbacks(
 		ctx,
-		1*time.Second,
 		func() { httpStart.Store(now()) },
 		func() { bcastStart.Store(now()) },
 		nil,
@@ -146,7 +144,7 @@ func TestApp_ShutdownStepOrdering(t *testing.T) {
 	t.Parallel()
 
 	logSink := &syncBuffer{}
-	a := newTestApp(t, logSink, 5*time.Second, 1*time.Second, true)
+	a := newTestApp(t, logSink, 5*time.Second, true)
 
 	var stopCalledAt atomic.Int64
 	stop := func() { stopCalledAt.Store(time.Now().UnixNano()) }

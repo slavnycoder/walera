@@ -19,7 +19,7 @@
 #   - wal.slot_headroom_min              (raise to 5+ for shared PG)
 #   - wal.reconnect.*                    (D4-02)
 #   - metrics.sample_interval            (D4-12; 30s is fine for most fleets)
-#   - shutdown.deadline / drain_deadline (D4-08; must stay <= terminationGracePeriodSeconds)
+#   - shutdown.deadline                  (D4-08; must stay <= terminationGracePeriodSeconds)
 
 apiVersion: v1
 kind: ConfigMap
@@ -81,14 +81,11 @@ data:
     metrics:
       sample_interval: 30s
 
-    # Phase-4 graceful shutdown deadlines (D4-08, D4-26).
-    # `deadline` is the hard cap on the entire shutdown sequence;
-    # `drain_deadline` is the inner deadline for broadcaster.Shutdown.
-    # drain_deadline must be < deadline (validated at startup).
-    # Both must be < deployment.yaml's terminationGracePeriodSeconds (30s).
+    # Phase-4 graceful shutdown deadline (D4-08, D4-26): hard cap on the
+    # entire shutdown sequence. Must be < deployment.yaml's
+    # terminationGracePeriodSeconds (30s).
     shutdown:
       deadline: 10s
-      drain_deadline: 8s
 
     # Phase-14 / SEC-05 / F-P2-05 — XFF-aware client IP behind a
     # trusted-proxy CIDR allowlist. Empty (default) preserves the

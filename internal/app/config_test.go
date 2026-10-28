@@ -460,7 +460,6 @@ func TestLoad_AppliesPhase4Defaults(t *testing.T) {
 		{"wal.lag_sample_interval", cfg.WAL.LagSampleInterval, 5 * time.Second},
 		{"metrics.sample_interval", cfg.Metrics.SampleInterval, 30 * time.Second},
 		{"shutdown.deadline", cfg.Shutdown.Deadline.Duration(), 10 * time.Second},
-		{"shutdown.drain_deadline", cfg.Shutdown.DrainDeadline.Duration(), 8 * time.Second},
 	}
 	for _, tc := range tests {
 		if tc.got != tc.want {
@@ -486,19 +485,6 @@ metrics:
   sample_interval: 0s
 `,
 			wantInErr: "metrics.sample_interval must be > 0",
-		},
-		{
-			name: "drain_deadline > deadline",
-			yaml: `
-database:
-  url: "postgres://a:b@localhost/db"
-wal:
-  publication_name: p
-shutdown:
-  deadline: 5s
-  drain_deadline: 10s
-`,
-			wantInErr: "shutdown.drain_deadline must be <= shutdown.deadline",
 		},
 		{
 			name: "wal.lag_sample_interval zero",

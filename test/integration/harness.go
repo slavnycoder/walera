@@ -219,7 +219,6 @@ metrics:
   sample_interval: 1s
 shutdown:
   deadline: 5s
-  drain_deadline: 4s
 `, pgDSN, bootstrapLines, addr, writeTimeoutLine, mockAuthURL, forwardedLines, IntegrationSigningSecret, IntegrationSigningKid, sc.globalConcurrent, sc.perUserConcurrent)
 
 	cfgFile := filepath.Join(t.TempDir(), "walera-test.yaml")

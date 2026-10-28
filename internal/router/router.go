@@ -2,9 +2,7 @@ package router
 
 import (
 	"context"
-	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/jackc/pglogrepl"
 	"github.com/prometheus/client_golang/prometheus"
@@ -368,51 +366,15 @@ func (b *Broadcaster) ExactLen() int { return b.exact.Len() }
 
 func (b *Broadcaster) WildcardLen() int { return b.wildcard.Len() }
 
-func (b *Broadcaster) Shutdown(ctx context.Context, drainDeadline time.Duration) error {
+// Shutdown drops every subscriber with "shutdown"; Register drops any that
+// arrive later. Handlers write the shutdown frame and exit on their own.
+func (b *Broadcaster) Shutdown() {
 	b.closed.Store(true)
 	subs := append(b.exact.Snapshot(), b.wildcard.Snapshot()...)
-
-	b.log.Debug().
+	for _, s := range subs {
+		s.Drop("shutdown")
+	}
+	b.log.Info().
 		Int("subscribers", len(subs)).
-		Msg("broadcaster shutdown: fanning out shutdown reason")
-
-	if len(subs) == 0 {
-		b.log.Info().
-			Int("subscribers_remaining", 0).
-			Msg("broadcaster shutdown: no active subscribers")
-		return nil
-	}
-
-	var wg sync.WaitGroup
-	for _, sub := range subs {
-		wg.Add(1)
-		s := sub
-		go func() {
-			defer wg.Done()
-			s.Drop("shutdown")
-			select {
-			case <-s.Done():
-			case <-ctx.Done():
-				return
-			}
-		}()
-	}
-
-	done := make(chan struct{})
-	go func() {
-		wg.Wait()
-		close(done)
-	}()
-
-	select {
-	case <-done:
-		b.log.Info().
-			Int("subscribers_remaining", 0).
-			Msg("broadcaster shutdown: drain complete")
-		return nil
-	case <-time.After(drainDeadline):
-		return context.DeadlineExceeded
-	case <-ctx.Done():
-		return ctx.Err()
-	}
+		Msg("broadcaster shutdown: subscribers dropped")
 }
