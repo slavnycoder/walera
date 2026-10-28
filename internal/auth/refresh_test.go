@@ -260,6 +260,25 @@ func TestTryRefresh_BackoffChainCoalesces(t *testing.T) {
 	// immediately without contacting the backend.
 	s.tryRefresh(context.Background())
 
+	// Discriminating assertion for #3b: while chain A sleeps in its backoff the
+	// swap lock (refreshMu) must be FREE — that is the whole point of moving the
+	// dedup to chainMu. On the pre-fix code (refreshMu held across the whole
+	// chain) this TryLock never succeeds within the backoff window and the test
+	// fails; coalescing alone (calls==2) would pass on the pre-fix code too.
+	acquired := false
+	deadline := time.Now().Add(200 * time.Millisecond) // < the 300ms backoff
+	for time.Now().Before(deadline) {
+		if s.refreshMu.TryLock() {
+			s.refreshMu.Unlock()
+			acquired = true
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if !acquired {
+		t.Fatalf("refreshMu never free during chain A's backoff; the chain must release the swap lock between retries (#3b)")
+	}
+
 	wg.Wait()
 
 	if n := srv.calls.Load(); n != 2 {
@@ -268,6 +287,65 @@ func TestTryRefresh_BackoffChainCoalesces(t *testing.T) {
 	if r := s.Sub.Reason(); r != "auth_unavailable" {
 		t.Errorf("drop reason = %q; want auth_unavailable", r)
 	}
+}
+
+// TestDropIfUnchanged gives the auth_unavailable drop guard deterministic
+// coverage (it is otherwise only reachable through a precise concurrent-swap
+// race in tryRefresh): the guard drops when the live whitelist still matches the
+// chain-start snapshot, and skips the drop when a concurrent refresh already
+// swapped a fresh whitelist in.
+func TestDropIfUnchanged(t *testing.T) {
+	t.Parallel()
+	srv := newScriptServer(t, func(_ int64, w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(permissionsBody(t, map[string][]string{"users": {"id"}}))
+	})
+	c, _ := newSubTestClient(t, srv.srv.URL)
+
+	t.Run("unchanged drops auth_unavailable", func(t *testing.T) {
+		t.Parallel()
+		s := newTestSubscriber(t, subscriberTestOpts{
+			Client:     c,
+			Channel:    "users:42",
+			UserID:     "u1",
+			InitialMap: usersMap("u1", "id"),
+		})
+		mapAtChainStart := s.AuthMap.Load()
+		s.dropIfUnchanged(mapAtChainStart)
+		if r := s.Sub.Reason(); r != "auth_unavailable" {
+			t.Fatalf("drop reason = %q; want auth_unavailable (snapshot unchanged -> drop)", r)
+		}
+		select {
+		case <-s.Sub.Done():
+		default:
+			t.Fatalf("Sub.Done() did not fire after dropIfUnchanged")
+		}
+	})
+
+	t.Run("changed skips the drop", func(t *testing.T) {
+		t.Parallel()
+		s := newTestSubscriber(t, subscriberTestOpts{
+			Client:     c,
+			Channel:    "users:42",
+			UserID:     "u1",
+			InitialMap: usersMap("u1", "id"),
+		})
+		mapAtChainStart := s.AuthMap.Load()
+		// Simulate a concurrent on-demand refresh swapping a fresh whitelist.
+		s.swapMap(usersMap("u1", "id", "name"))
+		if s.AuthMap.Load() == mapAtChainStart {
+			t.Fatalf("swapMap did not change AuthMap pointer; test premise broken")
+		}
+		s.dropIfUnchanged(mapAtChainStart)
+		if r := s.Sub.Reason(); r != "" {
+			t.Fatalf("drop reason = %q; want empty (a concurrent swap must suppress the drop)", r)
+		}
+		select {
+		case <-s.Sub.Done():
+			t.Fatalf("Sub.Done() fired; want stream kept alive after a concurrent swap")
+		default:
+		}
+	})
 }
 
 func ownSub(t *testing.T, c *Client, userID, channel string) *Subscriber {

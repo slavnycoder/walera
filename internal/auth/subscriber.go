@@ -295,32 +295,36 @@ func (s *Subscriber) refreshAttempt(ctx context.Context, attempt int, requestID 
 // concurrent chains, so the swap lock is released for the whole duration of
 // every backoff sleep and an on-demand RefreshOnce can swap fresh permissions
 // while this chain waits between retries (previously it was starved for the full
-// backoff window, up to ~13s). Each individual fetch+swap still runs under
-// refreshMu via lockedAttempt. Behavior in the pure-TTL case (no concurrent
-// on-demand swap) is unchanged: same attempt count, same drop/breaker semantics.
+// backoff window, up to ~13s). Each individual fetch+swap runs under refreshMu
+// via lockedAttempt, and every auth_unavailable drop goes through dropIfUnchanged
+// so the drop decision is serialized under refreshMu against an in-flight
+// on-demand swap. Behavior in the pure-TTL case (no concurrent on-demand swap)
+// is unchanged: same attempt count, same drop/breaker semantics.
 func (s *Subscriber) tryRefresh(ctx context.Context) {
 	if !s.chainMu.TryLock() {
 		return
 	}
 	defer s.chainMu.Unlock()
 
+	// Snapshot the live whitelist pointer at chain start, before the first
+	// attempt. swapMap is the only writer of AuthMap after construction and
+	// always stores a fresh pointer, so a changed pointer means a concurrent
+	// successful refresh (an on-demand RefreshOnce that grabbed refreshMu) has
+	// already brought the stream current — the chain must then stop without
+	// dropping. Sampling here, not after attempt 0, closes the window where an
+	// on-demand swap landing during attempt 0 would otherwise be adopted as the
+	// baseline and the fresh stream still dropped at the end of the chain.
+	mapAtChainStart := s.AuthMap.Load()
+
 	switch s.lockedAttempt(ctx, 0, newRequestID()) {
 	case attemptSwapped, attemptRevoked:
 		return
 	case attemptFailed:
-		s.Sub.Drop("auth_unavailable")
+		s.dropIfUnchanged(mapAtChainStart)
 		return
 	case attemptUnavailable:
 		// fall through to the backoff retry chain
 	}
-
-	// Snapshot the live whitelist pointer. swapMap is the only writer of AuthMap
-	// after construction and always stores a fresh pointer, so a changed pointer
-	// after a sleep means a concurrent successful refresh (an on-demand
-	// RefreshOnce that grabbed refreshMu while we slept) already brought the
-	// stream current. In that case we stop retrying and must NOT drop — dropping
-	// a just-refreshed, healthy stream would be a regression.
-	mapAtChainStart := s.AuthMap.Load()
 
 	for i, backoff := range s.backoffs {
 		select {
@@ -330,6 +334,14 @@ func (s *Subscriber) tryRefresh(ctx context.Context) {
 			return
 		case <-time.After(backoff):
 		}
+		// Another path (e.g. an on-demand revocation, which drops the sub
+		// without swapping AuthMap) may have dropped it while we slept; stop
+		// rather than fetch and swap onto a dead subscriber.
+		select {
+		case <-s.Sub.Done():
+			return
+		default:
+		}
 		if s.AuthMap.Load() != mapAtChainStart {
 			return
 		}
@@ -337,32 +349,42 @@ func (s *Subscriber) tryRefresh(ctx context.Context) {
 		case attemptSwapped, attemptRevoked:
 			return
 		case attemptFailed:
-			s.Sub.Drop("auth_unavailable")
+			s.dropIfUnchanged(mapAtChainStart)
 			return
 		case attemptUnavailable:
 			// keep retrying
 		}
 	}
 
-	// A concurrent on-demand swap may have landed between the final attempt and
-	// here (outside any lock); don't drop a stream that is already current.
-	if s.AuthMap.Load() != mapAtChainStart {
-		return
-	}
 	if s.breaker == nil || s.breaker.Allow() {
-		s.Sub.Drop("auth_unavailable")
+		s.dropIfUnchanged(mapAtChainStart)
 	}
 }
 
 // lockedAttempt runs exactly one refreshAttempt under refreshMu — the swap lock
 // shared with on-demand RefreshOnce and the breaker fan-out. It is the only
-// place the TTL chain takes refreshMu, and it holds the lock only for that
-// single fetch+swap, never across a backoff sleep, so on-demand refresh is not
-// starved while the chain retries.
+// place the TTL chain takes refreshMu for a fetch, and it holds the lock only
+// for that single fetch+swap, never across a backoff sleep, so on-demand refresh
+// is not starved while the chain retries.
 func (s *Subscriber) lockedAttempt(ctx context.Context, attempt int, requestID string) attemptResult {
 	s.refreshMu.Lock()
 	defer s.refreshMu.Unlock()
 	return s.refreshAttempt(ctx, attempt, requestID)
+}
+
+// dropIfUnchanged drops the subscriber (auth_unavailable) only if no concurrent
+// refresh swapped a fresh whitelist since mapAtChainStart was sampled. The check
+// and drop run under refreshMu so the decision is serialized against an in-flight
+// on-demand RefreshOnce: if one is mid-fetch it holds refreshMu, so this blocks
+// until it stores its result, then observes the changed pointer and skips the
+// drop — never killing a stream that was just successfully refreshed. Dropping
+// under refreshMu mirrors applyFetched's auth_revoked drop.
+func (s *Subscriber) dropIfUnchanged(mapAtChainStart *Whitelist) {
+	s.refreshMu.Lock()
+	defer s.refreshMu.Unlock()
+	if s.AuthMap.Load() == mapAtChainStart {
+		s.Sub.Drop("auth_unavailable")
+	}
 }
 
 // RefreshResult is the outcome of an on-demand synchronous refresh (RefreshOnce).
