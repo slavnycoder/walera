@@ -16,8 +16,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/zerolog"
 	"go.uber.org/automaxprocs/maxprocs"
-
-	"github.com/walera/walera/internal/safego"
 )
 
 type loadgenFlags struct {
@@ -124,13 +122,13 @@ func startHTTPServer(addr string, reg *prometheus.Registry, logger zerolog.Logge
 		_, _ = w.Write([]byte("ok\n"))
 	})
 	srv := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
-	safego.Go("loadgen-http", func() {
+	go func() {
 		logger.Info().Str("addr", addr).Msg("loadgen HTTP server listening")
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			logger.Error().Err(err).Msg("loadgen HTTP server exited with error")
 			stop()
 		}
-	})
+	}()
 	return srv
 }
 
@@ -169,7 +167,7 @@ func spawnSubscribers(
 			Log:     logger.With().Int("sub_id", i).Str("channel", ch).Logger(),
 			Backoff: backoffCfg{Initial: 100 * time.Millisecond, Max: 30 * time.Second},
 		}
-		safego.Go(fmt.Sprintf("subscriber-%d", i), func() { sub.Run(ctx) })
+		go sub.Run(ctx)
 		if spawnInterval > 0 {
 			select {
 			case <-ctx.Done():

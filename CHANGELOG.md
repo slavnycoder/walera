@@ -26,6 +26,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `walera_auth_breaker_stale_subscribers`, alert
   `WaleraAuthBreakerStaleSubscribersOutsideBreaker`). Fail-closed refresh
   leaves no stale subscribers for it to catch.
+- **Panics are no longer swallowed.** Removed `internal/safego`; a panic in
+  any goroutine (WAL reader, auth refresh, shutdown) now crashes the process
+  so the orchestrator restarts it, instead of leaving it running without
+  replication or without permission refresh.
 
 ## [2.2.0] - 2026-06-08
 

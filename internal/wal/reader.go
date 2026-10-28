@@ -17,7 +17,6 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/walera/walera/internal/metrics"
-	"github.com/walera/walera/internal/safego"
 )
 
 var lastCommittedLSN atomic.Uint64
@@ -233,7 +232,7 @@ func (r *Reader) runLoop(ctx context.Context) error {
 	tickerCtx, tickerCancel := context.WithCancel(ctx)
 	defer tickerCancel()
 
-	safego.Go("wal-standby-ticker", func() {
+	go func() {
 		ticker := time.NewTicker(5 * time.Second)
 		defer ticker.Stop()
 		for {
@@ -244,7 +243,7 @@ func (r *Reader) runLoop(ctx context.Context) error {
 				r.tickStandby(tickerCtx)
 			}
 		}
-	})
+	}()
 
 	for {
 		receiveCtx, cancel := context.WithTimeout(ctx, 10*time.Second)

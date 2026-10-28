@@ -8,7 +8,6 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/walera/walera/internal/safego"
 	"github.com/walera/walera/internal/wal"
 )
 
@@ -20,13 +19,13 @@ func (a *App) Run(ctx context.Context, stop context.CancelFunc) error {
 	}
 
 	for _, r := range a.Runnables {
-		safego.Go(r.Name, func() {
+		go func() {
 			err := r.Run(ctx)
 
 			if err != nil && ctx.Err() == nil && r.OnError != nil {
 				r.OnError(err)
 			}
-		})
+		}()
 	}
 
 	<-ctx.Done()
@@ -80,7 +79,7 @@ func (a *App) shutdownStep1WaveWithCallbacks(
 	var wg sync.WaitGroup
 	wg.Add(3)
 
-	safego.Go("shutdown-pool", func() {
+	go func() {
 		defer wg.Done()
 		if onPoolStart != nil {
 			onPoolStart()
@@ -99,11 +98,11 @@ func (a *App) shutdownStep1WaveWithCallbacks(
 			Str("step", "pool").
 			Int64("elapsed_ms", time.Since(stepStart).Milliseconds()).
 			Msg("sse pool shutdown complete")
-	})
+	}()
 
 	if a.PProfServer != nil {
 		wg.Add(1)
-		safego.Go("shutdown-pprof", func() {
+		go func() {
 			defer wg.Done()
 			if onPProfStart != nil {
 				onPProfStart()
@@ -122,10 +121,10 @@ func (a *App) shutdownStep1WaveWithCallbacks(
 				Str("step", "pprof").
 				Int64("elapsed_ms", time.Since(stepStart).Milliseconds()).
 				Msg("pprof server shutdown complete")
-		})
+		}()
 	}
 
-	safego.Go("shutdown-http", func() {
+	go func() {
 		defer wg.Done()
 		if onHTTPStart != nil {
 			onHTTPStart()
@@ -144,9 +143,9 @@ func (a *App) shutdownStep1WaveWithCallbacks(
 			Str("step", "http").
 			Int64("elapsed_ms", time.Since(stepStart).Milliseconds()).
 			Msg("http.Server shutdown complete")
-	})
+	}()
 
-	safego.Go("shutdown-broadcast", func() {
+	go func() {
 		defer wg.Done()
 		if onBroadcastStart != nil {
 			onBroadcastStart()
@@ -165,7 +164,7 @@ func (a *App) shutdownStep1WaveWithCallbacks(
 			Str("step", "broadcast").
 			Int64("elapsed_ms", time.Since(stepStart).Milliseconds()).
 			Msg("router drain complete")
-	})
+	}()
 
 	wg.Wait()
 }

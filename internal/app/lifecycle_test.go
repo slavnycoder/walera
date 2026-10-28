@@ -4,7 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
+	"os"
+	"os/exec"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -85,6 +88,28 @@ func newTestApp(
 		RouterIndex: bcast,
 		HTTPServer:  httpSrv,
 		PProfServer: pprofSrv,
+	}
+}
+
+// A panicking runnable must crash the process, not leave it running headless.
+func TestApp_RunnablePanicCrashesProcess(t *testing.T) {
+	if os.Getenv("WALERA_PANIC_CHILD") == "1" {
+		a := &App{Runnables: []Runnable{{
+			Name: "boom",
+			Run:  func(context.Context) error { panic("boom") },
+		}}}
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = a.Run(ctx, cancel)
+		os.Exit(0) // reached only if the panic was swallowed
+	}
+
+	cmd := exec.Command(os.Args[0], "-test.run=^TestApp_RunnablePanicCrashesProcess$")
+	cmd.Env = append(os.Environ(), "WALERA_PANIC_CHILD=1")
+	err := cmd.Run()
+	var ee *exec.ExitError
+	if !errors.As(err, &ee) || ee.ExitCode() != 2 {
+		t.Fatalf("child exit = %v; want exit code 2 (unrecovered panic)", err)
 	}
 }
 

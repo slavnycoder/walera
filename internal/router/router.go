@@ -10,7 +10,6 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/walera/walera/internal/metrics"
-	"github.com/walera/walera/internal/safego"
 	"github.com/walera/walera/internal/wal"
 )
 
@@ -377,7 +376,7 @@ func (b *Broadcaster) Shutdown(ctx context.Context, drainDeadline time.Duration)
 	for _, sub := range subs {
 		wg.Add(1)
 		s := sub
-		safego.Go("shutdown-broadcast-"+s.ID(), func() {
+		go func() {
 			defer wg.Done()
 			s.Drop("shutdown")
 			select {
@@ -385,14 +384,14 @@ func (b *Broadcaster) Shutdown(ctx context.Context, drainDeadline time.Duration)
 			case <-ctx.Done():
 				return
 			}
-		})
+		}()
 	}
 
 	done := make(chan struct{})
-	safego.Go("shutdown-broadcast-waiter", func() {
+	go func() {
 		wg.Wait()
 		close(done)
-	})
+	}()
 
 	select {
 	case <-done:

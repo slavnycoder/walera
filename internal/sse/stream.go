@@ -10,7 +10,6 @@ import (
 
 	"github.com/walera/walera/internal/auth"
 	"github.com/walera/walera/internal/router"
-	"github.com/walera/walera/internal/safego"
 )
 
 func (h *Handler) writeSSEHeaders(w http.ResponseWriter, r *http.Request) {
@@ -110,9 +109,7 @@ func (h *Handler) headersAndPreamble(
 
 	h.authRegistry.Add(authSub)
 
-	safego.Go("auth-refresh-"+sub.ID(), func() {
-		authSub.RefreshLoop(r.Context())
-	})
+	go authSub.RefreshLoop(r.Context())
 
 	h.writeSSEHeaders(w, r)
 

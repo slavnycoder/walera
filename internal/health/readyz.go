@@ -3,8 +3,6 @@ package health
 import (
 	"context"
 	"time"
-
-	"github.com/walera/walera/internal/safego"
 )
 
 type readyState struct {
@@ -18,8 +16,7 @@ func (s *Server) StartReadinessProbe(ctx context.Context) {
 	if interval <= 0 {
 		interval = 5 * time.Second
 	}
-	safego.Go("readyz-probe", func() {
-
+	go func() {
 		s.probe(ctx)
 
 		ticker := time.NewTicker(interval)
@@ -32,7 +29,7 @@ func (s *Server) StartReadinessProbe(ctx context.Context) {
 				s.probe(ctx)
 			}
 		}
-	})
+	}()
 }
 
 func (s *Server) probe(ctx context.Context) {
