@@ -90,6 +90,9 @@ func mkTx(commitLSN pglogrepl.LSN, txID uint32, changes ...wal.Change) wal.Tx {
 	}
 }
 
+// allowAll is a test-only Filter that admits every change unchanged.
+func allowAll(c wal.Change, _ pglogrepl.LSN) (wal.Change, bool) { return c, false }
+
 var (
 	recordersMu sync.Mutex
 	recorders   = map[*Subscriber]*recordedSub{}
@@ -116,6 +119,7 @@ func newRecordedExactSubWithPK(schema, table, pk string, startLSN pglogrepl.LSN,
 		},
 		SubscriberDeps{Parent: context.Background()},
 	)
+	s.Filter = allowAll
 	rec := &recordedSub{sub: s, limit: limit}
 	s.WireSendFunc(recordingSendFunc(rec))
 	recordersMu.Lock()
@@ -134,6 +138,7 @@ func newRecordedWildcardSubWithCap(schema, table string, startLSN pglogrepl.LSN,
 		},
 		SubscriberDeps{Parent: context.Background()},
 	)
+	s.Filter = allowAll
 	rec := &recordedSub{sub: s, limit: limit}
 	s.WireSendFunc(recordingSendFunc(rec))
 	recordersMu.Lock()
@@ -881,23 +886,16 @@ func TestRouteTxPassesCommitLSNToFilter(t *testing.T) {
 	}
 }
 
-func TestRouteTxNilFilterUnchangedFastPath(t *testing.T) {
+func TestRouteTx_NilFilterDeliversNothing(t *testing.T) {
 	t.Parallel()
 	b, _ := mkBroadcaster(10000)
 	sub := mkExactSub("public", "users", "42", 0, 4)
-	recordedFor(t, sub).useEncoder(b.enc.(*stubEncoder))
-
+	sub.Filter = nil
 	b.Register(sub)
 
-	tx := mkTx(pglogrepl.LSN(0x300), 3,
-		mkChange(wal.OpInsert, "public", "users", "42"),
-	)
-	b.routeTx(tx)
+	b.routeTx(mkTx(pglogrepl.LSN(0x300), 3, mkChange(wal.OpInsert, "public", "users", "42")))
 
-	ev := drainOne(t, sub, 200*time.Millisecond)
-	if reflect.ValueOf(ev.Tx.Changes).Pointer() != reflect.ValueOf(tx.Changes).Pointer() {
-		t.Error("ev.Tx.Changes does NOT share backing array with input tx.Changes — fast path regressed")
-	}
+	expectNoFrame(t, sub, 100*time.Millisecond)
 }
 
 func gatherHistogramCount(t *testing.T, reg *metrics.Registry, name string) uint64 {
@@ -1501,9 +1499,9 @@ func TestRouteTxSchemaScoped_FilterPath(t *testing.T) {
 	}
 }
 
-// TestRouteTxSchemaScoped_NilFilterStripsCrossSchema: nil-Filter path must
-// also schema-scope (clones MatchedIndices but keeps tx.Changes backing).
-func TestRouteTxSchemaScoped_NilFilterStripsCrossSchema(t *testing.T) {
+// TestRouteTxSchemaScoped_StripsCrossSchema: the filter path must schema-scope
+// before invoking sub.Filter — a cross-schema row never reaches the filter.
+func TestRouteTxSchemaScoped_StripsCrossSchema(t *testing.T) {
 	t.Parallel()
 	b, _ := mkBroadcaster(10000)
 	sub := mkExactSub("public", "users", "42", 0, 4)
@@ -1517,14 +1515,11 @@ func TestRouteTxSchemaScoped_NilFilterStripsCrossSchema(t *testing.T) {
 	b.routeTx(tx)
 
 	ev := drainOne(t, sub, 200*time.Millisecond)
-	if got, want := len(ev.MatchedIndices), 1; got != want {
-		t.Fatalf("ev.MatchedIndices length: got %d; want %d", got, want)
+	if got := len(ev.Tx.Changes); got != 1 {
+		t.Fatalf("delivered changes: got %d; want 1", got)
 	}
-	if got := ev.MatchedIndices[0]; got != 1 {
-		t.Errorf("ev.MatchedIndices[0]: got %d; want 1 (index into original tx.Changes)", got)
-	}
-	if reflect.ValueOf(ev.Tx.Changes).Pointer() != reflect.ValueOf(tx.Changes).Pointer() {
-		t.Error("ev.Tx.Changes should still share backing array with tx.Changes (only indices rescoped)")
+	if got := ev.Tx.Changes[0].Schema; got != "public" {
+		t.Errorf("delivered change schema: got %q; want public", got)
 	}
 }
 

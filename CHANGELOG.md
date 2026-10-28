@@ -17,6 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the periodic permission refresh. A failed refresh drops the stream with
   `auth_unavailable` after its retries, so a revoked user can no longer keep
   streaming for the whole duration of an auth-backend outage.
+- **Router is fail-closed on a missing filter.** A subscriber registered
+  without a whitelist filter now receives nothing instead of unfiltered rows.
 
 ### Removed
 

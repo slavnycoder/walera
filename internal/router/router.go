@@ -217,6 +217,11 @@ func (b *Broadcaster) dispatchEvent(tx wal.Tx, sub *Subscriber, indices []int) (
 		return 0, 0
 	}
 
+	// No filter means no grant: never deliver unfiltered rows.
+	if sub.Filter == nil {
+		return 0, 0
+	}
+
 	capLimit := b.cfg.MaxChangesPerTx
 	subSchema := sub.Schema()
 	subTable := sub.Table()
@@ -237,77 +242,39 @@ func (b *Broadcaster) dispatchEvent(tx wal.Tx, sub *Subscriber, indices []int) (
 		return 0, 0
 	}
 
-	ev := Event{Tx: tx, MatchedIndices: indices}
-	if sub.Filter != nil {
-		filtered := make([]wal.Change, 0, len(indices))
-		anchorSurvived := false
-		for _, i := range indices {
-			raw := tx.Changes[i]
-			if raw.Schema != subSchema {
-				continue
-			}
-			rawAnchor := matchesAnchor(sub, raw)
-			ch, drop := sub.Filter(raw, tx.CommitLSN)
-			if drop {
-				continue
-			}
-			if rawAnchor {
-				anchorSurvived = true
-			}
-			filtered = append(filtered, ch)
+	filtered := make([]wal.Change, 0, len(indices))
+	anchorSurvived := false
+	for _, i := range indices {
+		raw := tx.Changes[i]
+		if raw.Schema != subSchema {
+			continue
 		}
-		if len(filtered) == 0 || !anchorSurvived {
-			return 0, 0 // silent drop — no metric, no Drop() (INVARIANT #3)
+		rawAnchor := matchesAnchor(sub, raw)
+		ch, drop := sub.Filter(raw, tx.CommitLSN)
+		if drop {
+			continue
 		}
-		// Cap is post-filter, not pre-filter: pre-filter would falsely drop
-		// narrow-whitelist subscribers on large txs.
-		if len(filtered) > capLimit {
-			b.dropTxTooLarge(sub, tx.CommitLSN, "filtered_count", len(filtered), capLimit)
-			return 0, 0
+		if rawAnchor {
+			anchorSurvived = true
 		}
-		subTx := tx
-		subTx.Changes = filtered
-		newIdx := make([]int, len(filtered))
-		for i := range filtered {
-			newIdx[i] = i
-		}
-		ev = Event{Tx: subTx, MatchedIndices: newIdx}
-	} else {
-		// nil-Filter path: schema-scope MatchedIndices in a single pass,
-		// allocating a new slice only on the first cross-schema change.
-		// TestRouteTxNilFilterUnchangedFastPath pins no-clone of tx.Changes
-		// when every change belongs to subSchema.
-		schemaIdx := indices
-		cloned := false
-		anchorSurvived := false
-		for pos, i := range indices {
-			raw := tx.Changes[i]
-			if raw.Schema != subSchema {
-				if !cloned {
-					schemaIdx = make([]int, pos, len(indices))
-					copy(schemaIdx, indices[:pos])
-					cloned = true
-				}
-				continue
-			}
-			if matchesAnchor(sub, raw) {
-				anchorSurvived = true
-			}
-			if cloned {
-				schemaIdx = append(schemaIdx, i)
-			}
-		}
-		if len(schemaIdx) == 0 || !anchorSurvived {
-			return 0, 0
-		}
-		if len(schemaIdx) > capLimit {
-			b.dropTxTooLarge(sub, tx.CommitLSN, "change_count", len(schemaIdx), capLimit)
-			return 0, 0
-		}
-		if cloned {
-			ev = Event{Tx: tx, MatchedIndices: schemaIdx}
-		}
+		filtered = append(filtered, ch)
 	}
+	if len(filtered) == 0 || !anchorSurvived {
+		return 0, 0 // silent drop — no metric, no Drop() (INVARIANT #3)
+	}
+	// Cap is post-filter, not pre-filter: pre-filter would falsely drop
+	// narrow-whitelist subscribers on large txs.
+	if len(filtered) > capLimit {
+		b.dropTxTooLarge(sub, tx.CommitLSN, "filtered_count", len(filtered), capLimit)
+		return 0, 0
+	}
+	subTx := tx
+	subTx.Changes = filtered
+	newIdx := make([]int, len(filtered))
+	for i := range filtered {
+		newIdx[i] = i
+	}
+	ev := Event{Tx: subTx, MatchedIndices: newIdx}
 
 	frame, overflow := b.enc.Encode(ev)
 	if overflow {
