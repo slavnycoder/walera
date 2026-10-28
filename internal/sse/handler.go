@@ -147,6 +147,8 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /sse/v1/{table}/all", h.serveWildcard)
 	mux.HandleFunc("OPTIONS /sse/v1/{table}/{pk}", h.servePreflight)
 	mux.HandleFunc("OPTIONS /sse/v1/{table}/all", h.servePreflight)
+	mux.HandleFunc("POST /sse/v1/refresh", h.serveRefresh)
+	mux.HandleFunc("OPTIONS /sse/v1/refresh", h.serveRefreshPreflight)
 }
 
 func (h *Handler) servePreflight(w http.ResponseWriter, r *http.Request) {

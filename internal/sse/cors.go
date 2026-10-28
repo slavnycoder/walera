@@ -44,12 +44,20 @@ func writeNoSniff(w http.ResponseWriter) {
 }
 
 func handlePreflight(w http.ResponseWriter, r *http.Request, allowedOrigins []string) bool {
+	return handlePreflightMethods(w, r, allowedOrigins, "GET, OPTIONS")
+}
+
+// handlePreflightMethods writes a CORS preflight response advertising the given
+// Access-Control-Allow-Methods string. The SSE GET routes pass "GET, OPTIONS";
+// the POST /sse/v1/refresh route passes "POST, OPTIONS". All other preflight
+// headers are identical so both routes share one source of truth.
+func handlePreflightMethods(w http.ResponseWriter, r *http.Request, allowedOrigins []string, methods string) bool {
 	if r.Method != http.MethodOptions {
 		return false
 	}
 	handleCORS(w, r, allowedOrigins)
 	writeNoSniff(w)
-	w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Methods", methods)
 	w.Header().Set("Access-Control-Allow-Headers", "Authorization, X-Request-ID, Content-Type")
 	w.Header().Set("Access-Control-Max-Age", "86400")
 	w.WriteHeader(http.StatusNoContent)
