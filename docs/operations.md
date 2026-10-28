@@ -345,7 +345,7 @@ health endpoints suitable for Kubernetes probes.
 | Endpoint        | Purpose                                                |
 | --------------- | ------------------------------------------------------ |
 | `GET /healthz`  | Liveness. `200` when the WAL reader is connected.      |
-| `GET /readyz`   | Readiness. `200` when PostgreSQL and auth are healthy. |
+| `GET /readyz`   | Readiness. `200` when PostgreSQL is healthy; does not probe the auth backend. |
 | `GET /metrics`  | Prometheus metrics.                                    |
 
 Key metrics surfaced for operations:

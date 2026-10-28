@@ -160,7 +160,7 @@ A single Walera pod runs the following components in-process:
   histograms (subscriber count, WAL lag, auth failure rate, fan-out
   latency, slow-client drops, etc.) on `/metrics`.
 - **Health endpoints.** `GET /healthz` (liveness, WAL connected) and
-  `GET /readyz` (PostgreSQL + auth healthy).
+  `GET /readyz` (PostgreSQL healthy; does not probe the auth backend).
 
 Production dependency versions are pinned in `go.mod`. The locked
 choices are summarized in the project root `CLAUDE.md` under

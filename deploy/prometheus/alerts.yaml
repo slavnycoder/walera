@@ -64,16 +64,18 @@ spec:
     - name: walera.auth
       interval: 30s
       rules:
-        - alert: WaleraAuthRefreshUnavailable
-          expr: sum(rate(walera_auth_refresh_total{result="unavailable"}[5m])) > 0
+        - alert: WaleraAuthBackendUnavailable
+          expr: |
+            sum(rate(walera_auth_requests_total{result="unavailable"}[5m]))
+              / sum(rate(walera_auth_requests_total[5m])) > 0.05
           for: 2m
           labels:
             severity: P1
             app: walera
             component: auth
           annotations:
-            summary: "Walera cannot reach the auth backend for permission refresh"
-            description: "Established streams drop with auth_unavailable and new opens get 503. Investigate auth backend availability."
+            summary: "Walera cannot reach the auth backend"
+            description: "More than 5% of auth backend calls (opens and refreshes) are unavailable. New SSE opens get 503; established streams drop with auth_unavailable once refresh retries run out."
 
     - name: walera.subscribers
       interval: 30s
