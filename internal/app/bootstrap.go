@@ -167,27 +167,17 @@ func bootstrapPublication(ctx context.Context, conn bootstrapDB, cfg bootstrapCo
 			}
 		} else {
 
-			var ddl, mode string
-			if len(cfg.Tables) > 0 {
-				ddl = fmt.Sprintf(
-					"CREATE PUBLICATION %s FOR TABLE %s WITH (publish = 'insert, update, delete')",
-					cfg.PublicationName,
-					strings.Join(cfg.Tables, ", "),
-				)
-				mode = "FOR TABLE"
-			} else {
-				ddl = fmt.Sprintf(
-					"CREATE PUBLICATION %s FOR ALL TABLES WITH (publish = 'insert, update, delete')",
-					cfg.PublicationName,
-				)
-				mode = "FOR ALL TABLES"
-			}
+			ddl := fmt.Sprintf(
+				"CREATE PUBLICATION %s FOR TABLE %s WITH (publish = 'insert, update, delete')",
+				cfg.PublicationName,
+				strings.Join(cfg.Tables, ", "),
+			)
 			if _, err := conn.Exec(ctx, ddl); err != nil {
 				return fmt.Errorf("failed to create publication %q for bootstrap: %w", cfg.PublicationName, err)
 			}
 			logger.Info().
 				Str("publication", cfg.PublicationName).
-				Str("mode", mode).
+				Str("mode", "FOR TABLE").
 				Int("table_count", len(cfg.Tables)).
 				Msg("publication created (bootstrap.mode=auto)")
 		}

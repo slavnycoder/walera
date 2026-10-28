@@ -59,6 +59,8 @@ services:
       # With wal.bootstrap.mode=auto (config.yaml default), Walera creates
       # this publication on startup when it is absent.
       WALERA_WAL_PUBLICATION_NAME: "cdc_sse_streamer"
+      # Required: Walera only publishes the tables you list.
+      WALERA_WAL_BOOTSTRAP_TABLES: "${WALERA_WAL_BOOTSTRAP_TABLES:?set the tables to stream, e.g. public.orders}"
       # Wire your own auth backend here. The defaults below point at a
       # placeholder host so the binary starts; readiness will stay 503 until
       # auth.backend_url answers.

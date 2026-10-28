@@ -115,6 +115,8 @@ services:
       # replication=database here.
       WALERA_DATABASE_URL: "postgres://walera:${POSTGRES_PASSWORD}@postgres:5432/walera?sslmode=disable"
       WALERA_WAL_PUBLICATION_NAME: "cdc_sse_streamer"
+      # Publication is created by testbench/migrations/001,002 — Walera only verifies it.
+      WALERA_WAL_BOOTSTRAP_MODE: "verify"
       # Auth — Phase 05 mock-auth on the testbench-net bridge. The env var
       # below maps to koanf path auth.backend_url (config.go:351 validation).
       WALERA_AUTH_BACKEND_URL: "http://mock-auth:9000"

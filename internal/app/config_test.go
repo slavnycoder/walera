@@ -22,6 +22,7 @@ func setPhase3RequiredEnv(t *testing.T) {
 	t.Helper()
 	t.Setenv("WALERA_AUTH_BACKEND_URL", "https://auth.example/test")
 	t.Setenv("WALERA_AUTH_SIGNING_SECRET", strings.Repeat("k", 64))
+	t.Setenv("WALERA_WAL_BOOTSTRAP_TABLES", "public.orders")
 }
 
 func TestLoad_YAMLFields(t *testing.T) {
@@ -294,12 +295,14 @@ func TestLoad_Validate_HttpAddrSchema(t *testing.T) {
 func setPhase2RequiredEnv(t *testing.T) {
 	t.Helper()
 	t.Setenv("WALERA_DATABASE_URL", "postgres://a:b@localhost/db")
+	t.Setenv("WALERA_WAL_BOOTSTRAP_TABLES", "public.orders")
 }
 
 func TestLoad_MinimalConfig(t *testing.T) {
 	t.Setenv("WALERA_DATABASE_URL", "postgres://a:b@localhost/db")
 	t.Setenv("WALERA_AUTH_BACKEND_URL", "https://auth.example/test")
 	t.Setenv("WALERA_AUTH_SIGNING_SECRET", strings.Repeat("k", 64))
+	t.Setenv("WALERA_WAL_BOOTSTRAP_TABLES", "public.orders")
 
 	cfg, err := LoadAppConfig("")
 	if err != nil {
@@ -1121,6 +1124,9 @@ wal:
 func TestLoad_BootstrapV2_Defaults(t *testing.T) {
 	setPhase2RequiredEnv(t)
 	setPhase3RequiredEnv(t)
+	// mode=verify doesn't require tables; keeps the "Tables defaults to empty" assertion meaningful.
+	_ = os.Unsetenv("WALERA_WAL_BOOTSTRAP_TABLES")
+	t.Setenv("WALERA_WAL_BOOTSTRAP_MODE", "verify")
 
 	cfg, err := LoadAppConfig("")
 	if err != nil {
@@ -1136,6 +1142,8 @@ func TestLoad_BootstrapV2_Defaults(t *testing.T) {
 
 func TestLoad_BootstrapV2_TablesFromYAML(t *testing.T) {
 	setPhase3RequiredEnv(t)
+	// let the YAML tables list take effect instead of the helper's env default.
+	_ = os.Unsetenv("WALERA_WAL_BOOTSTRAP_TABLES")
 	path := writeTempYAML(t, `
 database:
   url: "postgres://a:b@localhost/db"
@@ -1204,6 +1212,8 @@ func TestLoad_BootstrapV2_TableValidation(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			setPhase3RequiredEnv(t)
+			// let the YAML's invalid entry take effect instead of the helper's valid env default.
+			_ = os.Unsetenv("WALERA_WAL_BOOTSTRAP_TABLES")
 			path := writeTempYAML(t, `
 database:
   url: "postgres://a:b@localhost/db"

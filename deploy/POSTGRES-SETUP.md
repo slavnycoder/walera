@@ -173,7 +173,7 @@ The bootstrap modes:
 
 | `wal.bootstrap.mode` | Behavior on the publication                                                                                                                                       |
 | -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `auto` (default)     | Creates the publication if missing. If it exists and `bootstrap.tables` is set, verifies the table list and warns on mismatch. Never mutates an existing publication. |
+| `auto` (default)     | Requires `bootstrap.tables`. Creates the publication if missing (`FOR TABLE` the listed tables — never `FOR ALL TABLES`). If it exists, verifies the table list and warns on mismatch. Never mutates an existing publication. |
 | `verify`             | Fails fast if the publication is missing or empty. The original DBA-managed posture.                                                                              |
 | `off`                | Skips the publication check entirely.                                                                                                                             |
 
@@ -182,7 +182,7 @@ The bootstrap modes:
 wal:
   bootstrap:
     mode: auto
-    tables:                       # schema-qualified; preferred over FOR ALL TABLES
+    tables:                       # schema-qualified; required when mode=auto
       - public.orders
       - public.devices
     create_roles: true            # opt-in role provisioning
@@ -196,8 +196,7 @@ WALERA_WAL_BOOTSTRAP_TABLES=public.orders,public.devices
 WALERA_WAL_BOOTSTRAP_CREATE_ROLES=true
 ```
 
-When `bootstrap.tables` is non-empty and the publication is missing,
-Walera issues:
+When the publication is missing, Walera issues:
 
 ```sql
 CREATE PUBLICATION <name>
@@ -205,9 +204,9 @@ CREATE PUBLICATION <name>
   WITH (publish = 'insert, update, delete');
 ```
 
-When `bootstrap.tables` is empty (the default), Walera falls back to
-`FOR ALL TABLES` for backward compatibility — but you should set the
-list explicitly in any environment that streams real data.
+`bootstrap.tables` is required when `mode: auto` — startup fails fast
+without it. Walera never creates `FOR ALL TABLES`; use `mode: verify`
+with a DBA-managed publication if you cannot enumerate tables upfront.
 
 `bootstrap.create_roles: true` makes Walera probe `pg_catalog.pg_roles`
 for the username in `database.url`. Both derived DSNs share that single

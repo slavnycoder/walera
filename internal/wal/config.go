@@ -180,6 +180,14 @@ func (c Config) Validate() error {
 			))
 		}
 	}
+	if c.Bootstrap.Mode == "auto" && len(c.Bootstrap.Tables) == 0 {
+		errs = append(errs, config.FormatError(
+			"wal.bootstrap.tables",
+			"[]",
+			"required when wal.bootstrap.mode=auto: Walera never publishes FOR ALL TABLES",
+			"list the tables clients may subscribe to, e.g. public.orders,public.devices, or use bootstrap.mode=verify with a DBA-managed publication",
+		))
+	}
 
 	if c.SlotNamePrefix != "" && c.SlotNamePrefix == string(c.PublicationName) {
 		errs = append(errs, config.FormatError(

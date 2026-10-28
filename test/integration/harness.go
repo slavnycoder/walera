@@ -40,6 +40,7 @@ type spawnConfig struct {
 	perUserConcurrent   int
 	forwardedCookies    []string
 	forwardedHeaders    []string
+	bootstrapAutoTables []string
 }
 
 func WithWriteTimeout(d time.Duration) SpawnBinaryOption {
@@ -72,6 +73,13 @@ func WithForwardedCookies(names ...string) SpawnBinaryOption {
 // headers are threaded from the SSE handshake into the OpenSession backend call.
 func WithForwardedHeaders(names ...string) SpawnBinaryOption {
 	return func(c *spawnConfig) { c.forwardedHeaders = append(c.forwardedHeaders, names...) }
+}
+
+// WithBootstrapAuto switches the harness config from the default
+// bootstrap.mode=verify to auto with the given explicit table list, for tests
+// that exercise Walera's own publication-creation path.
+func WithBootstrapAuto(tables ...string) SpawnBinaryOption {
+	return func(c *spawnConfig) { c.bootstrapAutoTables = tables }
 }
 
 func NewHarness(t *testing.T, opts ...SpawnBinaryOption) *Harness {
@@ -156,6 +164,15 @@ func SpawnBinary(t *testing.T, pgDSN, replicationDSN, mockAuthURL string, opts .
 	forwardedLines := yamlStringList("  forwarded_cookies", sc.forwardedCookies) +
 		yamlStringList("  forwarded_headers", sc.forwardedHeaders)
 
+	// The fixture publication is created by testdata/001_publication.sql, so
+	// bootstrap.mode defaults to verify. WithBootstrapAuto switches to auto
+	// with an explicit table list for tests exercising Walera's own
+	// publication-creation path (Walera never publishes FOR ALL TABLES).
+	bootstrapLines := "  bootstrap:\n    mode: verify\n"
+	if len(sc.bootstrapAutoTables) > 0 {
+		bootstrapLines = "  bootstrap:\n    mode: auto\n" + yamlStringList("    tables", sc.bootstrapAutoTables)
+	}
+
 	cfg := fmt.Sprintf(`log:
   level: debug
   dev_mode: false
@@ -166,7 +183,7 @@ wal:
   slot_name_prefix: walera_test
   slot_headroom_min: 1
   naive_timestamp_assume_utc: true
-  reconnect:
+%s  reconnect:
     reset_after_success_duration: 2s
   lag_sample_interval: 1s
 http:
@@ -203,7 +220,7 @@ metrics:
 shutdown:
   deadline: 5s
   drain_deadline: 4s
-`, pgDSN, addr, writeTimeoutLine, mockAuthURL, forwardedLines, IntegrationSigningSecret, IntegrationSigningKid, sc.globalConcurrent, sc.perUserConcurrent)
+`, pgDSN, bootstrapLines, addr, writeTimeoutLine, mockAuthURL, forwardedLines, IntegrationSigningSecret, IntegrationSigningKid, sc.globalConcurrent, sc.perUserConcurrent)
 
 	cfgFile := filepath.Join(t.TempDir(), "walera-test.yaml")
 	if err := os.WriteFile(cfgFile, []byte(cfg), 0o644); err != nil {

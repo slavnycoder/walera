@@ -23,7 +23,8 @@ log:
 wal:
   # Name of the publication used for WAL streaming. Default: "walera_pub".
   # In bootstrap.mode=auto, Walera creates this publication on startup if it
-  # does not exist (FOR ALL TABLES, publish = insert,update,delete).
+  # does not exist, FOR TABLE <bootstrap.tables> (tables are required; publish
+  # = insert,update,delete). Walera never publishes FOR ALL TABLES.
   # In bootstrap.mode=verify, the publication must already exist (DBA-managed).
   publication_name: walera_pub
 
@@ -43,11 +44,13 @@ wal:
   naive_timestamp_assume_utc: true
 
   # Publication bootstrap policy (OP-02).
-  #   auto   — create the publication if missing as FOR ALL TABLES (default).
+  #   auto   — create the publication if missing, FOR TABLE <bootstrap.tables>
+  #            (default; tables are required — Walera never publishes FOR ALL TABLES).
   #   verify — fail fast if the publication is missing or has no tables (DBA-managed).
   #   off    — skip the check entirely.
   bootstrap:
     mode: auto
+    # tables: [public.orders]
 
   # OP-04 reconnect loop (D4-02, D4-26).
   # The backoff curve [1s, 2s, 4s, 8s, 16s, 30s] with hard-coded ±25%

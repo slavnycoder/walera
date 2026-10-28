@@ -61,6 +61,8 @@ services:
       WALERA_DATABASE_URL: "postgres://walera:walera@postgres:5432/walera?sslmode=disable"
       # Publication name created by wal.bootstrap.mode=auto when absent.
       WALERA_WAL_PUBLICATION_NAME: "cdc_sse_streamer"
+      # Required: Walera only publishes the tables you list.
+      WALERA_WAL_BOOTSTRAP_TABLES: "${WALERA_WAL_BOOTSTRAP_TABLES:?set the tables to stream, e.g. public.orders}"
       # Go runtime tuning per D4-22.
       GOGC: "200"
       GOMEMLIMIT: "6500MiB"

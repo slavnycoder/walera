@@ -186,14 +186,6 @@ func TestBootstrapPublicationModes(t *testing.T) {
 		t.Fatal("verify empty returned nil")
 	}
 
-	autoAll := &fakeBootstrapDB{rowResults: []fakeRow{{values: []any{false}}}}
-	if err := bootstrapPublication(ctx, autoAll, bootstrapConfig{Mode: "auto", PublicationName: "pub"}, zerolog.Nop()); err != nil {
-		t.Fatalf("auto all: %v", err)
-	}
-	if len(autoAll.execSQL) != 1 || !strings.Contains(autoAll.execSQL[0], "FOR ALL TABLES") {
-		t.Fatalf("auto all exec = %#v", autoAll.execSQL)
-	}
-
 	autoTables := &fakeBootstrapDB{rowResults: []fakeRow{{values: []any{false}}}}
 	if err := bootstrapPublication(ctx, autoTables, bootstrapConfig{Mode: "auto", PublicationName: "pub", Tables: []string{"public.a", "public.b"}}, zerolog.Nop()); err != nil {
 		t.Fatalf("auto tables: %v", err)

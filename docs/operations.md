@@ -274,7 +274,7 @@ capacity, latency, or rate-limit budgets for a specific deployment.
 | `WALERA_WAL_SLOT_HEADROOM_MIN`                | `wal.slot_headroom_min`                   | `2`           | Free-slots threshold for the startup warning.                        | `2`                  |
 | `WALERA_WAL_NAIVE_TIMESTAMP_ASSUME_UTC`       | `wal.naive_timestamp_assume_utc`          | `true`        | Interpret naive TIMESTAMP as UTC.                                    | `true`               |
 | `WALERA_WAL_BOOTSTRAP_MODE`                   | `wal.bootstrap.mode`                      | `auto`        | Publication bootstrap policy: `auto`, `verify`, or `off`.            | `verify`             |
-| `WALERA_WAL_BOOTSTRAP_TABLES`                 | `wal.bootstrap.tables`                    | `[]`          | Schema-qualified tables when `bootstrap.mode=auto`.                  | `public.orders,public.invoices` |
+| `WALERA_WAL_BOOTSTRAP_TABLES`                 | `wal.bootstrap.tables`                    | `[]`          | Required when `bootstrap.mode=auto`. Schema-qualified tables to publish. | `public.orders,public.invoices` |
 | `WALERA_WAL_BOOTSTRAP_CREATE_ROLES`           | `wal.bootstrap.create_roles`              | `false`       | Create `walera_repl`/`walera_admin` roles (dev convenience).         | `false`              |
 | `WALERA_WAL_RECONNECT_RESET_AFTER_SUCCESS_DURATION` | `wal.reconnect.reset_after_success_duration` | `60s`   | Healthy-run duration that resets the attempt counter.                | `60s`                |
 | `WALERA_WAL_LAG_SAMPLE_INTERVAL`              | `wal.lag_sample_interval`                 | `5s`          | Cadence for `pg_wal_lsn_diff` polling.                               | `5s`                 |

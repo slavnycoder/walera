@@ -13,6 +13,7 @@ func newK(t *testing.T) *koanf.Koanf {
 	t.Helper()
 	k := koanf.New(".")
 	wal.ApplyDefaults(k)
+	_ = k.Set("wal.bootstrap.tables", []string{"public.orders"})
 	return k
 }
 
@@ -106,6 +107,16 @@ func TestLoadConfig_InvalidBootstrapMode(t *testing.T) {
 	_, err := wal.LoadConfig(k)
 	if err == nil || !strings.Contains(err.Error(), "wal.bootstrap.mode") {
 		t.Fatalf("LoadConfig: err = %v; want bootstrap.mode error", err)
+	}
+}
+
+func TestLoadConfig_AutoModeRequiresTables(t *testing.T) {
+	k := newK(t)
+	_ = k.Set("wal.bootstrap.mode", "auto")
+	_ = k.Set("wal.bootstrap.tables", []string{})
+	_, err := wal.LoadConfig(k)
+	if err == nil || !strings.Contains(err.Error(), "wal.bootstrap.tables") {
+		t.Fatalf("LoadConfig: err = %v; want wal.bootstrap.tables required", err)
 	}
 }
 

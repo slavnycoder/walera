@@ -15,6 +15,7 @@
 # Tunables an operator commonly changes per environment:
 #   - log.level                          (debug | info | warn | error)
 #   - wal.publication_name               (must match migrations/001_publication.sql)
+#   - wal.bootstrap.mode=verify: publication is DBA-managed (migrations/001_publication.sql)
 #   - wal.slot_headroom_min              (raise to 5+ for shared PG)
 #   - wal.reconnect.*                    (D4-02)
 #   - metrics.sample_interval            (D4-12; 30s is fine for most fleets)
@@ -57,6 +58,11 @@ data:
       # Minimum free replication slots before a startup warning is emitted.
       # See spec §10.4 and OP-06: max_replication_slots >= ceil(N*1.25) + reserved + 2.
       slot_headroom_min: 2
+
+      # Publication is DBA-managed via migrations/001_publication.sql — Walera
+      # only verifies it exists and has tables; it never creates FOR ALL TABLES.
+      bootstrap:
+        mode: verify
 
       # When true, naive timestamps (TIMESTAMP WITHOUT TIME ZONE) are
       # interpreted as UTC. Set to false only if your application stores
