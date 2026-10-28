@@ -23,14 +23,23 @@ func TestLoadConfig_Defaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadConfig: %v", err)
 	}
-	if cfg.DefaultTTLSeconds != 0 {
-		t.Errorf("DefaultTTLSeconds = %d; want 0 (periodic refresh opt-in)", cfg.DefaultTTLSeconds)
+	if cfg.DefaultTTLSeconds != 60 {
+		t.Errorf("DefaultTTLSeconds = %d; want 60 (refresh is always on)", cfg.DefaultTTLSeconds)
 	}
 	if cfg.HealthChannel != "_health" {
 		t.Errorf("HealthChannel = %q; want _health", cfg.HealthChannel)
 	}
 	if cfg.Breaker.WindowBuckets != 30 {
 		t.Errorf("Breaker.WindowBuckets = %d; want 30", cfg.Breaker.WindowBuckets)
+	}
+}
+
+func TestLoadConfig_RejectsZeroTTL(t *testing.T) {
+	k := newK(t)
+	_ = k.Set("auth.default_ttl_seconds", 0)
+	_, err := auth.LoadConfig(k)
+	if err == nil || !strings.Contains(err.Error(), "auth.default_ttl_seconds") {
+		t.Fatalf("LoadConfig: err = %v; want auth.default_ttl_seconds rejected", err)
 	}
 }
 

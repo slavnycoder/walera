@@ -29,24 +29,18 @@ func buildRunnables(a *App, slotName wal.SlotName) []Runnable {
 		},
 	}
 
-	if a.Config.Auth.DefaultTTLSeconds > 0 {
-		runs = append(runs, Runnable{
-			Name: "auth-stale-watcher",
-			Run: func(ctx context.Context) error {
-				a.SubRegistry.WatchBreaker(
-					ctx,
-					a.Breaker,
-					a.Config.Auth.Breaker.StaleRefreshJitter,
-					a.Config.Auth.DefaultTTLSeconds,
-				)
-				return nil
-			},
-		})
-	} else {
-		a.Logger.Info().
-			Str("docs", "https://github.com/walera/walera/blob/master/docs/auth.md").
-			Msg("auth periodic-refresh disabled (auth.default_ttl_seconds is 0 or unset)")
-	}
+	runs = append(runs, Runnable{
+		Name: "auth-stale-watcher",
+		Run: func(ctx context.Context) error {
+			a.SubRegistry.WatchBreaker(
+				ctx,
+				a.Breaker,
+				a.Config.Auth.Breaker.StaleRefreshJitter,
+				a.Config.Auth.DefaultTTLSeconds,
+			)
+			return nil
+		},
+	})
 
 	runs = append(runs,
 		Runnable{

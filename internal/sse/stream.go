@@ -111,11 +111,9 @@ func (h *Handler) headersAndPreamble(
 
 	h.authRegistry.Add(authSub)
 
-	if h.authCfg.DefaultTTLSeconds > 0 {
-		safego.Go("auth-refresh-"+sub.ID(), func() {
-			authSub.RefreshLoop(r.Context())
-		})
-	}
+	safego.Go("auth-refresh-"+sub.ID(), func() {
+		authSub.RefreshLoop(r.Context())
+	})
 
 	h.writeSSEHeaders(w, r)
 
