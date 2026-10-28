@@ -104,7 +104,7 @@ func (s *Subscriber) WireSendFunc(fn func(frame []byte) bool) {
 	s.sendFunc.Store(fn)
 }
 
-func (s *Subscriber) send(frame []byte) bool {
+func (s *Subscriber) Send(frame []byte) bool {
 	v := s.sendFunc.Load()
 	if v == nil {
 		return false

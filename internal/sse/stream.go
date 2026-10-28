@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/jackc/pglogrepl"
@@ -25,6 +26,8 @@ func (h *Handler) writeSSEHeaders(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(http.StatusOK)
 }
+
+var preludeFrame = []byte("retry: 15000\n\n")
 
 func (h *Handler) runWriter(
 	w http.ResponseWriter,
@@ -53,17 +56,7 @@ func (h *Handler) runWriter(
 		}
 	}
 
-	doneCh, tcpConn, ok := h.mainLoop(w, r, sub, initialFrame)
-
-	if tcpConn != nil {
-		defer func() { _ = tcpConn.Close() }()
-	}
-	if !ok {
-		return
-	}
-	defer h.bc.Deregister(sub)
-
-	h.finalizeError(r, sub, doneCh)
+	h.stream(w, r, sub, initialFrame)
 }
 
 func (h *Handler) headersAndPreamble(
@@ -74,18 +67,13 @@ func (h *Handler) headersAndPreamble(
 	startLSN pglogrepl.LSN,
 	hs handshakeResult,
 ) (sub *router.Subscriber, authSub *auth.Subscriber, err error) {
-	bufCap := h.routerCfg.ExactBuffer
-	if kind == router.KindWildcard {
-		bufCap = h.routerCfg.WildcardBuffer
-	}
 	sub = router.NewSubscriber(
 		router.SubscriberConfig{
-			Kind:      kind,
-			Schema:    "public",
-			Table:     table,
-			PK:        pk,
-			StartLSN:  startLSN,
-			BufferCap: bufCap,
+			Kind:     kind,
+			Schema:   "public",
+			Table:    table,
+			PK:       pk,
+			StartLSN: startLSN,
 		},
 		router.SubscriberDeps{Parent: r.Context()},
 	)
@@ -128,108 +116,94 @@ func (h *Handler) headersAndPreamble(
 	return sub, authSub, nil
 }
 
-func (h *Handler) mainLoop(
-	w http.ResponseWriter,
-	r *http.Request,
-	sub *router.Subscriber,
-	initialFrame []byte,
-) (doneCh <-chan struct{}, tcpConn *net.TCPConn, ok bool) {
+// stream owns the response on the handler's goroutine for the subscriber's
+// lifetime. The router only enqueues (non-blocking), so a slow client stalls
+// nobody but itself and is dropped by the write deadline.
+func (h *Handler) stream(w http.ResponseWriter, r *http.Request, sub *router.Subscriber, initialFrame []byte) {
 	rc := http.NewResponseController(w)
-	tcpConn, hijackErr := hijackTCPConn(rc)
-	if hijackErr != nil {
+	connectedAt := time.Now()
+	kind := sub.KindString()
 
-		h.logger.Warn().Err(hijackErr).
-			Str("subscriber_id", sub.ID()).
-			Msg("sse hijack failed; cannot serve")
-		h.metrics.SubscriberDisconnects("client_closed").Inc()
-		return nil, nil, false
+	queueCap := h.routerCfg.ExactBuffer
+	if sub.Kind() == router.KindWildcard {
+		queueCap = h.routerCfg.WildcardBuffer
+	}
+	queue := make(chan []byte, queueCap)
+	sub.WireSendFunc(func(frame []byte) bool {
+		select {
+		case queue <- frame:
+			return true
+		default:
+			return false
+		}
+	})
+
+	write := func(frames ...[]byte) error {
+		_ = rc.SetWriteDeadline(time.Now().Add(h.cfg.WriteTimeout))
+		for _, f := range frames {
+			if _, err := w.Write(f); err != nil {
+				return err
+			}
+		}
+		return rc.Flush()
 	}
 
-	if len(initialFrame) > 0 {
-		if !h.writeInitialFrame(sub, tcpConn, w, rc, initialFrame) {
-			return nil, tcpConn, false
-		}
-	}
-
-	doneCh, attachErr := h.pool.Attach(sub, tcpConn, w, rc)
-	if attachErr != nil {
-
-		h.logger.Warn().Err(attachErr).
-			Str("subscriber_id", sub.ID()).
-			Msg("sse pool Attach failed")
-		reason := "shutdown"
-		if !errors.Is(attachErr, errPoolClosed) {
-			reason = "client_closed"
-		}
+	reason := "client_closed"
+	defer func() {
+		h.metrics.SubscriberLifetime().Observe(time.Since(connectedAt).Seconds())
 		h.metrics.SubscriberDisconnects(reason).Inc()
-		return nil, tcpConn, false
+		if reason == "slow_consumer" {
+			h.metrics.SlowClientDrops().Inc()
+		}
+	}()
+
+	if err := write(preludeFrame, initialFrame); err != nil {
+		sub.Drop(reason)
+		return
 	}
 	h.bc.Register(sub)
-	return doneCh, tcpConn, true
-}
+	defer h.bc.Deregister(sub)
 
-// writeInitialFrame writes the auth-supplied initial_data SSE frame
-// synchronously, before the pool worker takes over the connection. Mirrors
-// the prelude write in WriterPool.Attach: prefers the hijacked tcpConn,
-// falls back to respWriter+rc when hijack returned (nil, nil). Returns
-// false on any write/flush error after recording a client_closed disconnect.
-// Content is never logged (PII); only byte count on failure.
-func (h *Handler) writeInitialFrame(sub *router.Subscriber, tcpConn *net.TCPConn, w http.ResponseWriter, rc *http.ResponseController, frame []byte) bool {
-	if tcpConn != nil {
-		_ = tcpConn.SetWriteDeadline(time.Now().Add(h.cfg.WriteTimeout))
-		if _, werr := tcpConn.Write(frame); werr != nil {
-			_ = tcpConn.SetWriteDeadline(time.Time{})
-			h.logger.Warn().Err(werr).
-				Str("subscriber_id", sub.ID()).
-				Int("frame_bytes", len(frame)).
-				Msg("sse initial_data write failed")
-			h.metrics.SubscriberDisconnects("client_closed").Inc()
-			return false
-		}
-		_ = tcpConn.SetWriteDeadline(time.Time{})
-		return true
-	}
-
-	if w == nil {
-		return true
-	}
-	if rc != nil {
-		_ = rc.SetWriteDeadline(time.Now().Add(h.cfg.WriteTimeout))
-	}
-	if _, werr := w.Write(frame); werr != nil {
-		h.logger.Warn().Err(werr).
-			Str("subscriber_id", sub.ID()).
-			Int("frame_bytes", len(frame)).
-			Msg("sse initial_data write failed")
-		h.metrics.SubscriberDisconnects("client_closed").Inc()
-		return false
-	}
-	if rc != nil {
-		if ferr := rc.Flush(); ferr != nil {
-			h.logger.Warn().Err(ferr).
-				Str("subscriber_id", sub.ID()).
-				Int("frame_bytes", len(frame)).
-				Msg("sse initial_data flush failed")
-			h.metrics.SubscriberDisconnects("client_closed").Inc()
-			return false
-		}
-		_ = rc.SetWriteDeadline(time.Time{})
-	}
-	return true
-}
-
-func (h *Handler) finalizeError(r *http.Request, sub *router.Subscriber, doneCh <-chan struct{}) {
-
-	select {
-	case <-doneCh:
-	case <-r.Context().Done():
-
-		sub.Drop("client_closed")
+	hb := time.NewTicker(h.cfg.HeartbeatInterval)
+	defer hb.Stop()
+	for {
 		select {
-		case <-doneCh:
-		case <-time.After(h.cfg.WriteTimeout):
+		case frame := <-queue:
+			if err := write(frame); err != nil {
+				reason = writeFailureReason(err)
+				sub.Drop(reason)
+				return
+			}
+			h.metrics.EventsSent(kind).Inc()
+			hb.Reset(h.cfg.HeartbeatInterval)
+		case <-hb.C:
+			if err := write(h.enc.EncodeHeartbeat()); err != nil {
+				reason = writeFailureReason(err)
+				sub.Drop(reason)
+				return
+			}
+		case <-r.Context().Done():
+			sub.Drop(reason)
+			return
+		case <-sub.Done():
+			// Queued frames are discarded: after a revoke they carry the old grant.
+			switch reason = sub.Reason(); reason {
+			case "", "client_closed":
+				reason = "client_closed"
+			case "shutdown":
+				_ = write(h.enc.EncodeShutdown())
+			default:
+				_ = write(h.enc.EncodeError(reason))
+			}
+			return
 		}
 	}
+}
 
-	sub.Drop("client_closed")
+func writeFailureReason(err error) string {
+	var ne net.Error
+	if errors.Is(err, os.ErrDeadlineExceeded) || (errors.As(err, &ne) && ne.Timeout()) {
+		return "slow_consumer"
+	}
+	return "client_closed"
 }

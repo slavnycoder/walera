@@ -2,8 +2,6 @@ package sse
 
 import (
 	"encoding/json"
-	"errors"
-	"net"
 	"net/http"
 	"regexp"
 
@@ -20,34 +18,6 @@ import (
 type broadcaster interface {
 	Register(sub *router.Subscriber)
 	Deregister(sub *router.Subscriber)
-}
-
-func hijackTCPConn(rc *http.ResponseController) (*net.TCPConn, error) {
-	conn, bufrw, err := rc.Hijack()
-	if err != nil {
-		if errors.Is(err, http.ErrNotSupported) {
-
-			return nil, nil
-		}
-		return nil, err
-	}
-	if bufrw != nil {
-		if buffered := bufrw.Reader.Buffered(); buffered > 0 {
-			_, _ = bufrw.Reader.Discard(buffered)
-		}
-
-		if ferr := bufrw.Writer.Flush(); ferr != nil {
-			_ = conn.Close()
-			return nil, ferr
-		}
-	}
-	tcpConn, ok := conn.(*net.TCPConn)
-	if !ok {
-
-		_ = conn.Close()
-		return nil, errHijackedConnNotTCP
-	}
-	return tcpConn, nil
 }
 
 var tableNameRe = regexp.MustCompile(`^[a-z_][a-z0-9_]*$`)
@@ -68,7 +38,6 @@ type Handler struct {
 	routerCfg        router.Config
 	cfg              Config
 	enc              *Encoder
-	pool             *WriterPool
 	authClient       *auth.Client
 	limits           *limits.Limits
 	authRegistry     *auth.Subscribers
@@ -91,8 +60,6 @@ type Deps struct {
 
 	Limits *limits.Limits
 
-	Pool *WriterPool
-
 	Logger zerolog.Logger
 
 	Metrics *metrics.Registry
@@ -111,9 +78,6 @@ func validateDeps(deps Deps) {
 	if deps.Limits == nil {
 		panic("sse.NewHandler: Deps.Limits is required")
 	}
-	if deps.Pool == nil {
-		panic("sse.NewHandler: Deps.Pool is required")
-	}
 	if deps.Metrics == nil {
 		panic("sse.NewHandler: Deps.Metrics is required")
 	}
@@ -126,7 +90,6 @@ func NewHandler(cfg Config, deps Deps) *Handler {
 		routerCfg:        cfg.Router,
 		cfg:              cfg,
 		enc:              NewEncoder(cfg.MaxPayloadBytes),
-		pool:             deps.Pool,
 		authClient:       deps.Auth.Client,
 		limits:           deps.Limits,
 		authRegistry:     deps.Auth.Subscribers,

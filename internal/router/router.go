@@ -287,7 +287,7 @@ func (b *Broadcaster) dispatchEvent(tx wal.Tx, sub *Subscriber, indices []int) (
 		return 0, 0
 	}
 
-	if !sub.send(frame) {
+	if !sub.Send(frame) {
 		b.metrics.TxDropped("slow_consumer").Inc()
 		sub.Drop("slow_consumer")
 		b.log.Warn().

@@ -46,13 +46,6 @@ func newHandlerPanicValidDeps(t *testing.T) (Config, Deps) {
 		GlobalConcurrent:     1024,
 		PerUserConcurrentMax: 10,
 	}, limits.Deps{Logger: logger, Metrics: m})
-	enc := NewEncoder(10 * 1024 * 1024)
-	pool := NewPool(PoolConfig{
-		PoolFactor:   1,
-		SubQueueSize: 4,
-	}, PoolDeps{Encoder: enc, Metrics: newFakeMetrics(), Logger: logger})
-	t.Cleanup(func() { _ = pool.Shutdown(context.Background()) })
-
 	cfg := Config{
 		Addr:              ":0",
 		HeartbeatInterval: 15 * time.Second,
@@ -71,7 +64,6 @@ func newHandlerPanicValidDeps(t *testing.T) (Config, Deps) {
 			Subscribers: authReg,
 		},
 		Limits:  lim,
-		Pool:    pool,
 		Logger:  logger,
 		Metrics: m,
 	}
@@ -104,11 +96,6 @@ func TestNewHandler_PanicsOnNilDeps(t *testing.T) {
 			name:    "Limits",
 			mutate:  func(d *Deps) { d.Limits = nil },
 			wantMsg: "sse.NewHandler: Deps.Limits is required",
-		},
-		{
-			name:    "Pool",
-			mutate:  func(d *Deps) { d.Pool = nil },
-			wantMsg: "sse.NewHandler: Deps.Pool is required",
 		},
 		{
 			name:    "Metrics",

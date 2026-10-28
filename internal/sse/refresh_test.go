@@ -483,12 +483,6 @@ func newRefreshFwdHandler(t *testing.T, fwdHeaders []string) (*Handler, *fakeAut
 	authClient := auth.New(authCfg, auth.Deps{Logger: logger, Breaker: breaker, Metrics: m})
 	lim := limits.New(limits.Config{GlobalConcurrent: 1024, PerUserConcurrentMax: 10}, limits.Deps{Logger: logger, Metrics: m})
 	authReg := auth.NewSubscribers(auth.SubscribersDeps{Logger: logger, Metrics: m})
-	enc := NewEncoder(10 << 20)
-	pool := NewPool(PoolConfig{
-		PoolFactor: 1, SubQueueSize: 8, MaxWaitMs: 2, WriteTimeout: 5 * time.Second,
-		HeartbeatInterval: 200 * time.Millisecond, DrainThresholdSubs: 1,
-	}, PoolDeps{Encoder: enc, Metrics: newFakeMetrics(), Logger: logger})
-	t.Cleanup(func() { _ = pool.Shutdown(context.Background()) })
 	cfg := Config{
 		MaxPayloadBytes: 10 << 20, WriteTimeout: 5 * time.Second, HeartbeatInterval: 200 * time.Millisecond,
 		Router: router.Config{ExactBuffer: 16, WildcardBuffer: 32, MaxChangesPerTx: 10000, HeartbeatInterval: 200 * time.Millisecond},
@@ -497,7 +491,7 @@ func newRefreshFwdHandler(t *testing.T, fwdHeaders []string) (*Handler, *fakeAut
 	h := NewHandler(cfg, Deps{
 		Broadcaster: &fakeBroadcaster{},
 		Auth:        AuthDeps{Client: authClient, Subscribers: authReg},
-		Limits:      lim, Pool: pool, Logger: logger, Metrics: m,
+		Limits:      lim, Logger: logger, Metrics: m,
 	})
 	return h, backend, authReg, authClient, breaker
 }

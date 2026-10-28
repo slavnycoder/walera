@@ -120,7 +120,6 @@ type testHandlerKit struct {
 	authReg    *auth.Subscribers
 	breaker    *auth.Breaker
 	authClient *auth.Client
-	pool       *WriterPool
 }
 
 func newTestHandler(t *testing.T, cors []string, lcfg *limits.Config) *testHandlerKit {
@@ -185,22 +184,6 @@ func newTestHandler(t *testing.T, cors []string, lcfg *limits.Config) *testHandl
 		Metrics: m,
 	})
 
-	enc := NewEncoder(cfg.MaxPayloadBytes)
-	pool := NewPool(PoolConfig{
-		PoolFactor:   1,
-		SubQueueSize: 8,
-		MaxWaitMs:    2,
-		WriteTimeout: cfg.WriteTimeout,
-
-		HeartbeatInterval:  cfg.HeartbeatInterval,
-		DrainThresholdSubs: 1,
-	}, PoolDeps{
-		Encoder: enc,
-		Metrics: newFakeMetrics(),
-		Logger:  logger,
-	})
-	t.Cleanup(func() { _ = pool.Shutdown(context.Background()) })
-
 	cfg.Router = rcfg
 	cfg.Auth = authCfg
 	h := NewHandler(cfg, Deps{
@@ -210,7 +193,6 @@ func newTestHandler(t *testing.T, cors []string, lcfg *limits.Config) *testHandl
 			Subscribers: authReg,
 		},
 		Limits:  lim,
-		Pool:    pool,
 		Logger:  logger,
 		Metrics: m,
 	})
@@ -222,7 +204,6 @@ func newTestHandler(t *testing.T, cors []string, lcfg *limits.Config) *testHandl
 		authReg:    authReg,
 		breaker:    breaker,
 		authClient: authClient,
-		pool:       pool,
 	}
 }
 
@@ -1648,7 +1629,7 @@ func containsCSV(vals []string, target string) bool {
 	return false
 }
 
-func TestHandler_HijackedTCPConn_WireBytes(t *testing.T) {
+func TestHandler_RawWireBytes(t *testing.T) {
 	t.Parallel()
 
 	kit := newTestHandler(t, nil, nil)

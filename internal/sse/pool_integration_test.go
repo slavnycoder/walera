@@ -3,7 +3,6 @@ package sse
 import (
 	"context"
 	"flag"
-	"io"
 	"net"
 	"net/http"
 	"runtime"
@@ -13,35 +12,9 @@ import (
 	"time"
 
 	"github.com/rs/zerolog"
-
-	"github.com/walera/walera/internal/metrics"
 )
 
 var stressSubs = flag.Int("stress-subs", 100, "subscriber count for slow-client stress test (60/20/20 split)")
-
-func readSubscriberDisconnects(t *testing.T, reg *metrics.Registry, reason string) float64 {
-	t.Helper()
-	mfs, err := reg.Gatherer().Gather()
-	if err != nil {
-		t.Fatalf("Gather: %v", err)
-	}
-	for _, mf := range mfs {
-		if mf.GetName() != "walera_subscriber_disconnects_total" {
-			continue
-		}
-		for _, m := range mf.GetMetric() {
-			for _, lp := range m.GetLabel() {
-				if lp.GetName() == "reason" && lp.GetValue() == reason {
-					if c := m.GetCounter(); c != nil {
-						return c.GetValue()
-					}
-					return 0
-				}
-			}
-		}
-	}
-	return 0
-}
 
 type blockingTCPPair struct {
 	serverConn *net.TCPConn
@@ -469,54 +442,6 @@ func TestPool_Shutdown_OneSubBlocked_OthersStillReceive(t *testing.T) {
 		t.Errorf("Shutdown elapsed = %v; want ≤ %v (raceEnabled=%v)", elapsed, timingBound, raceEnabled)
 	}
 	t.Logf("Shutdown elapsed = %v (raceEnabled=%v, bound=%v)", elapsed, raceEnabled, timingBound)
-}
-
-func TestHandler_RejectsAttachWhenPoolShuttingDown(t *testing.T) {
-	t.Parallel()
-
-	kit := newTestHandler(t, nil, nil)
-	validMapBackend(kit.backend)
-	srv := newTestServer(t, kit.h)
-
-	baseShutdown := readSubscriberDisconnects(t, kit.h.metrics, "shutdown")
-	baseClientClosed := readSubscriberDisconnects(t, kit.h.metrics, "client_closed")
-
-	shutCtx, shutCancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer shutCancel()
-	if err := kit.pool.Shutdown(shutCtx); err != nil {
-		t.Fatalf("kit.pool.Shutdown: %v", err)
-	}
-
-	reqCtx, reqCancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer reqCancel()
-	req, _ := http.NewRequestWithContext(reqCtx, http.MethodGet, srv.URL+"/sse/v1/users/42", nil)
-	req.Header.Set("Authorization", "Bearer valid")
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("Do() error: %v", err)
-	}
-	defer resp.Body.Close()
-
-	closed := make(chan struct{})
-	go func() {
-		_, _ = io.Copy(io.Discard, resp.Body)
-		close(closed)
-	}()
-	select {
-	case <-closed:
-	case <-time.After(2 * time.Second):
-		t.Fatalf("response body did not close within 2s after pool shutdown")
-	}
-
-	gotShutdown := readSubscriberDisconnects(t, kit.h.metrics, "shutdown") - baseShutdown
-	gotClientClosed := readSubscriberDisconnects(t, kit.h.metrics, "client_closed") - baseClientClosed
-
-	if gotShutdown != 1 {
-		t.Errorf("SubscriberDisconnects(\"shutdown\") delta = %v; want 1", gotShutdown)
-	}
-	if gotClientClosed != 0 {
-		t.Errorf("SubscriberDisconnects(\"client_closed\") delta = %v; want 0 (errors.Is(attachErr, errPoolClosed) must take the shutdown branch)", gotClientClosed)
-	}
 }
 
 func TestPool_Shutdown_1kSubs_CompletesWithin500ms(t *testing.T) {

@@ -20,6 +20,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Router is fail-closed on a missing filter.** A subscriber registered
   without a whitelist filter now receives nothing instead of unfiltered rows.
 
+### Changed
+
+- **SSE streams are written by their own handler goroutine.** No more
+  shared writer pool, 1 ms busy-poll, or TCP hijack: a slow client only
+  blocks itself, and in-process TLS / HTTP/2 work. Queue capacity now comes
+  from `router.exact_buffer` / `router.wildcard_buffer`;
+  `walera_events_sent_total` no longer counts heartbeats.
+
 ### Removed
 
 - Breaker-close stale-refresh fan-out (`auth.breaker.stale_refresh_jitter`,

@@ -162,7 +162,6 @@ func wireDataPlane(cfg AppConfig, logger zerolog.Logger, registry *metrics.Regis
 				Subscribers: aw.SubRegistry,
 			},
 			Limits:  aw.Limits,
-			Pool:    writerPool,
 			Logger:  logger,
 			Metrics: registry,
 		},

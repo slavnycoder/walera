@@ -115,7 +115,7 @@ func TestSubscriber_AccessorsReflectOpts(t *testing.T) {
 func TestSubscriber_SendUnwiredReturnsFalse(t *testing.T) {
 	t.Parallel()
 	sub := newTestSubscriber()
-	if sub.send([]byte("anything")) {
+	if sub.Send([]byte("anything")) {
 		t.Error("send() on unwired subscriber returned true; want false")
 	}
 }
@@ -130,10 +130,10 @@ func TestSubscriber_WireSendFuncCapturesFrames(t *testing.T) {
 		captured = append(captured, fc)
 		return true
 	})
-	if !sub.send([]byte("frame-1")) {
+	if !sub.Send([]byte("frame-1")) {
 		t.Errorf("first send returned false; want true")
 	}
-	if !sub.send([]byte("frame-2")) {
+	if !sub.Send([]byte("frame-2")) {
 		t.Errorf("second send returned false; want true")
 	}
 	if got, want := len(captured), 2; got != want {
@@ -153,13 +153,13 @@ func TestSubscriber_WireSendFuncBP01(t *testing.T) {
 
 		return calls <= 2
 	})
-	if !sub.send([]byte("a")) {
+	if !sub.Send([]byte("a")) {
 		t.Errorf("call 1: got false; want true")
 	}
-	if !sub.send([]byte("b")) {
+	if !sub.Send([]byte("b")) {
 		t.Errorf("call 2: got false; want true")
 	}
-	if sub.send([]byte("c")) {
+	if sub.Send([]byte("c")) {
 		t.Errorf("call 3: got true; want false (BP-01 simulated)")
 	}
 }
@@ -170,7 +170,7 @@ func TestSubscriber_WireSendFuncOverwrite(t *testing.T) {
 	var firstCalled, secondCalled bool
 	sub.WireSendFunc(func(_ []byte) bool { firstCalled = true; return true })
 	sub.WireSendFunc(func(_ []byte) bool { secondCalled = true; return true })
-	_ = sub.send([]byte("x"))
+	_ = sub.Send([]byte("x"))
 	if firstCalled {
 		t.Error("first wired closure was invoked after rewiring; atomic.Value swap regression")
 	}
