@@ -42,12 +42,8 @@ func TestTryRefresh_Revoked403_DropsSub(t *testing.T) {
 	}
 }
 
-// TestTryRefresh_OnDemandNotStarvedDuringBackoff proves the #3b fix: the TTL
-// backoff chain no longer holds the swap lock (refreshMu) across its sleeps.
-// While tryRefresh waits between failed retries, a concurrent on-demand
-// RefreshOwnByChannel can acquire refreshMu and swap fresh permissions — previously it
-// was starved with Busy for the whole backoff window — and the TTL chain
-// must then NOT drop the just-refreshed, healthy stream.
+// An on-demand swap during a TTL backoff sleep must succeed, and the chain must
+// not then drop the freshly refreshed stream.
 func TestTryRefresh_OnDemandNotStarvedDuringBackoff(t *testing.T) {
 	t.Parallel()
 	attemptFailed := make(chan struct{}, 1)
@@ -110,10 +106,7 @@ func TestTryRefresh_OnDemandNotStarvedDuringBackoff(t *testing.T) {
 	}
 }
 
-// TestTryRefresh_BackoffChainCoalesces proves the new dedup invariant for #3b:
-// concurrent TTL / breaker-fan-out chains are now coalesced by chainMu (not
-// refreshMu). A second tryRefresh that starts while the first is asleep in its
-// backoff must still no-op instead of launching its own backend chain.
+// A second chain started during the first one's backoff must no-op.
 func TestTryRefresh_BackoffChainCoalesces(t *testing.T) {
 	t.Parallel()
 	attemptFailed := make(chan struct{}, 1)
@@ -150,11 +143,8 @@ func TestTryRefresh_BackoffChainCoalesces(t *testing.T) {
 	// immediately without contacting the backend.
 	s.tryRefresh(context.Background())
 
-	// Discriminating assertion for #3b: while chain A sleeps in its backoff the
-	// swap lock (refreshMu) must be FREE — that is the whole point of moving the
-	// dedup to chainMu. On the pre-fix code (refreshMu held across the whole
-	// chain) this TryLock never succeeds within the backoff window and the test
-	// fails; coalescing alone (calls==2) would pass on the pre-fix code too.
+	// refreshMu must be free during chain A's backoff; the call count alone
+	// wouldn't catch a chain that holds it across sleeps.
 	acquired := false
 	deadline := time.Now().Add(200 * time.Millisecond) // < the 300ms backoff
 	for time.Now().Before(deadline) {
@@ -179,11 +169,7 @@ func TestTryRefresh_BackoffChainCoalesces(t *testing.T) {
 	}
 }
 
-// TestDropIfUnchanged gives the auth_unavailable drop guard deterministic
-// coverage (it is otherwise only reachable through a precise concurrent-swap
-// race in tryRefresh): the guard drops when the live whitelist still matches the
-// chain-start snapshot, and skips the drop when a concurrent refresh already
-// swapped a fresh whitelist in.
+// Deterministic coverage; via tryRefresh this guard needs a precise race.
 func TestDropIfUnchanged(t *testing.T) {
 	t.Parallel()
 	srv := newScriptServer(t, func(_ int64, w http.ResponseWriter, _ *http.Request) {
@@ -360,11 +346,7 @@ func TestRefreshOwnByChannel_NoMatch(t *testing.T) {
 	}
 }
 
-// TestRefreshOwnByChannel_RaceWithFilterAndTTL exercises the atomic whitelist swap under
-// concurrent WAL-hot-path reads (FilterWithLSN), on-demand refreshes (RefreshOwnByChannel),
-// and a TTL tick (tryRefresh) on the same subscriber. The backend always grants
-// the channel so the subscriber is never dropped; the test asserts -race cleanliness
-// and that the final installed whitelist is the refreshed one.
+// -race check: FilterWithLSN reads vs on-demand and TTL swaps on one subscriber.
 func TestRefreshOwnByChannel_RaceWithFilterAndTTL(t *testing.T) {
 	t.Parallel()
 	srv := newScriptServer(t, func(_ int64, w http.ResponseWriter, _ *http.Request) {

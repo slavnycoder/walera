@@ -64,20 +64,18 @@ type errorBody struct {
 }
 
 type Handler struct {
-	bc           broadcaster
-	routerCfg    router.Config
-	cfg          Config
-	enc          *Encoder
-	pool         *WriterPool
-	authClient   *auth.Client
-	limits       *limits.Limits
-	authRegistry *auth.Subscribers
-	breaker      *auth.Breaker
-	authCfg      auth.Config
-	logger       zerolog.Logger
-	metrics      *metrics.Registry
-	// corsAllowHeaders is the precomputed Access-Control-Allow-Headers string for
-	// every preflight: the base set plus any configured forwarded auth headers.
+	bc               broadcaster
+	routerCfg        router.Config
+	cfg              Config
+	enc              *Encoder
+	pool             *WriterPool
+	authClient       *auth.Client
+	limits           *limits.Limits
+	authRegistry     *auth.Subscribers
+	breaker          *auth.Breaker
+	authCfg          auth.Config
+	logger           zerolog.Logger
+	metrics          *metrics.Registry
 	corsAllowHeaders string
 }
 

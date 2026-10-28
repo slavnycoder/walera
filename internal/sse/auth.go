@@ -133,15 +133,8 @@ type handshakeResult struct {
 	perUserAcquired bool
 }
 
-// authenticate runs the shared identity sequence used by both the SSE handshake
-// and the on-demand POST /sse/v1/refresh endpoint: Bearer-token cut + forwarded
-// credentials, require-at-least-one (else 401), X-Request-ID validate/derive
-// (invalid → 400 invalid_request_id), OpenSession against channelStr, and an
-// immediate scrub of all caller credentials from our scope and the request header
-// map. On any failure it writes the response and returns ok=false. It does NOT
-// enforce admission limits or table authorization — those belong to the caller,
-// which sequences them around this call. On success it returns the authorized
-// whitelist and the request id (threaded onward for end-to-end correlation).
+// authenticate writes the error response on failure. Admission limits and table
+// authorization are the caller's job.
 func (h *Handler) authenticate(w http.ResponseWriter, r *http.Request, channelStr string) (*auth.Whitelist, string, bool) {
 	authHdr := r.Header.Get("Authorization")
 	token := ""

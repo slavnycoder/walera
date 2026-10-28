@@ -61,7 +61,6 @@ func (r *Subscribers) Len() int {
 	return len(r.subs)
 }
 
-// RefreshSummary aggregates the per-subscriber outcomes of an on-demand refresh.
 type RefreshSummary struct {
 	Matched int
 	Swapped int
@@ -69,10 +68,8 @@ type RefreshSummary struct {
 	Busy    int
 }
 
-// RefreshOwnByChannel applies fresh — the whitelist OpenSession just returned for
-// this user and channel — to the user's live subscribers on channel. No backend
-// call. Exact match on channel and userID, so a wildcard and an exact channel
-// never cross-match and one user can't touch another's stream.
+// RefreshOwnByChannel swaps fresh (from the caller's OpenSession) into userID's live
+// subs on channel. Exact match: no wildcard cross-match, no touching other users.
 func (r *Subscribers) RefreshOwnByChannel(channel, userID string, fresh *Whitelist) RefreshSummary {
 	r.mu.Lock()
 	matched := make([]*Subscriber, 0, 4)

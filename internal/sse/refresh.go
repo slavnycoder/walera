@@ -7,8 +7,6 @@ import (
 	"strings"
 )
 
-// refreshBodyMaxBytes bounds the POST /sse/v1/refresh request body. The body is
-// a tiny {"channel":"..."} object, so 1 KiB is generous.
 const refreshBodyMaxBytes = 1024
 
 type refreshRequest struct {
@@ -19,7 +17,6 @@ type refreshResponse struct {
 	Refreshed int `json:"refreshed"`
 }
 
-// serveRefreshPreflight answers the CORS preflight for POST /sse/v1/refresh.
 func (h *Handler) serveRefreshPreflight(w http.ResponseWriter, r *http.Request) {
 	if !handlePreflight(w, r, h.cfg.CORSOrigins, "POST, OPTIONS", h.corsAllowHeaders) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -30,9 +27,8 @@ func (h *Handler) serveRefreshPreflight(w http.ResponseWriter, r *http.Request) 
 // caller via OpenSession (same path as the SSE handshake) and swaps the returned
 // whitelist into the caller's own live subscriber(s) on that channel, mid-stream.
 //
-// Admission: only the global semaphore. The per-user counter caps concurrent
-// streams and is held for a stream's lifetime, so taking it here would 429 a
-// user with a full set of streams.
+// No per-user slot: that counter is held for a stream's lifetime, so taking it
+// here would 429 a user with a full set of streams.
 //
 // Status codes:
 //   - 200 {"refreshed":N}                  N subscriber(s) swapped
@@ -44,15 +40,12 @@ func (h *Handler) serveRefreshPreflight(w http.ResponseWriter, r *http.Request) 
 //   - 409 {"reason":"refresh_in_progress"} a TTL refresh holds the lock (Retry-After: 1)
 //   - 503 (status only)                    global concurrency exhausted (Retry-After: 5)
 func (h *Handler) serveRefresh(w http.ResponseWriter, r *http.Request) {
-	// 0. Global admission, before any auth work, so an accept-storm of refreshes
-	//    can't blow up goroutines or hammer the backend. Released on return.
 	if !h.limits.AcquireGlobal() {
 		h.writeStatusOnlyError(w, r, http.StatusServiceUnavailable, 5)
 		return
 	}
 	defer h.limits.ReleaseGlobal()
 
-	// 1. Parse and validate the request body.
 	r.Body = http.MaxBytesReader(w, r.Body, refreshBodyMaxBytes)
 	var req refreshRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -65,8 +58,6 @@ func (h *Handler) serveRefresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 2. Authenticate the caller via the shared identity path (the same helper the
-	//    SSE handshake uses), including the immediate credential scrub.
 	authMap, _, ok := h.authenticate(w, r, channelStr)
 	if !ok {
 		return
@@ -78,8 +69,7 @@ func (h *Handler) serveRefresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 3. Apply the whitelist OpenSession just returned to the caller's own live
-	//    subscriber(s). Revocation beats a swap; a swap beats a concurrent Busy.
+	// Revocation beats a swap; a swap beats a concurrent Busy.
 	sum := h.authRegistry.RefreshOwnByChannel(channelStr, authMap.UserID, authMap)
 	switch {
 	case sum.Matched == 0:
@@ -98,10 +88,7 @@ func (h *Handler) serveRefresh(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// parseRefreshChannel validates a POST-body channel string and returns the
-// authorization table plus the canonical channel string. It mirrors the GET-route
-// rules: "table:pk" (exact) or "table:all" (wildcard). The returned channelStr is
-// the exact string used to match live subscribers and to authorize via OpenSession.
+// parseRefreshChannel mirrors the GET-route rules: "table:pk" or "table:all".
 func parseRefreshChannel(channel string) (table, channelStr string, ok bool) {
 	tbl, id, found := strings.Cut(channel, ":")
 	if !found || !validTableName(tbl) {
@@ -124,10 +111,6 @@ func (h *Handler) writeRefreshOK(w http.ResponseWriter, r *http.Request, refresh
 	_ = json.NewEncoder(w).Encode(refreshResponse{Refreshed: refreshed})
 }
 
-// writeReasonRetry writes a {"reason":...} body with an optional Retry-After
-// header. The header must be set before WriteHeader, so it is set here and the
-// body is then delegated to writeJSONReason (the single source of truth for the
-// reason-body response).
 func (h *Handler) writeReasonRetry(w http.ResponseWriter, r *http.Request, status, retryAfterSeconds int, reason string) {
 	if retryAfterSeconds > 0 {
 		w.Header().Set("Retry-After", strconv.Itoa(retryAfterSeconds))
