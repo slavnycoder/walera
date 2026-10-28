@@ -145,7 +145,12 @@ func (h *Handler) stream(w http.ResponseWriter, r *http.Request, sub *router.Sub
 				return err
 			}
 		}
-		return rc.Flush()
+		if err := rc.Flush(); err != nil {
+			return err
+		}
+		// A pending deadline on HTTP/2 resets the stream even while idle.
+		_ = rc.SetWriteDeadline(time.Time{})
+		return nil
 	}
 
 	reason := "client_closed"
@@ -158,17 +163,36 @@ func (h *Handler) stream(w http.ResponseWriter, r *http.Request, sub *router.Sub
 	}()
 
 	if err := write(preludeFrame, initialFrame); err != nil {
+		reason = writeFailureReason(err)
 		sub.Drop(reason)
 		return
 	}
 	h.bc.Register(sub)
 	defer h.bc.Deregister(sub)
 
+	// Queued frames are discarded on drop: after a revoke they carry the old grant.
+	finish := func() {
+		switch reason = sub.Reason(); reason {
+		case "", "client_closed":
+			reason = "client_closed"
+		case "shutdown":
+			_ = write(h.enc.EncodeShutdown())
+		default:
+			_ = write(h.enc.EncodeError(reason))
+		}
+	}
+
 	hb := time.NewTicker(h.cfg.HeartbeatInterval)
 	defer hb.Stop()
 	for {
 		select {
 		case frame := <-queue:
+			select {
+			case <-sub.Done():
+				finish()
+				return
+			default:
+			}
 			if err := write(frame); err != nil {
 				reason = writeFailureReason(err)
 				sub.Drop(reason)
@@ -186,15 +210,7 @@ func (h *Handler) stream(w http.ResponseWriter, r *http.Request, sub *router.Sub
 			sub.Drop(reason)
 			return
 		case <-sub.Done():
-			// Queued frames are discarded: after a revoke they carry the old grant.
-			switch reason = sub.Reason(); reason {
-			case "", "client_closed":
-				reason = "client_closed"
-			case "shutdown":
-				_ = write(h.enc.EncodeShutdown())
-			default:
-				_ = write(h.enc.EncodeError(reason))
-			}
+			finish()
 			return
 		}
 	}

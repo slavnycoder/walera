@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -165,27 +166,112 @@ func TestStream_ServesOverTLS(t *testing.T) {
 	}
 }
 
+// gatedWriter blocks Write while gate is armed so frames can pile up in the queue.
+type gatedWriter struct {
+	mu      sync.Mutex
+	buf     strings.Builder
+	hdr     http.Header
+	gate    chan struct{}
+	blocked chan struct{}
+}
+
+func (g *gatedWriter) Header() http.Header { return g.hdr }
+func (g *gatedWriter) WriteHeader(int)     {}
+func (g *gatedWriter) Flush()              {}
+
+func (g *gatedWriter) Write(p []byte) (int, error) {
+	g.mu.Lock()
+	gate := g.gate
+	g.mu.Unlock()
+	if gate != nil {
+		close(g.blocked)
+		<-gate
+		g.mu.Lock()
+		g.gate = nil
+		g.mu.Unlock()
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.buf.Write(p)
+}
+
+func (g *gatedWriter) String() string {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.buf.String()
+}
+
 func TestStream_NoFramesAfterRevokeErrorFrame(t *testing.T) {
 	t.Parallel()
 	kit := newTestHandler(t, nil, nil)
-	validMapBackend(kit.backend)
-	srv := newTestServer(t, kit.h)
+	gw := &gatedWriter{hdr: http.Header{}, blocked: make(chan struct{})}
+	sub := router.NewSubscriber(router.SubscriberConfig{Kind: router.KindExact, Schema: "public", Table: "users", PK: "42"},
+		router.SubscriberDeps{Parent: context.Background()})
+	r := httptest.NewRequest(http.MethodGet, "/sse/v1/users/42", nil)
+	done := make(chan struct{})
+	go func() { defer close(done); kit.h.stream(gw, r, sub, nil) }()
+	kit.bc.firstSub(t)
 
-	resp := openStream(t, http.DefaultClient, srv.URL+"/sse/v1/users/42")
-	sub := kit.bc.firstSub(t)
-	_ = readUntil(t, resp.Body, len(testPrelude), 2*time.Second)
-
+	gate := make(chan struct{})
+	gw.mu.Lock()
+	gw.gate = gate
+	gw.mu.Unlock()
+	if !sub.Send([]byte("event: tx\ndata: {\"ok\":true}\n\n")) {
+		t.Fatal("Send returned false")
+	}
+	<-gw.blocked
+	for i := 0; i < 8; i++ {
+		if !sub.Send([]byte("event: tx\ndata: {\"leak\":true}\n\n")) {
+			t.Fatalf("leak Send %d returned false", i)
+		}
+	}
 	sub.Drop("auth_revoked")
-	_ = sub.Send([]byte("event: tx\ndata: {\"leak\":true}\n\n"))
+	close(gate)
+	<-done
 
-	rest, _ := io.ReadAll(resp.Body)
-	body := string(rest)
+	body := gw.String()
 	if !strings.Contains(body, `"reason":"auth_revoked"`) {
 		t.Fatalf("body = %q; want auth_revoked error frame", body)
 	}
-	if strings.Contains(body[strings.Index(body, "auth_revoked"):], "leak") {
-		t.Fatalf("frame delivered after the revoke error frame: %q", body)
+	if strings.Contains(body, "leak") {
+		t.Fatalf("frame queued before the revoke was delivered: %q", body)
 	}
+}
+
+// On HTTP/2 a leftover write deadline resets an idle stream.
+func TestStream_H2IdleLongerThanWriteTimeout(t *testing.T) {
+	t.Parallel()
+	kit := newTestHandler(t, nil, nil)
+	validMapBackend(kit.backend)
+	kit.h.cfg.WriteTimeout = 300 * time.Millisecond
+	kit.h.cfg.HeartbeatInterval = 5 * time.Second
+	mux := http.NewServeMux()
+	kit.h.Routes(mux)
+	srv := httptest.NewUnstartedServer(mux)
+	srv.EnableHTTP2 = true
+	srv.StartTLS()
+	t.Cleanup(srv.Close)
+
+	resp := openStream(t, srv.Client(), srv.URL+"/sse/v1/users/42")
+	if resp.ProtoMajor != 2 {
+		t.Fatalf("ProtoMajor = %d; want 2", resp.ProtoMajor)
+	}
+	sub := kit.bc.firstSub(t)
+	_ = readUntil(t, resp.Body, len(testPrelude), 2*time.Second)
+
+	time.Sleep(time.Second)
+	frame := "event: tx\ndata: {\"k\":1}\n\n"
+	if !sub.Send([]byte(frame)) {
+		t.Fatalf("Send returned false after idle; Reason = %q", sub.Reason())
+	}
+	body := string(readUntil(t, resp.Body, len(frame), 2*time.Second))
+	if !strings.Contains(body, frame) {
+		t.Fatalf("body = %q; want %q after idle", body, frame)
+	}
+	if got := sub.Reason(); got != "" {
+		t.Fatalf("Reason = %q; want empty (stream alive)", got)
+	}
+	sub.Drop("test")
 }
 
 // Without hijack, Server.Shutdown waits for SSE handlers; a shutdown drop must release them.
