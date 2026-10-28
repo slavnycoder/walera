@@ -86,8 +86,9 @@ Each has a defined posture.
   are rejected with `503` while the breaker is open, and an
   already-established subscription whose periodic refresh keeps
   failing (including while the breaker is open) retries with backoff
-  and then drops with `auth_unavailable`, so a grant never outlives
-  TTL + ~13s without a successful check. See
+  and then drops with `auth_unavailable`, so a revoked grant lives at
+  most initial jitter (< TTL/2) + TTL + 13s backoff + 4 ×
+  `auth.request_timeout` (≈ 1.5 × TTL + 21s at defaults). See
   [ADR 0002: Auth Model](./adr/0002-auth-model.md) for the rationale.
 - **PostgreSQL replication slot dropped or unreachable.** Walera uses a
   temporary replication slot that is created at startup and dropped
@@ -245,11 +246,10 @@ survives wire's removal.
   only needs the `CheckAuth` capability of the client, not the full
   client surface.
 - **`[]Runnable` lifecycle and explicit cleanup chain.** The runnable
-  abstraction (`runnable.go`) and the 5-step shutdown wave
-  (`lifecycle.go`) are independent of the DI strategy; they composed
-  cleanly under wire and compose cleanly under hand-wired
-  construction. The 5 `safego.Go` call sites inside `internal/app/`
-  remain the audited concurrency surface.
+  abstraction (`runnable.go`) and the shutdown wave (`lifecycle.go`)
+  are independent of the DI strategy; they composed cleanly under wire
+  and compose cleanly under hand-wired construction. Their goroutines
+  are plain `go` statements; a panic in any of them crashes the process.
 
 ### Exit criteria for returning to codegen DI
 

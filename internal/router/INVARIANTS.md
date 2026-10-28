@@ -103,7 +103,7 @@ Pre-sweep archaeology anchor: commit `de6b665` (pre-SWEEP-02 HEAD).
 ## Lifecycle & Shutdown
 
 _No additional invariants required for SWEEP-02 — `Shutdown`'s
-copy-before-unlock + per-sub `safego.Go` fan-out is captured directly
+copy-before-unlock + per-sub goroutine fan-out is captured directly
 in `(*Broadcaster).Shutdown`'s godoc and in doc.go invariants 4 + 8._
 
 ## State Machine Ordering

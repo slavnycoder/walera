@@ -6,18 +6,10 @@ narrative).
 
 ## Concurrency
 
-§1 — safego.Go production call-site count.
-The package contains exactly 5 production `safego.Go(...)` call sites,
-all in `lifecycle.go`:
-
-- `lifecycle.go:63` — the single dispatch site for every Runnable,
-  parameterised by `r.Name`.
-- `lifecycle.go:220` — `"shutdown-pool"`.
-- `lifecycle.go:247` — `"shutdown-pprof"` (only when `a.PProfServer != nil`).
-- `lifecycle.go:269` — `"shutdown-http"`.
-- `lifecycle.go:290` — `"shutdown-broadcast"`.
-
-Tests assert the count is 5. Anchor: `lifecycle.go` (pre-sweep `de6b665`).
+§1 — Goroutines are plain `go` statements; panics are not recovered.
+`lifecycle.go` starts one goroutine per Runnable and one per shutdown
+step (`pprof` when `a.PProfServer != nil`, `http`, `broadcast`). A panic
+in any of them crashes the process so the orchestrator restarts it.
 
 §2 — DI-03 cycle break encapsulated inside wireAuth.
 The sole production call site of `authClient.SetBreaker(breaker)` is

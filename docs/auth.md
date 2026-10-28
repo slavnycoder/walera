@@ -260,8 +260,10 @@ sustained), the breaker opens and Walera shifts posture:
 - **Established subscriptions** re-check permissions every TTL. If the
   backend is unreachable (including while the breaker is open), Walera
   retries with backoff (1s, 3s, 9s) and then drops the stream with
-  `auth_unavailable`. A grant never outlives TTL + ~13s without a
-  successful check. This is fail-closed.
+  `auth_unavailable`. Worst case, a grant outlives its revocation by the
+  initial refresh jitter (< TTL/2) + TTL + 13s of backoff + 4 ×
+  `auth.request_timeout` (≈ 1.5 × TTL + 21s at defaults). This is
+  fail-closed.
 - **New subscription attempts** are rejected with `503` while the
   breaker is open, so reconnecting clients do not hammer a failing
   backend.

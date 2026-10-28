@@ -188,7 +188,7 @@ jobs:
         # Scoped to the packages swept for planning-ID hygiene to date
         # (v2.1 hot-path set + v2.4 SWEEP-01..05 + testbench cleanup).
         # The token pattern was widened in v2.4; legacy packages not yet
-        # swept (config, health, limits, metrics, safego, wal, walconn)
+        # swept (config, health, limits, metrics, wal, walconn)
         # carry pre-existing planning IDs and are folded in by a future
         # density/hygiene sweep rather than gated retroactively here.
         run: |
