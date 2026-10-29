@@ -14,8 +14,6 @@ import (
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 	"github.com/testcontainers/testcontainers-go/wait"
-
-	"github.com/walera/walera/internal/walconn"
 )
 
 func bootPGSuper(t *testing.T) (host string, port string) {
@@ -57,14 +55,14 @@ func dsnFor(host, port, role, password string) string {
 		role, password, host, port)
 }
 
-func connAs(t *testing.T, ctx context.Context, dsn string) walconn.AdminConn {
+func connAs(t *testing.T, ctx context.Context, dsn string) *pgx.Conn {
 	t.Helper()
 	conn, err := pgx.Connect(ctx, dsn)
 	if err != nil {
 		t.Fatalf("pgx.Connect as role: %v", err)
 	}
 	t.Cleanup(func() { _ = conn.Close(context.Background()) })
-	return walconn.AdminConn(conn)
+	return conn
 }
 
 func TestVerifyReplicationRole_AllCases(t *testing.T) {
