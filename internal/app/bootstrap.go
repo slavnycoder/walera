@@ -131,6 +131,36 @@ func errAllTablesPublication(name string) error {
 	)
 }
 
+// publicationHasSchemas reports whether the publication includes whole
+// schemas (FOR TABLES IN SCHEMA, PG 15+). PG 14 has no such publications.
+func publicationHasSchemas(ctx context.Context, conn bootstrapDB, name string) (bool, error) {
+	var version int
+	if err := conn.QueryRow(ctx,
+		"SELECT current_setting('server_version_num')::int",
+	).Scan(&version); err != nil {
+		return false, fmt.Errorf("server version check failed: %w", err)
+	}
+	if version < 150000 {
+		return false, nil
+	}
+	var has bool
+	if err := conn.QueryRow(ctx,
+		"SELECT EXISTS(SELECT 1 FROM pg_publication_namespace pn JOIN pg_publication p ON p.oid = pn.pnpubid WHERE p.pubname = $1)",
+		name,
+	).Scan(&has); err != nil {
+		return false, fmt.Errorf("publication schema check failed (%s): %w", name, err)
+	}
+	return has, nil
+}
+
+func errSchemaPublication(name string) error {
+	return fmt.Errorf(
+		"publication %q includes FOR TABLES IN SCHEMA, which streams every table in the schema — "+
+			"recreate it with an explicit list: DROP PUBLICATION %s; CREATE PUBLICATION %s FOR TABLE <list>",
+		name, name, name,
+	)
+}
+
 func bootstrapPublication(ctx context.Context, conn bootstrapDB, cfg bootstrapConfig, logger zerolog.Logger) error {
 	switch cfg.Mode {
 	case "off":
@@ -147,6 +177,11 @@ func bootstrapPublication(ctx context.Context, conn bootstrapDB, cfg bootstrapCo
 		}
 		if allTables {
 			return errAllTablesPublication(cfg.PublicationName)
+		}
+		if hasSchemas, err := publicationHasSchemas(ctx, conn, cfg.PublicationName); err != nil {
+			return err
+		} else if hasSchemas {
+			return errSchemaPublication(cfg.PublicationName)
 		}
 		var tableCount int
 		if err := conn.QueryRow(ctx,
@@ -176,6 +211,11 @@ func bootstrapPublication(ctx context.Context, conn bootstrapDB, cfg bootstrapCo
 		if exists {
 			if allTables {
 				return errAllTablesPublication(cfg.PublicationName)
+			}
+			if hasSchemas, err := publicationHasSchemas(ctx, conn, cfg.PublicationName); err != nil {
+				return err
+			} else if hasSchemas {
+				return errSchemaPublication(cfg.PublicationName)
 			}
 
 			var tableCount int

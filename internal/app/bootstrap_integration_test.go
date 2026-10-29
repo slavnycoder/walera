@@ -65,6 +65,28 @@ func connAs(t *testing.T, ctx context.Context, dsn string) *pgx.Conn {
 	return conn
 }
 
+func TestPublicationHasSchemas_RealPG(t *testing.T) {
+	host, port := bootPGSuper(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	conn := connAs(t, ctx, dsnFor(host, port, "walera", "walera"))
+	for _, ddl := range []string{
+		"CREATE TABLE public.t1 (id int primary key)",
+		"CREATE PUBLICATION pub_schema FOR TABLES IN SCHEMA public",
+		"CREATE PUBLICATION pub_list FOR TABLE public.t1",
+	} {
+		if _, err := conn.Exec(ctx, ddl); err != nil {
+			t.Fatalf("%s: %v", ddl, err)
+		}
+	}
+	for name, want := range map[string]bool{"pub_schema": true, "pub_list": false} {
+		got, err := publicationHasSchemas(ctx, conn, name)
+		if err != nil || got != want {
+			t.Errorf("%s: got %v, %v; want %v, nil", name, got, err, want)
+		}
+	}
+}
+
 func TestVerifyReplicationRole_AllCases(t *testing.T) {
 	host, port := bootPGSuper(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)

@@ -176,12 +176,12 @@ func TestBootstrapPublicationModes(t *testing.T) {
 		t.Fatalf("off: %v", err)
 	}
 
-	verifyOK := &fakeBootstrapDB{rowResults: []fakeRow{{values: []any{false}}, {values: []any{2}}}}
+	verifyOK := &fakeBootstrapDB{rowResults: []fakeRow{{values: []any{false}}, {values: []any{150004}}, {values: []any{false}}, {values: []any{2}}}}
 	if err := bootstrapPublication(ctx, verifyOK, bootstrapConfig{Mode: "verify", PublicationName: "pub"}, zerolog.Nop()); err != nil {
 		t.Fatalf("verify ok: %v", err)
 	}
 
-	verifyEmpty := &fakeBootstrapDB{rowResults: []fakeRow{{values: []any{false}}, {values: []any{0}}}}
+	verifyEmpty := &fakeBootstrapDB{rowResults: []fakeRow{{values: []any{false}}, {values: []any{150004}}, {values: []any{false}}, {values: []any{0}}}}
 	if err := bootstrapPublication(ctx, verifyEmpty, bootstrapConfig{Mode: "verify", PublicationName: "pub"}, zerolog.Nop()); err == nil {
 		t.Fatal("verify empty returned nil")
 	}
@@ -201,7 +201,7 @@ func TestBootstrapPublicationModes(t *testing.T) {
 	}
 
 	existing := &fakeBootstrapDB{
-		rowResults: []fakeRow{{values: []any{false}}, {values: []any{1}}},
+		rowResults: []fakeRow{{values: []any{false}}, {values: []any{150004}}, {values: []any{false}}, {values: []any{1}}},
 		queryRows:  []pgx.Rows{&fakeRows{values: [][]any{{"public.a"}}}},
 	}
 	if err := bootstrapPublication(ctx, existing, bootstrapConfig{Mode: "auto", PublicationName: "pub", Tables: []string{"public.a"}}, zerolog.Nop()); err != nil {
@@ -224,6 +224,40 @@ func TestBootstrapPublication_RejectsAllTables(t *testing.T) {
 				t.Fatalf("exec = %#v; want no DDL", db.execSQL)
 			}
 		})
+	}
+}
+
+// A FOR TABLES IN SCHEMA publication (PG 15+) streams every table in the
+// schema, including future ones; both checking modes must refuse it.
+func TestBootstrapPublication_RejectsSchemaPublication(t *testing.T) {
+	ctx := context.Background()
+	for _, mode := range []string{"verify", "auto"} {
+		t.Run(mode, func(t *testing.T) {
+			db := &fakeBootstrapDB{rowResults: []fakeRow{
+				{values: []any{false}},  // puballtables
+				{values: []any{150004}}, // server_version_num
+				{values: []any{true}},   // has schema entries
+			}}
+			err := bootstrapPublication(ctx, db, bootstrapConfig{Mode: mode, PublicationName: "pub", Tables: []string{"public.a"}}, zerolog.Nop())
+			if err == nil || !strings.Contains(err.Error(), "FOR TABLES IN SCHEMA") {
+				t.Fatalf("err = %v; want FOR TABLES IN SCHEMA rejection", err)
+			}
+			if len(db.execSQL) != 0 {
+				t.Fatalf("exec = %#v; want no DDL", db.execSQL)
+			}
+		})
+	}
+}
+
+// PG 14 has no pg_publication_namespace; the check must skip, not query it.
+func TestPublicationHasSchemas_PG14Skips(t *testing.T) {
+	db := &fakeBootstrapDB{rowResults: []fakeRow{{values: []any{140010}}}}
+	got, err := publicationHasSchemas(context.Background(), db, "pub")
+	if err != nil || got {
+		t.Fatalf("publicationHasSchemas = %v, %v; want false, nil", got, err)
+	}
+	if len(db.rowResults) != 0 {
+		t.Fatalf("unused rows %d; want exactly one query (version)", len(db.rowResults))
 	}
 }
 
@@ -285,6 +319,8 @@ func TestPrepareDatabaseUnit(t *testing.T) {
 		{values: []any{"2"}},
 		{values: []any{"2"}},
 		{values: []any{"repl", true, false}},
+		{values: []any{false}},
+		{values: []any{150004}},
 		{values: []any{false}},
 		{values: []any{1}},
 		{values: []any{10}},
