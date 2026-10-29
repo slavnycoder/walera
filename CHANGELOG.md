@@ -53,6 +53,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   blocks itself, and in-process TLS / HTTP/2 work. Queue capacity now comes
   from `router.exact_buffer` / `router.wildcard_buffer`;
   `walera_events_sent_total` no longer counts heartbeats.
+- **Removed config keys fail startup.** `auth.signing.*`, `auth.breaker.*`,
+  `auth.health_channel`, `shutdown.drain_deadline` and the former SSE
+  writer-pool keys (`http.pool_factor`, `http.sub_queue_size`,
+  `http.max_wait_ms`, `http.drain_threshold_subs`,
+  `http.max_batch_bytes_per_sub`, `http.batching_disabled`) — and their
+  `WALERA_*` env forms — are rejected with an error naming the key.
 
 ### Removed
 

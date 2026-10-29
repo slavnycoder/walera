@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -122,10 +123,49 @@ func applyAppDefaults(k *koanf.Koanf) {
 	metrics.ApplyDefaults(k)
 }
 
+// removedConfigKeys are keys from earlier releases that no longer do anything.
+// Setting one fails startup so nobody believes a removed control (HMAC
+// signing, the circuit breaker, the writer pool) is still in effect. Prefix
+// match covers both the YAML (auth.signing.secret) and the env
+// (WALERA_AUTH_SIGNING_SECRET -> auth.signing_secret) spellings.
+var removedConfigKeys = []string{
+	"auth.signing",
+	"auth.breaker",
+	"auth.health_channel",
+	"shutdown.drain_deadline",
+	"http.pool_factor",
+	"http.sub_queue_size",
+	"http.max_wait_ms",
+	"http.drain_threshold_subs",
+	"http.max_batch_bytes_per_sub",
+	"http.batching_disabled",
+}
+
+// rejectRemovedKeys names offending keys only; values may be secrets.
+func rejectRemovedKeys(k *koanf.Koanf) error {
+	var found []string
+	for _, key := range k.Keys() {
+		for _, prefix := range removedConfigKeys {
+			if strings.HasPrefix(key, prefix) {
+				found = append(found, key)
+				break
+			}
+		}
+	}
+	if len(found) == 0 {
+		return nil
+	}
+	slices.Sort(found)
+	return fmt.Errorf("removed config keys are set: %s — delete them (see CHANGELOG.md)", strings.Join(found, ", "))
+}
+
 func LoadAppConfig(path string) (*AppConfig, error) {
 	k, err := config.LoadKoanf(path, applyAppDefaults)
 	if err != nil {
 		return nil, err
+	}
+	if err := rejectRemovedKeys(k); err != nil {
+		return nil, fmt.Errorf("config: %w", err)
 	}
 
 	cfg := &AppConfig{}

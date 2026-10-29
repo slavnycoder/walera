@@ -8,6 +8,42 @@ import (
 	"time"
 )
 
+func TestLoad_RejectsRemovedKeys(t *testing.T) {
+	cases := []struct {
+		name    string
+		yaml    string
+		envKey  string
+		wantKey string
+	}{
+		{"yaml signing", "auth:\n  signing:\n    secret: s3cr3t-value\n", "", "auth.signing.secret"},
+		{"yaml breaker", "auth:\n  breaker:\n    cooldown: 30s\n", "", "auth.breaker.cooldown"},
+		{"yaml health channel", "auth:\n  health_channel: _health\n", "", "auth.health_channel"},
+		{"yaml drain deadline", "shutdown:\n  drain_deadline: 8s\n", "", "shutdown.drain_deadline"},
+		{"yaml pool factor", "http:\n  pool_factor: 2\n", "", "http.pool_factor"},
+		{"yaml batching", "http:\n  batching_disabled: true\n", "", "http.batching_disabled"},
+		{"env signing secret", "", "WALERA_AUTH_SIGNING_SECRET", "auth.signing_secret"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			setPhase3RequiredEnv(t)
+			if tc.envKey != "" {
+				t.Setenv(tc.envKey, "s3cr3t-value")
+			}
+			path := writeTempYAML(t, "database:\n  url: \"postgres://a:b@localhost/db\"\n"+tc.yaml)
+			_, err := LoadAppConfig(path)
+			if err == nil {
+				t.Fatal("LoadAppConfig: err = nil; want removed-key rejection")
+			}
+			if !strings.Contains(err.Error(), "removed config keys") || !strings.Contains(err.Error(), tc.wantKey) {
+				t.Errorf("err = %q; want it to name removed key %q", err.Error(), tc.wantKey)
+			}
+			if strings.Contains(err.Error(), "s3cr3t-value") {
+				t.Errorf("err = %q; must not echo the key's value", err.Error())
+			}
+		})
+	}
+}
+
 func writeTempYAML(t *testing.T, content string) string {
 	t.Helper()
 	dir := t.TempDir()
