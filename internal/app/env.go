@@ -3,6 +3,7 @@ package app
 import (
 	"errors"
 	"fmt"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -25,6 +26,13 @@ var envVars = []string{
 	"WALERA_AUTH_ALLOW_PLAINTEXT", "WALERA_MAX_CONNECTIONS", "WALERA_LOG_LEVEL",
 }
 
+// k8sServiceLinkRe matches the docker-link-style variables Kubernetes injects
+// into every pod for a Service named "walera" (enableServiceLinks defaults to
+// true); rejecting them would crash-loop Walera in its own namespace.
+var k8sServiceLinkRe = regexp.MustCompile(
+	`^WALERA_(SERVICE_HOST|SERVICE_PORT(_[A-Z0-9][A-Z0-9_]*)?|PORT(_[0-9]+_(TCP|UDP|SCTP)(_(PROTO|PORT|ADDR))?)?)$`,
+)
+
 // LoadFromEnv builds the configuration from environ (os.Environ() format).
 // Errors name variables, never their values.
 func LoadFromEnv(environ []string) (*AppConfig, error) {
@@ -36,6 +44,9 @@ func LoadFromEnv(environ []string) (*AppConfig, error) {
 			continue
 		}
 		if !slices.Contains(envVars, k) {
+			if k8sServiceLinkRe.MatchString(k) {
+				continue
+			}
 			unknown = append(unknown, k)
 			continue
 		}
@@ -100,9 +111,9 @@ func LoadFromEnv(environ []string) (*AppConfig, error) {
 		}
 	}
 	if v := env["WALERA_LOG_LEVEL"]; v != "" {
-		switch v {
+		switch lv := strings.ToLower(v); lv {
 		case "debug", "info", "warn", "error":
-			cfg.Log.Level = v
+			cfg.Log.Level = lv
 		default:
 			errs = append(errs, config.FormatError("WALERA_LOG_LEVEL", "", "must be debug, info, warn or error", ""))
 		}

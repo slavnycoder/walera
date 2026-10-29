@@ -160,3 +160,70 @@ func TestLoadFromEnv_InvalidValuesNotEchoed(t *testing.T) {
 		})
 	}
 }
+
+// Kubernetes injects service-link variables for a Service named "walera" into
+// every pod; they must not trip the unknown-variable check.
+func TestLoadFromEnv_IgnoresKubernetesServiceLinks(t *testing.T) {
+	env := append(baseEnv(),
+		"WALERA_SERVICE_HOST=10.0.0.1",
+		"WALERA_SERVICE_PORT=8080",
+		"WALERA_SERVICE_PORT_HTTP=8080",
+		"WALERA_PORT=tcp://10.0.0.1:8080",
+		"WALERA_PORT_8080_TCP=tcp://10.0.0.1:8080",
+		"WALERA_PORT_8080_TCP_PROTO=tcp",
+		"WALERA_PORT_8080_TCP_PORT=8080",
+		"WALERA_PORT_8080_TCP_ADDR=10.0.0.1",
+		"WALERA_PORT_53_UDP_ADDR=10.0.0.1",
+		"WALERA_PORT_9_SCTP=sctp://10.0.0.1:9",
+	)
+	if _, err := LoadFromEnv(env); err != nil {
+		t.Fatalf("LoadFromEnv with service links: %v", err)
+	}
+}
+
+func TestLoadFromEnv_RejectsServiceLinkNearMisses(t *testing.T) {
+	for _, name := range []string{
+		"WALERA_PORTS", "WALERA_SERVICE", "WALERA_SERVICE_HOSTNAME",
+		"WALERA_PORT_HTTP", "WALERA_PORT_8080_HTTP", "WALERA_PORT_8080_TCP_HOST",
+		"WALERA_SERVICE_PORT_", "WALERA_PORT_8080_TCP_PORT_X",
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := LoadFromEnv(append(baseEnv(), name+"=x"))
+			if err == nil || !strings.Contains(err.Error(), "unknown environment variables: "+name) {
+				t.Fatalf("err = %v; want %s rejected as unknown", err, name)
+			}
+		})
+	}
+}
+
+func TestLoadFromEnv_LogLevelCaseInsensitive(t *testing.T) {
+	cfg, err := LoadFromEnv(append(baseEnv(), "WALERA_LOG_LEVEL=INFO"))
+	if err != nil || cfg.Log.Level != "info" {
+		t.Fatalf("level = %v, %v; want info", cfg, err)
+	}
+}
+
+func TestLoadFromEnv_ErrorPrefixOnce(t *testing.T) {
+	_, err := LoadFromEnv(append(baseEnv(), "WALERA_AUTH_TTL=soon", "WALERA_PUBLICATION=bad-name"))
+	if err == nil {
+		t.Fatal("err = nil; want validation error")
+	}
+	if !strings.HasPrefix(err.Error(), "config: ") || strings.Count(err.Error(), "config: ") != 1 {
+		t.Fatalf("err = %q; want exactly one leading \"config: \" prefix", err)
+	}
+}
+
+func TestLoadFromEnv_FixedDefaults(t *testing.T) {
+	cfg, err := LoadFromEnv(baseEnv())
+	if err != nil {
+		t.Fatalf("LoadFromEnv: %v", err)
+	}
+	h := cfg.HTTP
+	if h.Addr != ":8080" || h.MaxPayloadBytes != 10<<20 || h.WriteTimeout != 5*time.Second ||
+		h.MaxHeaderBytes != 16<<10 || !h.H2CEnabled {
+		t.Fatalf("HTTP defaults = %+v", h)
+	}
+	if cfg.Shutdown.Deadline.Duration() != 10*time.Second {
+		t.Fatalf("shutdown deadline = %v; want 10s", cfg.Shutdown.Deadline.Duration())
+	}
+}

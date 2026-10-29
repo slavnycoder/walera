@@ -22,21 +22,21 @@ func TestFormatError(t *testing.T) {
 			value:       "bad-name",
 			problem:     "must match PG identifier",
 			remediation: "use [A-Za-z_][A-Za-z0-9_]*",
-			want:        "config: wal.publication_name (bad-name) must match PG identifier; use [A-Za-z_][A-Za-z0-9_]*",
+			want:        "wal.publication_name (bad-name) must match PG identifier; use [A-Za-z_][A-Za-z0-9_]*",
 		},
 		{
 			name:    "empty remediation collapses trailing punctuation",
 			key:     "wal.publication_name",
 			value:   "bad-name",
 			problem: "must match PG identifier",
-			want:    "config: wal.publication_name (bad-name) must match PG identifier",
+			want:    "wal.publication_name (bad-name) must match PG identifier",
 		},
 		{
 			name:        "empty value is omitted",
 			key:         "WALERA_PUBLICATION",
 			problem:     "must match PG identifier",
 			remediation: "use [A-Za-z_][A-Za-z0-9_]*",
-			want:        "config: WALERA_PUBLICATION must match PG identifier; use [A-Za-z_][A-Za-z0-9_]*",
+			want:        "WALERA_PUBLICATION must match PG identifier; use [A-Za-z_][A-Za-z0-9_]*",
 		},
 	}
 	for _, tc := range cases {
