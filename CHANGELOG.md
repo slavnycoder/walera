@@ -13,6 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   such a publication streams every table in the schema, including tables
   added later; Walera now fails startup on it, like `FOR ALL TABLES`.
 
+### Changed
+
+- **Subscriber index is a plain map under one RWMutex.** The xxhash-sharded index and the github.com/cespare/xxhash/v2 dependency are gone.
+
 ### Fixed
 
 - **Standby updates keep flowing under backpressure.** While the router is

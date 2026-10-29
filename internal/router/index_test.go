@@ -82,6 +82,24 @@ func TestIndex_AddLookupRemove_MultipleSubscribers(t *testing.T) {
 	}
 }
 
+func TestIndex_RemoveUnknownKey(t *testing.T) {
+	t.Parallel()
+	idx := newIndex()
+	sub := &Subscriber{id: "test"}
+	const unknownKey = "public.unknown:999"
+
+	// Remove on an unknown key should not panic or create a record
+	idx.Remove(unknownKey, sub)
+
+	if got := idx.Len(); got != 0 {
+		t.Errorf("Len after Remove on unknown key: got %d; want 0", got)
+	}
+	// Verify no internal record was created
+	if got := idx.Lookup(unknownKey); got != nil {
+		t.Errorf("Lookup after Remove on unknown key: got %v; want nil", got)
+	}
+}
+
 func containsSubscriber(subs []*Subscriber, want *Subscriber) bool {
 	for _, sub := range subs {
 		if sub == want {
@@ -89,28 +107,6 @@ func containsSubscriber(subs []*Subscriber, want *Subscriber) bool {
 		}
 	}
 	return false
-}
-
-func TestIndex_ShardDistribution(t *testing.T) {
-	t.Parallel()
-	idx := newIndex()
-	const N = 1000
-	for i := 0; i < N; i++ {
-		key := fmt.Sprintf("public.users:%d", i)
-		idx.Add(key, &Subscriber{id: key})
-	}
-	seen := 0
-	for i := range idx.shards {
-		s := &idx.shards[i]
-		s.mu.RLock()
-		if len(s.subs) > 0 {
-			seen++
-		}
-		s.mu.RUnlock()
-	}
-	if seen < numShards {
-		t.Errorf("shard coverage: %d/%d shards have entries; want all populated", seen, numShards)
-	}
 }
 
 func TestIndexConcurrent(t *testing.T) {
