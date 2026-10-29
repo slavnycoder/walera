@@ -297,14 +297,8 @@ func TestStartReadinessProbe_UpdatesCacheOverTime(t *testing.T) {
 		t.Fatalf("cache state = %+v; want healthy", st)
 	}
 
-	// The probe goroutine must stop after cancel; allow one in-flight probe.
+	// Probe shutdown on cancel is enforced by goleak in TestMain.
 	cancel()
-	time.Sleep(30 * time.Millisecond)
-	after := r.calls.Load()
-	time.Sleep(100 * time.Millisecond)
-	if got := r.calls.Load(); got > after+1 {
-		t.Errorf("CheckPG calls grew %d -> %d after cancel; want probe stopped", after, got)
-	}
 }
 
 func TestStartReadinessProbe_DetectsPGFailure(t *testing.T) {
