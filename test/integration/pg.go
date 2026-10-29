@@ -98,21 +98,6 @@ func (p *PG) ExecBatch(ctx context.Context, stmts []string, perStmtArgs [][]any)
 	return nil
 }
 
-func (p *PG) CreatePublication(t *testing.T, name string, tables []string) {
-	t.Helper()
-	ctx := context.Background()
-	var sql string
-	if len(tables) == 0 {
-		sql = fmt.Sprintf("CREATE PUBLICATION %s FOR ALL TABLES", name)
-	} else {
-		sql = fmt.Sprintf("CREATE PUBLICATION %s FOR TABLE %s", name, joinIdents(tables))
-	}
-	if err := p.Exec(ctx, sql); err != nil {
-		t.Fatalf("CreatePublication %q: %v", name, err)
-	}
-	t.Cleanup(func() { p.DropPublication(t, name) })
-}
-
 func (p *PG) DropPublication(t *testing.T, name string) {
 	t.Helper()
 	ctx := context.Background()
@@ -166,21 +151,6 @@ func (p *PG) SlotExists(t *testing.T, name string) bool {
 		t.Fatalf("SlotExists %q: %v", name, err)
 	}
 	return exists
-}
-
-func joinIdents(idents []string) string {
-	switch len(idents) {
-	case 0:
-		return ""
-	case 1:
-		return idents[0]
-	default:
-		out := idents[0]
-		for _, s := range idents[1:] {
-			out += ", " + s
-		}
-		return out
-	}
 }
 
 func (p *PG) ReplicationDSN() string {

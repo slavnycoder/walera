@@ -88,15 +88,16 @@ CREATE PUBLICATION cdc_sse_streamer
 wal:
   bootstrap:
     mode: auto                      # auto | verify | off (default: auto)
-    tables: [public.orders, ...]    # schema-qualified; preferred over FOR ALL TABLES
+    tables: [public.orders, ...]    # schema-qualified; required in auto mode
     create_roles: true              # opt-in; uses passwords from the runtime DSNs
 ```
 
 What auto-bootstrap CAN do:
 - Verify `wal_level=logical`, `max_replication_slots >= 1`,
   `max_wal_senders >= 1` and fail fast with actionable errors.
-- `CREATE PUBLICATION ... FOR TABLE` from the configured list, or fall
-  back to `FOR ALL TABLES` when the list is empty.
+- `CREATE PUBLICATION ... FOR TABLE` from the configured list (the
+  list is required). An existing `FOR ALL TABLES` publication is
+  rejected.
 - Verify an existing publication against `bootstrap.tables` — log
   warnings on mismatch but never mutate (reconciliation is a DBA action).
 - Idempotently `CREATE ROLE` (probes `pg_catalog.pg_roles` first) using

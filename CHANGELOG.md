@@ -20,7 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to the redirect target and trusting its response as the whitelist.
 - **No more `FOR ALL TABLES`.** `wal.bootstrap.mode=auto` now requires
   `wal.bootstrap.tables`; startup fails without it. Tables clients never
-  subscribe to (users, credentials) no longer leave Postgres.
+  subscribe to (users, credentials) no longer leave Postgres. An existing
+  `FOR ALL TABLES` publication now also fails startup in `verify` and
+  `auto` modes.
 - **Permission refresh is always on.** `auth.default_ttl_seconds` now
   defaults to `60` and `0` is rejected at startup. Previously the default
   was `0`, so a revoked user kept receiving a live stream until it

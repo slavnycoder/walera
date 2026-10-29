@@ -173,8 +173,8 @@ The bootstrap modes:
 
 | `wal.bootstrap.mode` | Behavior on the publication                                                                                                                                       |
 | -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `auto` (default)     | Requires `bootstrap.tables`. Creates the publication if missing (`FOR TABLE` the listed tables — never `FOR ALL TABLES`). If it exists, verifies the table list and warns on mismatch. Never mutates an existing publication. |
-| `verify`             | Fails fast if the publication is missing or empty. The original DBA-managed posture.                                                                              |
+| `auto` (default)     | Requires `bootstrap.tables`. Creates the publication if missing (`FOR TABLE` the listed tables — never `FOR ALL TABLES`). If it exists, verifies the table list and warns on mismatch. Never mutates an existing publication. Fails if the publication is `FOR ALL TABLES`. |
+| `verify`             | Fails fast if the publication is missing or empty. The original DBA-managed posture. Fails if the publication is `FOR ALL TABLES`.                               |
 | `off`                | Skips the publication check entirely.                                                                                                                             |
 
 ```yaml

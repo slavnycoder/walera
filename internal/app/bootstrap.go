@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"regexp"
@@ -106,6 +107,30 @@ func verifyReplicationRole(ctx context.Context, conn bootstrapDB, logger zerolog
 	return nil
 }
 
+// lookupPublication reports whether the publication exists and whether it
+// was created FOR ALL TABLES.
+func lookupPublication(ctx context.Context, conn bootstrapDB, name string) (exists, allTables bool, err error) {
+	err = conn.QueryRow(ctx,
+		"SELECT puballtables FROM pg_publication WHERE pubname = $1",
+		name,
+	).Scan(&allTables)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, false, nil
+	}
+	if err != nil {
+		return false, false, fmt.Errorf("publication existence check failed (%s): %w", name, err)
+	}
+	return true, allTables, nil
+}
+
+func errAllTablesPublication(name string) error {
+	return fmt.Errorf(
+		"publication %q is FOR ALL TABLES, which streams every table in the database — "+
+			"recreate it with an explicit list: DROP PUBLICATION %s; CREATE PUBLICATION %s FOR TABLE ...",
+		name, name, name,
+	)
+}
+
 func bootstrapPublication(ctx context.Context, conn bootstrapDB, cfg bootstrapConfig, logger zerolog.Logger) error {
 	switch cfg.Mode {
 	case "off":
@@ -113,12 +138,21 @@ func bootstrapPublication(ctx context.Context, conn bootstrapDB, cfg bootstrapCo
 			Str("publication", cfg.PublicationName).
 			Msg("publication check skipped (bootstrap.mode=off)")
 	case "verify":
+		exists, allTables, err := lookupPublication(ctx, conn, cfg.PublicationName)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			return fmt.Errorf("publication %q does not exist — create it with an explicit FOR TABLE list", cfg.PublicationName)
+		}
+		if allTables {
+			return errAllTablesPublication(cfg.PublicationName)
+		}
 		var tableCount int
-		err := conn.QueryRow(ctx,
+		if err := conn.QueryRow(ctx,
 			"SELECT count(*) FROM pg_publication_tables WHERE pubname = $1",
 			cfg.PublicationName,
-		).Scan(&tableCount)
-		if err != nil {
+		).Scan(&tableCount); err != nil {
 			return fmt.Errorf("publication existence check failed (%s): %w", cfg.PublicationName, err)
 		}
 		if tableCount == 0 {
@@ -135,15 +169,14 @@ func bootstrapPublication(ctx context.Context, conn bootstrapDB, cfg bootstrapCo
 			bootstrapEnsureRole(ctx, conn, cfg.PostgresDSN, false, logger)
 		}
 
-		var exists bool
-		err := conn.QueryRow(ctx,
-			"SELECT EXISTS(SELECT 1 FROM pg_publication WHERE pubname = $1)",
-			cfg.PublicationName,
-		).Scan(&exists)
+		exists, allTables, err := lookupPublication(ctx, conn, cfg.PublicationName)
 		if err != nil {
-			return fmt.Errorf("publication existence check failed (%s): %w", cfg.PublicationName, err)
+			return err
 		}
 		if exists {
+			if allTables {
+				return errAllTablesPublication(cfg.PublicationName)
+			}
 
 			var tableCount int
 			if err := conn.QueryRow(ctx,
@@ -162,9 +195,8 @@ func bootstrapPublication(ctx context.Context, conn bootstrapDB, cfg bootstrapCo
 					Int("table_count", tableCount).
 					Msg("publication check passed")
 			}
-			if len(cfg.Tables) > 0 {
-				bootstrapVerifyTables(ctx, conn, cfg.PublicationName, cfg.Tables, logger)
-			}
+			// wal.Config validation guarantees a non-empty table list in auto mode.
+			bootstrapVerifyTables(ctx, conn, cfg.PublicationName, cfg.Tables, logger)
 		} else {
 
 			ddl := fmt.Sprintf(

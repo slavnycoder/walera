@@ -100,9 +100,9 @@ CREATE PUBLICATION cdc_sse_streamer
   WITH (publish = 'insert, update, delete');
 ```
 
-Use an explicit table list. `FOR ALL TABLES` is supported by
-PostgreSQL but is discouraged because it makes the streamed surface
-opaque.
+Use an explicit table list. Walera refuses to start (`verify` and
+`auto` modes) if the publication is `FOR ALL TABLES`: it would stream
+every table in the database, including ones no client may read.
 
 For development and testbench environments, Walera can optionally
 bootstrap the publication (and the replication / admin roles) on

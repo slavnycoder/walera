@@ -176,17 +176,23 @@ func TestBootstrapPublicationModes(t *testing.T) {
 		t.Fatalf("off: %v", err)
 	}
 
-	verifyOK := &fakeBootstrapDB{rowResults: []fakeRow{{values: []any{2}}}}
+	verifyOK := &fakeBootstrapDB{rowResults: []fakeRow{{values: []any{false}}, {values: []any{2}}}}
 	if err := bootstrapPublication(ctx, verifyOK, bootstrapConfig{Mode: "verify", PublicationName: "pub"}, zerolog.Nop()); err != nil {
 		t.Fatalf("verify ok: %v", err)
 	}
 
-	verifyEmpty := &fakeBootstrapDB{rowResults: []fakeRow{{values: []any{0}}}}
+	verifyEmpty := &fakeBootstrapDB{rowResults: []fakeRow{{values: []any{false}}, {values: []any{0}}}}
 	if err := bootstrapPublication(ctx, verifyEmpty, bootstrapConfig{Mode: "verify", PublicationName: "pub"}, zerolog.Nop()); err == nil {
 		t.Fatal("verify empty returned nil")
 	}
 
-	autoTables := &fakeBootstrapDB{rowResults: []fakeRow{{values: []any{false}}}}
+	verifyMissing := &fakeBootstrapDB{rowResults: []fakeRow{{err: pgx.ErrNoRows}}}
+	err := bootstrapPublication(ctx, verifyMissing, bootstrapConfig{Mode: "verify", PublicationName: "pub"}, zerolog.Nop())
+	if err == nil || !strings.Contains(err.Error(), "does not exist") {
+		t.Fatalf("verify missing: err = %v; want 'does not exist'", err)
+	}
+
+	autoTables := &fakeBootstrapDB{rowResults: []fakeRow{{err: pgx.ErrNoRows}}}
 	if err := bootstrapPublication(ctx, autoTables, bootstrapConfig{Mode: "auto", PublicationName: "pub", Tables: []string{"public.a", "public.b"}}, zerolog.Nop()); err != nil {
 		t.Fatalf("auto tables: %v", err)
 	}
@@ -195,11 +201,29 @@ func TestBootstrapPublicationModes(t *testing.T) {
 	}
 
 	existing := &fakeBootstrapDB{
-		rowResults: []fakeRow{{values: []any{true}}, {values: []any{1}}},
+		rowResults: []fakeRow{{values: []any{false}}, {values: []any{1}}},
 		queryRows:  []pgx.Rows{&fakeRows{values: [][]any{{"public.a"}}}},
 	}
 	if err := bootstrapPublication(ctx, existing, bootstrapConfig{Mode: "auto", PublicationName: "pub", Tables: []string{"public.a"}}, zerolog.Nop()); err != nil {
 		t.Fatalf("existing: %v", err)
+	}
+}
+
+// A pre-existing FOR ALL TABLES publication streams every table in the
+// database; both checking modes must refuse it, and auto must not touch it.
+func TestBootstrapPublication_RejectsAllTables(t *testing.T) {
+	ctx := context.Background()
+	for _, mode := range []string{"verify", "auto"} {
+		t.Run(mode, func(t *testing.T) {
+			db := &fakeBootstrapDB{rowResults: []fakeRow{{values: []any{true}}, {values: []any{42}}}}
+			err := bootstrapPublication(ctx, db, bootstrapConfig{Mode: mode, PublicationName: "pub", Tables: []string{"public.a"}}, zerolog.Nop())
+			if err == nil || !strings.Contains(err.Error(), "FOR ALL TABLES") {
+				t.Fatalf("err = %v; want FOR ALL TABLES rejection", err)
+			}
+			if len(db.execSQL) != 0 {
+				t.Fatalf("exec = %#v; want no DDL", db.execSQL)
+			}
+		})
 	}
 }
 
@@ -261,6 +285,7 @@ func TestPrepareDatabaseUnit(t *testing.T) {
 		{values: []any{"2"}},
 		{values: []any{"2"}},
 		{values: []any{"repl", true, false}},
+		{values: []any{false}},
 		{values: []any{1}},
 		{values: []any{10}},
 		{values: []any{2}},
