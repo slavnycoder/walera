@@ -44,6 +44,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`--healthcheck` works when `WALERA_ADDR` names a specific host.** The
+  probe dials that host instead of always 127.0.0.1.
 - **Mixed-case `WALERA_PUBLICATION` / `WALERA_TABLES` work after a restart.**
   Both are folded to lower case, as PostgreSQL folds unquoted identifiers,
   so a publication created as `MyPub` is found again as `mypub` and

@@ -29,8 +29,8 @@ proxy's read timeout above the 15 s heartbeat interval.
 
 Two flags exist besides the environment:
 
-- `--healthcheck` — request `/healthz` on the local port (from
-  `WALERA_ADDR`) and exit 0 on `200`, 1 otherwise. The image has no shell or
+- `--healthcheck` — request `/healthz` at `WALERA_ADDR` (127.0.0.1 when
+  the host is empty or a wildcard) and exit 0 on `200`, 1 otherwise. The image has no shell or
   curl, so use this for container health checks:
 
   ```yaml
