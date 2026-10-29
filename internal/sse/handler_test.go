@@ -1673,3 +1673,44 @@ func TestHandler_RawWireBytes(t *testing.T) {
 
 	_, _ = io.Copy(io.Discard, br)
 }
+
+// TestAuthenticate_ScrubsCredentialsFromRequest: after OpenSession the request
+// no longer carries Authorization, Cookie or forwarded headers (success and
+// failure), while the handshake result keeps the copies refresh replays.
+func TestAuthenticate_ScrubsCredentialsFromRequest(t *testing.T) {
+	t.Parallel()
+	for _, ok := range []bool{true, false} {
+		kit := newTestHandler(t, nil, nil)
+		if ok {
+			validMapBackend(kit.backend)
+		} else {
+			kit.backend.SetResp(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusUnauthorized)
+			})
+		}
+		kit.h.authClient = auth.New(auth.Config{
+			BackendURL:       kit.backend.srv.URL,
+			RequestTimeout:   2 * time.Second,
+			ForwardedCookies: []string{"session"},
+			ForwardedHeaders: []string{"X-Api-Key"},
+		}, auth.Deps{Logger: zerolog.Nop(), Metrics: metrics.New()})
+
+		r := httptest.NewRequest(http.MethodGet, "/sse/v1/users/42", nil)
+		r.Header.Set("Authorization", "Bearer valid")
+		r.AddCookie(&http.Cookie{Name: "session", Value: "sess-abc"})
+		r.Header.Set("X-Api-Key", "key-123")
+		var res handshakeResult
+		got := kit.h.authenticate(httptest.NewRecorder(), r, "users:42", &res)
+		if got != ok {
+			t.Fatalf("ok=%v: authenticate = %v", ok, got)
+		}
+		for _, name := range []string{"Authorization", "Cookie", "X-Api-Key"} {
+			if v := r.Header.Get(name); v != "" {
+				t.Errorf("ok=%v: request %s = %q after handshake; want scrubbed", ok, name, v)
+			}
+		}
+		if ok && (res.bearer != "valid" || res.fwd.Headers.Get("X-Api-Key") != "key-123" || len(res.fwd.Cookies) != 1) {
+			t.Errorf("handshake result lost credentials: bearer=%q fwd=%+v", res.bearer, res.fwd)
+		}
+	}
+}
