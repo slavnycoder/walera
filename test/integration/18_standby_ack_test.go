@@ -38,7 +38,14 @@ func Test18StandbyACKReachesPostgres(t *testing.T) {
 		}
 		return *ts
 	}
-	first := replyTime()
+	// reply_time is NULL until the first standby update arrives; measure
+	// from a real first reply, not from the zero time.
+	var first time.Time
+	for wait := time.Now().Add(15 * time.Second); first.IsZero(); time.Sleep(200 * time.Millisecond) {
+		if first = replyTime(); first.IsZero() && time.Now().After(wait) {
+			t.Fatal("no standby reply reached Postgres within 15s")
+		}
+	}
 	time.Sleep(12 * time.Second) // > 2 standby intervals of idle
 	second := replyTime()
 	if !second.After(first) {
