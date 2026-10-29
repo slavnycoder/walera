@@ -387,3 +387,58 @@ func TestStream_BatchesQueuedFramesIntoOneFlush(t *testing.T) {
 	sub.Drop("test")
 	<-done
 }
+
+// Once the client has the response, it must already be routable: a row it
+// writes right after connecting is never missed.
+func TestStream_RegistersBeforeFirstFlush(t *testing.T) {
+	t.Parallel()
+	kit := newTestHandler(t, nil, nil)
+	gate := make(chan struct{})
+	gw := &gatedWriter{hdr: http.Header{}, gate: gate, blocked: make(chan struct{})}
+	sub := router.NewSubscriber(router.SubscriberConfig{Kind: router.KindExact, Schema: "public", Table: "users", PK: "42"},
+		router.SubscriberDeps{Parent: context.Background()})
+	r := httptest.NewRequest(http.MethodGet, "/sse/v1/users/42", nil)
+	done := make(chan struct{})
+	go func() { defer close(done); kit.h.stream(gw, r, sub, nil) }()
+
+	<-gw.blocked // the first write is parked: nothing has reached the client yet
+	kit.bc.mu.Lock()
+	registered := len(kit.bc.subs)
+	kit.bc.mu.Unlock()
+	close(gate)
+	sub.Drop("test")
+	<-done
+	if registered != 1 {
+		t.Fatalf("registered subscribers at first write = %d; want 1", registered)
+	}
+}
+
+// shutdownBroadcaster mimics a closed router.Broadcaster: Register drops the
+// late registrant with "shutdown".
+type shutdownBroadcaster struct{ fakeBroadcaster }
+
+func (s *shutdownBroadcaster) Register(sub *router.Subscriber) {
+	s.fakeBroadcaster.Register(sub)
+	sub.Drop("shutdown")
+}
+
+// A handshake racing service shutdown still gets the prelude and then an
+// explicit shutdown frame, not a bare disconnect.
+func TestStream_LateRegistrantGetsShutdownFrame(t *testing.T) {
+	t.Parallel()
+	kit := newTestHandler(t, nil, nil)
+	kit.h.bc = &shutdownBroadcaster{}
+	gw := &gatedWriter{hdr: http.Header{}, blocked: make(chan struct{})}
+	sub := router.NewSubscriber(router.SubscriberConfig{Kind: router.KindExact, Schema: "public", Table: "users", PK: "42"},
+		router.SubscriberDeps{Parent: context.Background()})
+	r := httptest.NewRequest(http.MethodGet, "/sse/v1/users/42", nil)
+	kit.h.stream(gw, r, sub, nil)
+
+	body := gw.String()
+	if !strings.HasPrefix(body, testPrelude) {
+		t.Fatalf("body = %q; want prelude first", body)
+	}
+	if !strings.Contains(body, "event: shutdown") {
+		t.Fatalf("body = %q; want a shutdown frame", body)
+	}
+}

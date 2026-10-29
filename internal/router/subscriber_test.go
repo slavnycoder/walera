@@ -10,11 +10,10 @@ import (
 func newTestSubscriber() *Subscriber {
 	return NewSubscriber(
 		SubscriberConfig{
-			Kind:      KindExact,
-			Schema:    "public",
-			Table:     "users",
-			PK:        "42",
-			BufferCap: 1,
+			Kind:   KindExact,
+			Schema: "public",
+			Table:  "users",
+			PK:     "42",
 		},
 		SubscriberDeps{Parent: context.Background()},
 	)
@@ -75,12 +74,11 @@ func TestSubscriber_IDFromOptsIsUsed(t *testing.T) {
 	t.Parallel()
 	sub := NewSubscriber(
 		SubscriberConfig{
-			ID:        "explicit-id-12345",
-			Kind:      KindExact,
-			Schema:    "public",
-			Table:     "users",
-			PK:        "1",
-			BufferCap: 1,
+			ID:     "explicit-id-12345",
+			Kind:   KindExact,
+			Schema: "public",
+			Table:  "users",
+			PK:     "1",
 		},
 		SubscriberDeps{Parent: context.Background()},
 	)

@@ -316,7 +316,7 @@ replicas and shed pathological traffic before it consumes a Goroutine.
 | `WALERA_HTTP_ADDR`                       | `http.addr`                               | `:8080`          | SSE listen address (host optional, port required).   | `:8080`                  |
 | `WALERA_HTTP_CORS_ORIGINS`               | `http.cors_origins`                       | `[]`             | Comma-separated CORS allowlist.                      | `https://app.example.com`|
 | `WALERA_HTTP_MAX_PAYLOAD_BYTES`          | `http.max_payload_bytes`                  | `10485760` (10 MiB) | Max serialised SSE payload per event.             | `10485760`               |
-| `WALERA_HTTP_WRITE_TIMEOUT`              | `http.write_timeout`                      | `5s`             | Per-frame write deadline.                            | `5s`                     |
+| `WALERA_HTTP_WRITE_TIMEOUT`              | `http.write_timeout`                      | `5s`             | Write deadline per flush (one flush may carry a batch of queued frames). | `5s`                     |
 | `WALERA_HTTP_MAX_HEADER_BYTES`           | `http.max_header_bytes`                   | `16384`          | Max request-header byte size (stdlib pre-handler).   | `16384`                  |
 | `WALERA_HTTP_H2C_ENABLED`                | `http.h2c_enabled`                        | `true`           | Toggle unencrypted HTTP/2 (h2c, prior-knowledge).    | `true`                   |
 | `WALERA_HTTP_PPROF_ADDR`                 | `http.pprof_addr`                         | (unset/disabled) | Optional opt-in pprof listener (loopback default).   | `127.0.0.1:6060`         |

@@ -38,11 +38,10 @@ func newBroadcasterForShutdown(n int) (*Broadcaster, []*Subscriber, *sync.WaitGr
 	for i := 0; i < n; i++ {
 		s := NewSubscriber(
 			SubscriberConfig{
-				Kind:      KindExact,
-				Schema:    "public",
-				Table:     "t",
-				PK:        pkOf(i),
-				BufferCap: 16,
+				Kind:   KindExact,
+				Schema: "public",
+				Table:  "t",
+				PK:     pkOf(i),
 			},
 			SubscriberDeps{Parent: context.Background()},
 		)
@@ -142,11 +141,10 @@ func TestBroadcaster_Shutdown_MixedExactAndWildcard(t *testing.T) {
 	for i := 0; i < N; i++ {
 		es := NewSubscriber(
 			SubscriberConfig{
-				Kind:      KindExact,
-				Schema:    "public",
-				Table:     "t",
-				PK:        pkOf(i),
-				BufferCap: 16,
+				Kind:   KindExact,
+				Schema: "public",
+				Table:  "t",
+				PK:     pkOf(i),
 			},
 			SubscriberDeps{Parent: context.Background()},
 		)
@@ -156,10 +154,9 @@ func TestBroadcaster_Shutdown_MixedExactAndWildcard(t *testing.T) {
 
 		ws := NewSubscriber(
 			SubscriberConfig{
-				Kind:      KindWildcard,
-				Schema:    "public",
-				Table:     "t",
-				BufferCap: 16,
+				Kind:   KindWildcard,
+				Schema: "public",
+				Table:  "t",
 			},
 			SubscriberDeps{Parent: context.Background()},
 		)

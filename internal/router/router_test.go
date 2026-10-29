@@ -786,11 +786,10 @@ func TestRouterSubscriberFilterFieldDefaultNil(t *testing.T) {
 	t.Parallel()
 	sub := NewSubscriber(
 		SubscriberConfig{
-			Kind:      KindExact,
-			Schema:    "public",
-			Table:     "users",
-			PK:        "42",
-			BufferCap: 4,
+			Kind:   KindExact,
+			Schema: "public",
+			Table:  "users",
+			PK:     "42",
 		},
 		SubscriberDeps{Parent: context.Background()},
 	)

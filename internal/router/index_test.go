@@ -134,12 +134,11 @@ func TestIndexConcurrent(t *testing.T) {
 				key := fmt.Sprintf("public.users:%d", g*N+i)
 				sub := NewSubscriber(
 					SubscriberConfig{
-						ID:        key,
-						Kind:      KindExact,
-						Schema:    "public",
-						Table:     "users",
-						PK:        fmt.Sprintf("%d", g*N+i),
-						BufferCap: 1,
+						ID:     key,
+						Kind:   KindExact,
+						Schema: "public",
+						Table:  "users",
+						PK:     fmt.Sprintf("%d", g*N+i),
 					},
 					SubscriberDeps{Parent: ctx},
 				)

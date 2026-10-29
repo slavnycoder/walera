@@ -48,6 +48,8 @@ container-bound.
 | `auth.(*Whitelist).Filter` | 9.3% | Per-(sub × row) map allocs |
 | `runtime.mallocgc / scanobject` | ~17% | GC pressure from JSON + map allocs |
 
+> Profiled before the SSE writer pool was removed (2026-10-28): `poolWorker` no longer exists — each handler goroutine now writes its own stream.
+
 ## Heap allocations (10.35 GB total over 60 s)
 
 | Symbol | cum / flat | Share |

@@ -904,7 +904,7 @@ func TestHandshake_TableNotInWhitelistReturns403(t *testing.T) {
 	}
 }
 
-func TestHandshake_HappyPath_RegistersSubscriberWithFilter(t *testing.T) {
+func TestHandshake_HappyPath_SetsFilter(t *testing.T) {
 	t.Parallel()
 	kit := newTestHandler(t, nil, nil)
 	validMapBackend(kit.backend)
@@ -1742,5 +1742,32 @@ func TestAuthenticate_ScrubsCredentialsOnEarlyReject(t *testing.T) {
 	}
 	if kit.backend.hits.Load() != 0 {
 		t.Errorf("backend hits = %d; want 0 (rejected before OpenSession)", kit.backend.hits.Load())
+	}
+}
+
+// The subscriber's Done must close only through Drop, so Reason is always set
+// once Done fires — even when the request context is cancelled first.
+func TestHeadersAndPreamble_SubscriberOutlivesRequestContext(t *testing.T) {
+	t.Parallel()
+	kit := newTestHandler(t, nil, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	r := httptest.NewRequest(http.MethodGet, "/sse/v1/users/42", nil).WithContext(ctx)
+	hs := handshakeResult{
+		authMap: &auth.Whitelist{UserID: "u1", Tables: map[string]map[string]struct{}{"users": {"id": {}}}},
+		userID:  "u1",
+	}
+	sub, err := kit.h.headersAndPreamble(httptest.NewRecorder(), r, "users", "42", "users:42", router.KindExact, 0, hs)
+	if err != nil {
+		t.Fatalf("headersAndPreamble: %v", err)
+	}
+	cancel()
+	select {
+	case <-sub.Done():
+		t.Fatalf("Done closed by request cancellation (Reason=%q); want it closed only by Drop", sub.Reason())
+	default:
+	}
+	sub.Drop("client_closed")
+	if got := sub.Reason(); got != "client_closed" {
+		t.Fatalf("Reason = %q; want client_closed", got)
 	}
 }

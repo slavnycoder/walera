@@ -60,6 +60,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `http.max_batch_bytes_per_sub`, `http.batching_disabled`) — and their
   `WALERA_*` env forms — are rejected with an error naming the key.
 
+### Fixed
+
+- **No missed events right after connecting.** A subscriber is now
+  registered before the first byte of the response is flushed, so a row
+  written as soon as the client sees `200` is delivered.
+
 ### Removed
 
 - HMAC-signed `POST /auth/permissions`, `auth.signing.*`,

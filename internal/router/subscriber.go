@@ -32,8 +32,6 @@ type SubscriberConfig struct {
 	PK string
 
 	StartLSN pglogrepl.LSN
-
-	BufferCap int
 }
 
 type SubscriberDeps struct {

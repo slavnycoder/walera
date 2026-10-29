@@ -8,11 +8,10 @@ import (
 func newWildcardTestSubscriber(id string) *Subscriber {
 	return NewSubscriber(
 		SubscriberConfig{
-			ID:        id,
-			Kind:      KindWildcard,
-			Schema:    "public",
-			Table:     "users",
-			BufferCap: 1,
+			ID:     id,
+			Kind:   KindWildcard,
+			Schema: "public",
+			Table:  "users",
 		},
 		SubscriberDeps{Parent: context.Background()},
 	)

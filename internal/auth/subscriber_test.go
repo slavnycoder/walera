@@ -72,11 +72,10 @@ func newTestRouterSub(t *testing.T) *router.Subscriber {
 	t.Helper()
 	return router.NewSubscriber(
 		router.SubscriberConfig{
-			Kind:      router.KindExact,
-			Schema:    "public",
-			Table:     "orders",
-			PK:        "42",
-			BufferCap: 4,
+			Kind:   router.KindExact,
+			Schema: "public",
+			Table:  "orders",
+			PK:     "42",
 		},
 		router.SubscriberDeps{Parent: context.Background()},
 	)

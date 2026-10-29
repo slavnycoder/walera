@@ -1,6 +1,7 @@
 package sse
 
 import (
+	"context"
 	"errors"
 	"net"
 	"net/http"
@@ -74,7 +75,9 @@ func (h *Handler) headersAndPreamble(
 			PK:       pk,
 			StartLSN: startLSN,
 		},
-		router.SubscriberDeps{Parent: r.Context()},
+		// Not tied to the request: stream drops the subscriber itself when the
+		// client goes away, so Done never fires without a Reason.
+		router.SubscriberDeps{Parent: context.WithoutCancel(r.Context())},
 	)
 
 	ttl := time.Duration(h.authCfg.DefaultTTLSeconds) * time.Second
@@ -161,13 +164,15 @@ func (h *Handler) stream(w http.ResponseWriter, r *http.Request, sub *router.Sub
 		}
 	}()
 
+	// Registered before the first flush: once the client sees the response,
+	// rows written after that moment reach it.
+	h.bc.Register(sub)
+	defer h.bc.Deregister(sub)
 	if err := write(preludeFrame, initialFrame); err != nil {
 		reason = writeFailureReason(err)
 		sub.Drop(reason)
 		return
 	}
-	h.bc.Register(sub)
-	defer h.bc.Deregister(sub)
 
 	// Queued frames are discarded on drop: after a revoke they carry the old grant.
 	finish := func() {
@@ -186,12 +191,6 @@ func (h *Handler) stream(w http.ResponseWriter, r *http.Request, sub *router.Sub
 	for {
 		select {
 		case frame := <-queue:
-			select {
-			case <-sub.Done():
-				finish()
-				return
-			default:
-			}
 			frames := [][]byte{frame}
 		batch:
 			for len(frames) < queueCap {
@@ -202,6 +201,7 @@ func (h *Handler) stream(w http.ResponseWriter, r *http.Request, sub *router.Sub
 					break batch
 				}
 			}
+			// Frames queued before a drop may carry a revoked grant.
 			select {
 			case <-sub.Done():
 				finish()

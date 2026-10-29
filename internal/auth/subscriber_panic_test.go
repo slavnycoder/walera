@@ -28,11 +28,10 @@ func validSubscriberDeps(t *testing.T) SubscriberDeps {
 	t.Helper()
 	rsub := router.NewSubscriber(
 		router.SubscriberConfig{
-			Kind:      router.KindExact,
-			Schema:    "public",
-			Table:     "orders",
-			PK:        "1",
-			BufferCap: 4,
+			Kind:   router.KindExact,
+			Schema: "public",
+			Table:  "orders",
+			PK:     "1",
 		},
 		router.SubscriberDeps{Parent: context.Background()},
 	)
