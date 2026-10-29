@@ -34,48 +34,11 @@ func newRequestID() string {
 	return hex.EncodeToString(buf[:])
 }
 
+// clientIP is the TCP peer; it only feeds the client_ip log field.
 func (h *Handler) clientIP(r *http.Request) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
-		host = r.RemoteAddr
-	}
-	peerIP := net.ParseIP(host)
-	if peerIP == nil || !h.limits.IsTrustedProxy(peerIP) {
-		return host
-	}
-
-	xffValues := r.Header.Values("X-Forwarded-For")
-	if len(xffValues) == 0 {
-		return host
-	}
-	xff := strings.Join(xffValues, ",")
-	if xff == "" {
-		return host
-	}
-	parts := strings.Split(xff, ",")
-
-	var leftmostParsed net.IP
-	for i := len(parts) - 1; i >= 0; i-- {
-		candidate := strings.TrimSpace(parts[i])
-		if candidate == "" {
-			continue
-		}
-
-		if len(candidate) >= 2 && candidate[0] == '[' && candidate[len(candidate)-1] == ']' {
-			candidate = candidate[1 : len(candidate)-1]
-		}
-		ip := net.ParseIP(candidate)
-		if ip == nil {
-
-			return host
-		}
-		leftmostParsed = ip
-		if !h.limits.IsTrustedProxy(ip) {
-			return ip.String()
-		}
-	}
-	if leftmostParsed != nil {
-		return leftmostParsed.String()
+		return r.RemoteAddr
 	}
 	return host
 }

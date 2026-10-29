@@ -54,7 +54,6 @@ func newSingletonTestConfig(t *testing.T) *AppConfig {
 			WriteTimeout:    5 * time.Second,
 			MaxHeaderBytes:  16 * 1024,
 			H2CEnabled:      false,
-			PProfAddr:       "",
 		},
 		WAL: wal.Config{
 			PostgresDSN:             "postgres://a:b@127.0.0.1:1/db",

@@ -2,7 +2,6 @@ package limits
 
 import (
 	"bytes"
-	"net"
 	"strings"
 	"testing"
 
@@ -130,79 +129,4 @@ func TestLimits_ReleasePerUser_DefensiveWarn(t *testing.T) {
 	l := mkLimits(t, 100, 100)
 
 	l.ReleasePerUser("never-seen-user")
-}
-
-func mkLimitsWithTrustedProxies(t *testing.T, proxies []string) *Limits {
-	t.Helper()
-	return New(Config{
-		GlobalConcurrent:     100,
-		PerUserConcurrentMax: 10,
-		TrustedProxies:       proxies,
-	}, Deps{Logger: zerolog.Nop()})
-}
-
-func TestLimits_IsTrustedProxy_EmptyAllowlist(t *testing.T) {
-	t.Parallel()
-	l := mkLimitsWithTrustedProxies(t, nil)
-	for _, ip := range []string{"10.0.0.1", "203.0.113.5", "fd00::1"} {
-		if l.IsTrustedProxy(net.ParseIP(ip)) {
-			t.Errorf("IsTrustedProxy(%q) = true; want false (empty allowlist)", ip)
-		}
-	}
-}
-
-func TestLimits_IsTrustedProxy_IPv4InRange(t *testing.T) {
-	t.Parallel()
-	l := mkLimitsWithTrustedProxies(t, []string{"10.0.0.0/8"})
-	for _, ip := range []string{"10.0.0.5", "10.255.255.255"} {
-		if !l.IsTrustedProxy(net.ParseIP(ip)) {
-			t.Errorf("IsTrustedProxy(%q) = false; want true", ip)
-		}
-	}
-}
-
-func TestLimits_IsTrustedProxy_IPv4OutOfRange(t *testing.T) {
-	t.Parallel()
-	l := mkLimitsWithTrustedProxies(t, []string{"10.0.0.0/8"})
-	for _, ip := range []string{"203.0.113.5", "11.0.0.1"} {
-		if l.IsTrustedProxy(net.ParseIP(ip)) {
-			t.Errorf("IsTrustedProxy(%q) = true; want false (out of range)", ip)
-		}
-	}
-}
-
-func TestLimits_IsTrustedProxy_IPv6InRange(t *testing.T) {
-	t.Parallel()
-	l := mkLimitsWithTrustedProxies(t, []string{"fd00::/8"})
-	if !l.IsTrustedProxy(net.ParseIP("fd00::1")) {
-		t.Errorf("IsTrustedProxy(fd00::1) = false; want true")
-	}
-}
-
-func TestLimits_IsTrustedProxy_NilIP(t *testing.T) {
-	t.Parallel()
-	l := mkLimitsWithTrustedProxies(t, []string{"10.0.0.0/8"})
-	if l.IsTrustedProxy(nil) {
-		t.Error("IsTrustedProxy(nil) = true; want false")
-	}
-}
-
-func TestLimits_New_SkipsMalformedCIDR(t *testing.T) {
-	t.Parallel()
-	var buf bytes.Buffer
-	logger := zerolog.New(&buf)
-	l := New(Config{
-		GlobalConcurrent:     100,
-		PerUserConcurrentMax: 10,
-		TrustedProxies:       []string{"not-a-cidr", "10.0.0.0/8"},
-	}, Deps{Logger: logger})
-	if !strings.Contains(buf.String(), "trusted_proxies entry failed to parse") {
-		t.Errorf("expected Warn log; got %q", buf.String())
-	}
-	if !l.IsTrustedProxy(net.ParseIP("10.0.0.5")) {
-		t.Error("valid CIDR should still parse despite earlier malformed entry")
-	}
-	if l.IsTrustedProxy(net.ParseIP("203.0.113.5")) {
-		t.Error("out-of-range IP should not be trusted")
-	}
 }

@@ -29,9 +29,13 @@ func TestLoad_RejectsRemovedKeys(t *testing.T) {
 		{"yaml batching", "http:\n  batching_disabled: true\n", "", "http.batching_disabled"},
 		{"yaml lag sample interval", "wal:\n  lag_sample_interval: 5s\n", "", "wal.lag_sample_interval"},
 		{"yaml metrics block", "metrics:\n  sample_interval: 30s\n", "", "metrics.sample_interval"},
+		{"yaml pprof addr", "http:\n  pprof_addr: 127.0.0.1:6060\n", "", "http.pprof_addr"},
+		{"yaml trusted proxies", "limits:\n  trusted_proxies:\n    - 10.0.0.0/8\n", "", "limits.trusted_proxies"},
 		{"env signing secret", "", "WALERA_AUTH_SIGNING_SECRET", "auth.signing_secret"},
 		{"env lag sample interval", "", "WALERA_WAL_LAG_SAMPLE_INTERVAL", "wal.lag_sample_interval"},
 		{"env metrics sample interval", "", "WALERA_METRICS_SAMPLE_INTERVAL", "metrics.sample_interval"},
+		{"env pprof addr", "", "WALERA_HTTP_PPROF_ADDR", "http.pprof_addr"},
+		{"env trusted proxies", "", "WALERA_LIMITS_TRUSTED_PROXIES", "limits.trusted_proxies"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -695,75 +699,6 @@ func TestLoad_SEC04_ControlCharURL_TreatedAsNonHttps(t *testing.T) {
 	}
 }
 
-func writePhase14SEC05YAML(t *testing.T, proxies []string) string {
-	t.Helper()
-	body := "database:\n" +
-		"  url: \"postgres://a:b@localhost/db\"\n" +
-		"wal:\n" +
-		"  publication_name: pub_ok\n" +
-		"limits:\n" +
-		"  trusted_proxies:\n"
-	for _, p := range proxies {
-		body += "    - \"" + p + "\"\n"
-	}
-	return writeTempYAML(t, body)
-}
-
-func TestLoad_SEC05_TrustedProxies_AcceptsValidCIDRs(t *testing.T) {
-	setPhase3RequiredEnv(t)
-	path := writePhase14SEC05YAML(t, []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"})
-	cfg, err := LoadAppConfig(path)
-	if err != nil {
-		t.Fatalf("Load() returned error: %v", err)
-	}
-	want := []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"}
-	if len(cfg.Limits.TrustedProxies) != len(want) {
-		t.Fatalf("TrustedProxies len = %d (%v); want %d (%v)",
-			len(cfg.Limits.TrustedProxies), cfg.Limits.TrustedProxies, len(want), want)
-	}
-	for i := range want {
-		if cfg.Limits.TrustedProxies[i] != want[i] {
-			t.Errorf("TrustedProxies[%d] = %q; want %q", i, cfg.Limits.TrustedProxies[i], want[i])
-		}
-	}
-}
-
-func TestLoad_SEC05_TrustedProxies_RejectsMalformed(t *testing.T) {
-	setPhase3RequiredEnv(t)
-	path := writePhase14SEC05YAML(t, []string{"10.0.0.0"})
-	_, err := LoadAppConfig(path)
-	if err == nil {
-		t.Fatal("want error for missing prefix, got nil")
-	}
-	if !strings.Contains(err.Error(), "is not a valid CIDR") {
-		t.Errorf("err missing 'is not a valid CIDR': %v", err)
-	}
-}
-
-func TestLoad_SEC05_TrustedProxies_RejectsMixed(t *testing.T) {
-	setPhase3RequiredEnv(t)
-	path := writePhase14SEC05YAML(t, []string{"10.0.0.0/8", "garbage"})
-	_, err := LoadAppConfig(path)
-	if err == nil {
-		t.Fatal("want error for mixed-validity list, got nil")
-	}
-	if !strings.Contains(err.Error(), "limits.trusted_proxies[1]") {
-		t.Errorf("err missing index [1]: %v", err)
-	}
-}
-
-func TestLoad_SEC05_TrustedProxies_EmptyDefault(t *testing.T) {
-	setPhase2RequiredEnv(t)
-	setPhase3RequiredEnv(t)
-	cfg, err := LoadAppConfig("")
-	if err != nil {
-		t.Fatalf("Load() returned error: %v", err)
-	}
-	if len(cfg.Limits.TrustedProxies) != 0 {
-		t.Errorf("default TrustedProxies = %v; want empty", cfg.Limits.TrustedProxies)
-	}
-}
-
 func writePhase14SEC09YAML(t *testing.T, origins []string) string {
 	t.Helper()
 	body := "database:\n" +
@@ -923,94 +858,6 @@ func Test_SEC04_HttpAuthBackend_FailsStartup(t *testing.T) {
 			t.Fatalf("Load() with https baseline returned unexpected error: %v", err)
 		}
 	})
-}
-
-func TestLoad_PProfAddr_DefaultEmpty(t *testing.T) {
-	setPhase2RequiredEnv(t)
-	setPhase3RequiredEnv(t)
-
-	t.Setenv("WALERA_PPROF_ALLOW_PUBLIC", "")
-
-	cfg, err := LoadAppConfig("")
-	if err != nil {
-		t.Fatalf("Load() returned error: %v", err)
-	}
-	if cfg.HTTP.PProfAddr != "" {
-		t.Errorf("default Http.PProfAddr = %q; want empty (disabled)", cfg.HTTP.PProfAddr)
-	}
-}
-
-func TestLoad_PProfAddr_Loopback_Accepts(t *testing.T) {
-	cases := []string{
-		"127.0.0.1:6060",
-		"[::1]:6060",
-		"localhost:6060",
-		"LocalHost:6060",
-	}
-	for _, addr := range cases {
-		t.Run(addr, func(t *testing.T) {
-			setPhase2RequiredEnv(t)
-			setPhase3RequiredEnv(t)
-			t.Setenv("WALERA_PPROF_ALLOW_PUBLIC", "")
-			t.Setenv("WALERA_HTTP_PPROF_ADDR", addr)
-
-			cfg, err := LoadAppConfig("")
-			if err != nil {
-				t.Fatalf("Load() returned error: %v", err)
-			}
-			if cfg.HTTP.PProfAddr != addr {
-				t.Errorf("Http.PProfAddr = %q; want %q", cfg.HTTP.PProfAddr, addr)
-			}
-		})
-	}
-}
-
-func TestLoad_PProfAddr_NonLoopback_RejectedWithoutOverride(t *testing.T) {
-	setPhase2RequiredEnv(t)
-	setPhase3RequiredEnv(t)
-	t.Setenv("WALERA_PPROF_ALLOW_PUBLIC", "")
-	t.Setenv("WALERA_HTTP_PPROF_ADDR", "0.0.0.0:6060")
-
-	_, err := LoadAppConfig("")
-	if err == nil {
-		t.Fatal("Load() expected error for non-loopback pprof_addr, got nil")
-	}
-	if !strings.Contains(err.Error(), "http.pprof_addr") {
-		t.Errorf("err = %v; want substring 'http.pprof_addr'", err)
-	}
-	if !strings.Contains(err.Error(), "WALERA_PPROF_ALLOW_PUBLIC=1") {
-		t.Errorf("err = %v; want substring 'WALERA_PPROF_ALLOW_PUBLIC=1' (literal env name)", err)
-	}
-}
-
-func TestLoad_PProfAddr_NonLoopback_AcceptedWithOverride(t *testing.T) {
-	setPhase2RequiredEnv(t)
-	setPhase3RequiredEnv(t)
-	t.Setenv("WALERA_PPROF_ALLOW_PUBLIC", "1")
-	t.Setenv("WALERA_HTTP_PPROF_ADDR", "0.0.0.0:6060")
-
-	cfg, err := LoadAppConfig("")
-	if err != nil {
-		t.Fatalf("Load() returned error: %v", err)
-	}
-	if cfg.HTTP.PProfAddr != "0.0.0.0:6060" {
-		t.Errorf("Http.PProfAddr = %q; want %q (with override)", cfg.HTTP.PProfAddr, "0.0.0.0:6060")
-	}
-}
-
-func TestLoad_PProfAddr_MalformedRejected(t *testing.T) {
-	setPhase2RequiredEnv(t)
-	setPhase3RequiredEnv(t)
-	t.Setenv("WALERA_PPROF_ALLOW_PUBLIC", "")
-	t.Setenv("WALERA_HTTP_PPROF_ADDR", "bad-no-port")
-
-	_, err := LoadAppConfig("")
-	if err == nil {
-		t.Fatal("Load() expected error for malformed pprof_addr, got nil")
-	}
-	if !strings.Contains(err.Error(), "http.pprof_addr") {
-		t.Errorf("err = %v; want substring 'http.pprof_addr'", err)
-	}
 }
 
 func TestLoad_BootstrapAndPublicationDefaults(t *testing.T) {

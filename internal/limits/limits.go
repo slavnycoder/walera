@@ -1,7 +1,6 @@
 package limits
 
 import (
-	"net"
 	"sync"
 	"sync/atomic"
 
@@ -15,8 +14,6 @@ type Limits struct {
 	globalSem chan struct{}
 
 	perUserConcurrent sync.Map
-
-	trustedProxies []*net.IPNet
 }
 
 type Deps struct {
@@ -24,33 +21,11 @@ type Deps struct {
 }
 
 func New(cfg Config, deps Deps) *Limits {
-	parsed := make([]*net.IPNet, 0, len(cfg.TrustedProxies))
-	for _, s := range cfg.TrustedProxies {
-		_, ipNet, err := net.ParseCIDR(s)
-		if err != nil {
-			deps.Logger.Warn().Str("cidr", s).Err(err).Msg("limits.New: trusted_proxies entry failed to parse — skipping")
-			continue
-		}
-		parsed = append(parsed, ipNet)
-	}
 	return &Limits{
-		cfg:            cfg,
-		log:            deps.Logger,
-		globalSem:      make(chan struct{}, cfg.GlobalConcurrent),
-		trustedProxies: parsed,
+		cfg:       cfg,
+		log:       deps.Logger,
+		globalSem: make(chan struct{}, cfg.GlobalConcurrent),
 	}
-}
-
-func (l *Limits) IsTrustedProxy(ip net.IP) bool {
-	if ip == nil {
-		return false
-	}
-	for _, n := range l.trustedProxies {
-		if n.Contains(ip) {
-			return true
-		}
-	}
-	return false
 }
 
 func (l *Limits) AcquireGlobal() bool {

@@ -46,24 +46,3 @@ func TestLoadConfig_RequiresPositivePerUserConcurrent(t *testing.T) {
 		t.Fatalf("LoadConfig: err = %v; want per_user_concurrent > 0", err)
 	}
 }
-
-func TestLoadConfig_TrustedProxiesValidCIDRs(t *testing.T) {
-	k := newK(t)
-	_ = k.Set("limits.trusted_proxies", []string{"10.0.0.0/8", "192.168.0.0/16"})
-	cfg, err := limits.LoadConfig(k)
-	if err != nil {
-		t.Fatalf("LoadConfig: %v", err)
-	}
-	if len(cfg.TrustedProxies) != 2 {
-		t.Errorf("TrustedProxies = %v; want 2 entries", cfg.TrustedProxies)
-	}
-}
-
-func TestLoadConfig_TrustedProxiesRejectsBadCIDR(t *testing.T) {
-	k := newK(t)
-	_ = k.Set("limits.trusted_proxies", []string{"not-a-cidr"})
-	_, err := limits.LoadConfig(k)
-	if err == nil || !strings.Contains(err.Error(), "limits.trusted_proxies[0]") {
-		t.Fatalf("LoadConfig: err = %v; want trusted_proxies CIDR error", err)
-	}
-}

@@ -28,20 +28,10 @@ func TestHTTPServerConstructors(t *testing.T) {
 	if plain.Protocols != nil {
 		t.Fatalf("plain protocols = %v, want nil", plain.Protocols)
 	}
-
-	if srv := newPProfHTTPServer(cfg, zerolog.Nop()); srv != nil {
-		t.Fatalf("disabled pprof server = %#v", srv)
-	}
-	cfg.HTTP.PProfAddr = "127.0.0.1:0"
-	pprofSrv := newPProfHTTPServer(cfg, zerolog.Nop())
-	if pprofSrv == nil || pprofSrv.Addr != cfg.HTTP.PProfAddr || pprofSrv.Handler == nil {
-		t.Fatalf("pprof server = %#v", pprofSrv)
-	}
 }
 
 func TestBuildRunnablesRunnableClosures(t *testing.T) {
 	cfg := newSingletonTestConfig(t)
-	cfg.HTTP.PProfAddr = "127.0.0.1:0"
 	a, cleanup, err := InitializeApp(*cfg, zerolog.Nop(), nil)
 	if err != nil {
 		t.Fatalf("InitializeApp: %v", err)
@@ -52,7 +42,6 @@ func TestBuildRunnablesRunnableClosures(t *testing.T) {
 	close(closedTx)
 	a.TxCh = closedTx
 	a.HTTPServer = &http.Server{Addr: "127.0.0.1:0"}
-	a.PProfServer = &http.Server{Addr: "127.0.0.1:0"}
 
 	cancelCalls := 0
 	a.cancel = func() { cancelCalls++ }
@@ -65,8 +54,8 @@ func TestBuildRunnablesRunnableClosures(t *testing.T) {
 			r.OnError(errors.New("boom"))
 		}
 	}
-	if cancelCalls != 4 {
-		t.Fatalf("cancelCalls = %d, want 4", cancelCalls)
+	if cancelCalls != 3 {
+		t.Fatalf("cancelCalls = %d, want 3", cancelCalls)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -78,7 +67,6 @@ func TestBuildRunnablesRunnableClosures(t *testing.T) {
 	_ = ingest.Run(ctx)
 
 	runServerRunnable(t, byName["http-server"], a.HTTPServer)
-	runServerRunnable(t, byName["pprof-server"], a.PProfServer)
 }
 
 func runServerRunnable(t *testing.T, r Runnable, srv *http.Server) {

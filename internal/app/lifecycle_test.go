@@ -47,7 +47,6 @@ func newTestApp(
 	t *testing.T,
 	logSink *syncBuffer,
 	shutdownDeadline time.Duration,
-	withPProf bool,
 ) *App {
 	t.Helper()
 
@@ -62,11 +61,6 @@ func newTestApp(
 
 	httpSrv := &http.Server{Addr: "127.0.0.1:0"}
 
-	var pprofSrv *http.Server
-	if withPProf {
-		pprofSrv = &http.Server{Addr: "127.0.0.1:0"}
-	}
-
 	logger := zerolog.New(logSink).With().Timestamp().Logger()
 
 	cfg := &AppConfig{}
@@ -78,7 +72,6 @@ func newTestApp(
 		Metrics:     reg,
 		RouterIndex: bcast,
 		HTTPServer:  httpSrv,
-		PProfServer: pprofSrv,
 	}
 }
 
@@ -108,7 +101,7 @@ func TestApp_ShutdownConcurrentWave(t *testing.T) {
 	t.Parallel()
 
 	logSink := &syncBuffer{}
-	a := newTestApp(t, logSink, 5*time.Second, true)
+	a := newTestApp(t, logSink, 5*time.Second)
 
 	var (
 		httpStart, bcastStart atomic.Int64
@@ -122,7 +115,6 @@ func TestApp_ShutdownConcurrentWave(t *testing.T) {
 		ctx,
 		func() { httpStart.Store(now()) },
 		func() { bcastStart.Store(now()) },
-		nil,
 	)
 
 	starts := []int64{httpStart.Load(), bcastStart.Load()}
@@ -144,7 +136,7 @@ func TestApp_ShutdownStepOrdering(t *testing.T) {
 	t.Parallel()
 
 	logSink := &syncBuffer{}
-	a := newTestApp(t, logSink, 5*time.Second, true)
+	a := newTestApp(t, logSink, 5*time.Second)
 
 	var stopCalledAt atomic.Int64
 	stop := func() { stopCalledAt.Store(time.Now().UnixNano()) }

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net"
 	"net/url"
-	"os"
 	"reflect"
 	"slices"
 	"strconv"
@@ -85,8 +84,6 @@ type HTTPConfig struct {
 	MaxHeaderBytes int `koanf:"max_header_bytes"`
 
 	H2CEnabled bool `koanf:"h2c_enabled"`
-
-	PProfAddr string `koanf:"pprof_addr"`
 }
 
 type ShutdownConfig struct {
@@ -110,7 +107,6 @@ func applyAppDefaults(k *koanf.Koanf) {
 	_ = k.Set("http.write_timeout", "5s")
 	_ = k.Set("http.max_header_bytes", 16*1024)
 	_ = k.Set("http.h2c_enabled", true)
-	_ = k.Set("http.pprof_addr", "")
 	_ = k.Set("shutdown.deadline", "10s")
 
 	wal.ApplyDefaults(k)
@@ -139,6 +135,8 @@ var removedConfigKeys = []string{
 	"http.batching_disabled",
 	"wal.lag_sample_interval",
 	"metrics",
+	"http.pprof_addr",
+	"limits.trusted_proxies",
 }
 
 // rejectRemovedKeys names offending keys only; values may be secrets.
@@ -274,18 +272,6 @@ func validateHTTP(c *HTTPConfig) error {
 					"port must be in [1, 65535]",
 					"choose a positive port number",
 				))
-			}
-		}
-	}
-	if c.PProfAddr != "" {
-		host, _, err := net.SplitHostPort(c.PProfAddr)
-		if err != nil {
-			errs = append(errs, fmt.Errorf("http.pprof_addr %q is not a valid host:port: %w", c.PProfAddr, err))
-		} else {
-			hl := strings.ToLower(host)
-			isLoopback := hl == "127.0.0.1" || hl == "::1" || hl == "localhost"
-			if !isLoopback && os.Getenv("WALERA_PPROF_ALLOW_PUBLIC") != "1" {
-				errs = append(errs, fmt.Errorf("http.pprof_addr %q binds a non-loopback host; set WALERA_PPROF_ALLOW_PUBLIC=1 to override", c.PProfAddr))
 			}
 		}
 	}

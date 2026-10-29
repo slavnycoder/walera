@@ -81,16 +81,6 @@ wal:
 #     - X-Tenant-Id
 #     - X-Forwarded-For
 
-# Opt-in pprof listener (quick task 260518-lh1).
-# pprof_addr (default empty = disabled). When set, Walera exposes
-# net/http/pprof (Index/Cmdline/Profile/Symbol/Trace) on a SEPARATE internal
-# listener using a dedicated http.ServeMux (NEVER DefaultServeMux) so a
-# future debug build cannot leak pprof onto the public /sse/v1/* listener.
-# Non-loopback binds require the WALERA_PPROF_ALLOW_PUBLIC=1 environment
-# escape hatch — otherwise validate() rejects them at startup.
-# http:
-#   pprof_addr: "127.0.0.1:6060"
-
 # Phase-4 graceful shutdown deadline (D4-08, D4-26): hard cap on the entire
 # shutdown sequence.
 shutdown:

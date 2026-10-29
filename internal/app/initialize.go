@@ -36,7 +36,6 @@ type httpWiring struct {
 	HealthServer *health.Server
 	Mux          *http.ServeMux
 	MainServer   *http.Server
-	PProfServer  *http.Server
 }
 
 func InitializeApp(cfg AppConfig, logger zerolog.Logger, adminConn walconn.AdminConn) (*App, func(), error) {
@@ -59,7 +58,6 @@ func InitializeApp(cfg AppConfig, logger zerolog.Logger, adminConn walconn.Admin
 		SSEHandler:   dp.Handler,
 		HealthServer: hw.HealthServer,
 		HTTPServer:   hw.MainServer,
-		PProfServer:  hw.PProfServer,
 	}
 	a.Runnables = buildRunnables(a)
 	return a, func() {}, nil
@@ -142,12 +140,9 @@ func wireHTTP(cfg AppConfig, logger zerolog.Logger, cw coreWiring, aw authWiring
 
 	mainSrv := newMainHTTPServer(cfg, mux, logger)
 
-	pprofSrv := newPProfHTTPServer(cfg, logger)
-
 	return httpWiring{
 		HealthServer: healthSrv,
 		Mux:          mux,
 		MainServer:   mainSrv,
-		PProfServer:  pprofSrv,
 	}
 }

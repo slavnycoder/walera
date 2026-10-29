@@ -39,6 +39,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   All other `walera_*` series, the WAL lag sampler and the routing-index
   sampler are removed; drops and reconnects are visible in the logs.
   Config keys `wal.lag_sample_interval` and `metrics.*` are rejected.
+- **pprof listener and trusted-proxy parsing.** `http.pprof_addr`,
+  `WALERA_PPROF_ALLOW_PUBLIC` and `limits.trusted_proxies` are gone; the
+  `client_ip` log field is now the TCP peer address.
 
 ## [3.0.1] - 2026-10-29
 

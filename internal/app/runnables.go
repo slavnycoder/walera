@@ -4,7 +4,6 @@ import (
 	"context"
 	"net"
 	"net/http"
-	pprof "net/http/pprof"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -47,23 +46,6 @@ func buildRunnables(a *App) []Runnable {
 		},
 	)
 
-	if a.PProfServer != nil {
-		runs = append(runs, Runnable{
-			Name: "pprof-server",
-			Run: func(ctx context.Context) error {
-				a.Logger.Info().Str("addr", a.Config.HTTP.PProfAddr).Msg("pprof server listening")
-				if err := a.PProfServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-					return err
-				}
-				return nil
-			},
-			OnError: func(err error) {
-				a.Logger.Error().Err(err).Msg("pprof server exited with error")
-				a.cancel()
-			},
-		})
-	}
-
 	return runs
 }
 
@@ -95,22 +77,4 @@ func newMainHTTPServer(cfg AppConfig, mux *http.ServeMux, logger zerolog.Logger)
 		logger.Info().Msg("h2c enabled on SSE listener (http.h2c_enabled=true)")
 	}
 	return srv
-}
-
-func newPProfHTTPServer(cfg AppConfig, logger zerolog.Logger) *http.Server {
-	if cfg.HTTP.PProfAddr == "" {
-		logger.Info().Msg("pprof disabled (http.pprof_addr empty)")
-		return nil
-	}
-	pprofMux := http.NewServeMux()
-	pprofMux.HandleFunc("/debug/pprof/", pprof.Index)
-	pprofMux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
-	pprofMux.HandleFunc("/debug/pprof/profile", pprof.Profile)
-	pprofMux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
-	pprofMux.HandleFunc("/debug/pprof/trace", pprof.Trace)
-	return &http.Server{
-		Addr:              cfg.HTTP.PProfAddr,
-		Handler:           pprofMux,
-		ReadHeaderTimeout: 5 * time.Second,
-	}
 }

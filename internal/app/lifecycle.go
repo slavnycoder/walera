@@ -65,42 +65,18 @@ func (a *App) Shutdown(ctx context.Context, stop context.CancelFunc, txCh <-chan
 }
 
 func (a *App) shutdownStep1Wave(ctx context.Context) {
-	a.shutdownStep1WaveWithCallbacks(ctx, nil, nil, nil)
+	a.shutdownStep1WaveWithCallbacks(ctx, nil, nil)
 }
 
 func (a *App) shutdownStep1WaveWithCallbacks(
 	ctx context.Context,
-	onHTTPStart, onBroadcastStart, onPProfStart func(),
+	onHTTPStart, onBroadcastStart func(),
 ) {
 
 	_ = ctx
 
 	var wg sync.WaitGroup
 	wg.Add(2)
-
-	if a.PProfServer != nil {
-		wg.Add(1)
-		go func() { //nolint:gosec // G118: shutdown runs after the parent ctx is cancelled and needs its own deadline
-			defer wg.Done()
-			if onPProfStart != nil {
-				onPProfStart()
-			}
-			stepStart := time.Now()
-			sctx, cancel := context.WithTimeout(context.Background(), 9*time.Second)
-			defer cancel()
-			if err := a.PProfServer.Shutdown(sctx); err != nil {
-				a.Logger.Error().Err(err).
-					Str("step", "pprof").
-					Int64("elapsed_ms", time.Since(stepStart).Milliseconds()).
-					Msg("pprofSrv.Shutdown error")
-				return
-			}
-			a.Logger.Info().
-				Str("step", "pprof").
-				Int64("elapsed_ms", time.Since(stepStart).Milliseconds()).
-				Msg("pprof server shutdown complete")
-		}()
-	}
 
 	go func() { //nolint:gosec // G118: shutdown runs after the parent ctx is cancelled and needs its own deadline
 		defer wg.Done()

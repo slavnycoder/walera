@@ -43,8 +43,6 @@ type App struct {
 
 	HTTPServer *http.Server
 
-	PProfServer *http.Server
-
 	Runnables []Runnable
 
 	cancel context.CancelFunc
