@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **Go 1.26.10, pgx v5.9.2, golang.org/x/text v0.41.0.** Fixes the
+  standard-library (`net/http`, `crypto/tls`, `crypto/x509`, `net/url`),
+  pgx (dollar-quoted placeholder confusion) and x/text vulnerabilities
+  reported by `govulncheck`; the Docker build stage uses `golang:1.26.10-alpine`.
 - **`Origin` cannot be forwarded to the auth backend.** It is now a
   reserved header: listing it in `auth.forwarded_headers` fails startup.
   Forwarded headers are scrubbed from the request after the handshake,
