@@ -69,7 +69,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   handshake or refresh abandoned because the client went away no longer
   increments `walera_auth_requests_total{result="unavailable"}` or logs
   `auth permission refresh failed`, so `WaleraAuthBackendUnavailable`
-  is not triggered by ordinary reconnect churn.
+  is not triggered by ordinary reconnect churn. This also covers a
+  disconnect that happens after the backend's response headers arrive but
+  before the body is fully read.
 
 ### Removed
 

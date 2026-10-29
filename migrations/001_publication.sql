@@ -32,13 +32,15 @@
 --   TRUNCATE semantics map poorly to per-row CDC: there is no PK to route by.
 --   Clients must handle gaps via snapshot-on-reconnect after a TRUNCATE event.
 
--- POLICY UPDATE (2026-05-18): Walera now supports auto-bootstrapping a
--- FOR ALL TABLES publication when wal.bootstrap.mode=auto (the default).
--- This migration file is therefore OPTIONAL / REFERENCE-ONLY — keep it
--- when you want a curated table list managed by your DBA and run Walera
--- with wal.bootstrap.mode=verify. For greenfield deployments where every
--- table in the database should stream, leave bootstrap.mode at its
--- default and Walera will create the publication on first boot.
+-- POLICY UPDATE (2026-05-18): wal.bootstrap.mode=auto (the default) requires
+-- an explicit wal.bootstrap.tables list and creates a FOR TABLE publication
+-- from it only — Walera refuses a FOR ALL TABLES publication in both auto
+-- and verify modes (startup fails if one already exists). This migration
+-- file is therefore OPTIONAL / REFERENCE-ONLY — keep it when you want a
+-- curated table list managed by your DBA and run Walera with
+-- wal.bootstrap.mode=verify. For a greenfield deployment, you can instead
+-- leave bootstrap.mode at its default and set wal.bootstrap.tables so
+-- Walera creates the publication on first boot.
 
 -- Example publication — replace with your actual table list.
 CREATE PUBLICATION walera_pub

@@ -60,7 +60,8 @@ data:
       slot_headroom_min: 2
 
       # Publication is DBA-managed via migrations/001_publication.sql — Walera
-      # only verifies it exists and has tables; it never creates FOR ALL TABLES.
+      # only verifies it exists and has tables; it never creates FOR ALL TABLES
+      # and rejects FOR ALL TABLES publications outright (in both verify and auto).
       bootstrap:
         mode: verify
 

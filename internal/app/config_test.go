@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/knadh/koanf/v2"
 )
 
 func TestLoad_RejectsRemovedKeys(t *testing.T) {
@@ -20,6 +22,10 @@ func TestLoad_RejectsRemovedKeys(t *testing.T) {
 		{"yaml health channel", "auth:\n  health_channel: _health\n", "", "auth.health_channel"},
 		{"yaml drain deadline", "shutdown:\n  drain_deadline: 8s\n", "", "shutdown.drain_deadline"},
 		{"yaml pool factor", "http:\n  pool_factor: 2\n", "", "http.pool_factor"},
+		{"yaml sub queue size", "http:\n  sub_queue_size: 100\n", "", "http.sub_queue_size"},
+		{"yaml max wait ms", "http:\n  max_wait_ms: 50\n", "", "http.max_wait_ms"},
+		{"yaml drain threshold subs", "http:\n  drain_threshold_subs: 10\n", "", "http.drain_threshold_subs"},
+		{"yaml max batch bytes per sub", "http:\n  max_batch_bytes_per_sub: 1024\n", "", "http.max_batch_bytes_per_sub"},
 		{"yaml batching", "http:\n  batching_disabled: true\n", "", "http.batching_disabled"},
 		{"env signing secret", "", "WALERA_AUTH_SIGNING_SECRET", "auth.signing_secret"},
 	}
@@ -41,6 +47,18 @@ func TestLoad_RejectsRemovedKeys(t *testing.T) {
 				t.Errorf("err = %q; must not echo the key's value", err.Error())
 			}
 		})
+	}
+}
+
+// A key that merely shares a prefix with a removed key — but isn't it, or a
+// dotted/underscored child of it — must not be rejected (M4).
+func TestRejectRemovedKeys_PrefixBoundary(t *testing.T) {
+	k := koanf.New(".")
+	if err := k.Set("auth.signingalg", "hmac-sha256"); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	if err := rejectRemovedKeys(k); err != nil {
+		t.Errorf("rejectRemovedKeys(auth.signingalg) = %v; want nil", err)
 	}
 }
 

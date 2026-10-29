@@ -158,7 +158,7 @@ following shape:
 | -------------- | -------------------------------------------------------------------------------------- |
 | `user_id`      | Stable identifier used for rate limits and structured logs.                            |
 | `tables`       | Per-table list of columns the user may receive.                                        |
-| `ttl_seconds`  | Refresh interval, read from the handshake response only. A different value in a refresh response is ignored until the client reconnects. Used only when auth.default_ttl_seconds > 0. |
+| `ttl_seconds`  | Refresh interval, read from the handshake response only. A different value in a refresh response is ignored until the client reconnects. |
 | `initial_data` | Optional. Arbitrary JSON delivered to the client as the first SSE frame after open.    |
 
 Field-whitelist semantics: only the columns named in `tables[<table>]`

@@ -199,11 +199,16 @@ func TestClient_OpenSession_TimeoutHonored(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	c, _ := newTestClient(t, srv.URL, 50*time.Millisecond)
+	c, mc := newTestClient(t, srv.URL, 50*time.Millisecond)
 	_, err := c.OpenSession(context.Background(), "tok", ForwardedAuth{}, "orders:1", "req-timeout")
 	var ue *ErrUnavailable
 	if !errors.As(err, &ue) {
 		t.Fatalf("err = %v; want ErrUnavailable (timeout)", err)
+	}
+	// http.Client.Timeout leaves the request context alone, so a real backend
+	// timeout must still be counted, not silently treated as "caller left".
+	if v := gatherCounter(t, mc, "walera_auth_requests_total", "result", "unavailable"); v != 1 {
+		t.Errorf("auth_requests_total{unavailable} = %v; want 1 for a backend timeout", v)
 	}
 }
 
@@ -461,5 +466,66 @@ func TestClient_OpenSession_CallerCancelledNotCounted(t *testing.T) {
 	}
 	if v := gatherCounter(t, mc, "walera_auth_requests_total", "result", "unavailable"); v != 0 {
 		t.Errorf("auth_requests_total{unavailable} = %v; want 0 for a cancelled caller", v)
+	}
+}
+
+// signalRoundTripper closes headers once the wrapped RoundTripper has
+// returned a response, i.e. once the client has received the response
+// headers (the body may still be unread).
+type signalRoundTripper struct {
+	rt      http.RoundTripper
+	headers chan struct{}
+}
+
+func (s *signalRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	resp, err := s.rt.RoundTrip(req)
+	if err == nil {
+		close(s.headers)
+	}
+	return resp, err
+}
+
+// A caller that cancels after the response headers arrive, while the body is
+// still being read, is also not a backend failure (M1): it must not feed
+// walera_auth_requests_total{result="unavailable"}.
+func TestClient_OpenSession_CallerCancelledDuringBodyRead(t *testing.T) {
+	t.Parallel()
+
+	block := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		<-block // hold the connection open past the headers; released on cleanup
+	}))
+	t.Cleanup(func() {
+		close(block)
+		srv.Close()
+	})
+
+	c, mc := newTestClient(t, srv.URL, 10*time.Second)
+	headersReceived := make(chan struct{})
+	c.hc.Transport = &signalRoundTripper{rt: c.hc.Transport, headers: headersReceived}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := c.OpenSession(ctx, "tok", ForwardedAuth{}, "users:1", "req-cancel-body")
+		errCh <- err
+	}()
+
+	<-headersReceived
+	cancel()
+
+	err := <-errCh
+	var ue *ErrUnavailable
+	if !errors.As(err, &ue) {
+		t.Fatalf("err = %v (%T); want *ErrUnavailable", err, err)
+	}
+	if v := gatherCounter(t, mc, "walera_auth_requests_total", "result", "unavailable"); v != 0 {
+		t.Errorf("auth_requests_total{unavailable} = %v; want 0 for a caller cancelled mid-body-read", v)
 	}
 }

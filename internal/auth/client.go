@@ -289,6 +289,11 @@ func (c *Client) doAndDecode(req *http.Request, requestID string) (*Whitelist, e
 
 	body, readErr := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
 	if readErr != nil {
+		// Same cancel-vs-outage distinction as the hc.Do branch above: a
+		// caller that left mid-body-read is not a backend failure.
+		if req.Context().Err() != nil {
+			return nil, &ErrUnavailable{Cause: readErr}
+		}
 		c.mc.AuthRequests("unavailable").Inc()
 		c.log.Warn().
 			Str("auth_request_id", requestID).

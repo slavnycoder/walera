@@ -145,8 +145,8 @@ var removedConfigKeys = []string{
 func rejectRemovedKeys(k *koanf.Koanf) error {
 	var found []string
 	for _, key := range k.Keys() {
-		for _, prefix := range removedConfigKeys {
-			if strings.HasPrefix(key, prefix) {
+		for _, p := range removedConfigKeys {
+			if key == p || strings.HasPrefix(key, p+".") || strings.HasPrefix(key, p+"_") {
 				found = append(found, key)
 				break
 			}
@@ -156,7 +156,7 @@ func rejectRemovedKeys(k *koanf.Koanf) error {
 		return nil
 	}
 	slices.Sort(found)
-	return fmt.Errorf("removed config keys are set: %s — delete them (see CHANGELOG.md)", strings.Join(found, ", "))
+	return fmt.Errorf("removed config keys are set: %s (YAML key or its WALERA_* env form) — delete them (see CHANGELOG.md)", strings.Join(found, ", "))
 }
 
 func LoadAppConfig(path string) (*AppConfig, error) {

@@ -125,6 +125,7 @@ func Test14SlotLifecycle(t *testing.T) {
 		// normally DBA-managed); override to auto with an explicit table list
 		// to exercise the auto-recreate path this subtest is named for.
 		bin := SpawnBinary(t, pg.DSN, pg.ReplicationDSN(), auth.URL(), WithBootstrapAuto("public.users"))
+		pg.WaitForActiveSlot(t, "walera_test", 15*time.Second)
 		client := NewClient(bin.BaseURL())
 
 		events, errCh, closeFn := client.Connect(ctx, "users/200", "test-token")
