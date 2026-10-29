@@ -3,12 +3,15 @@ package wal
 import (
 	"context"
 	"errors"
+	"net"
+	"os"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/jackc/pglogrepl"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgproto3"
 	"github.com/rs/zerolog"
 
@@ -943,5 +946,80 @@ func TestStandby_SendErrorCounting(t *testing.T) {
 				t.Errorf("%s = %v; want %v", standbyACKFailures, got, want)
 			}
 		})
+	}
+}
+
+// While the router is not draining txCh, the reader must keep the walsender
+// alive with standby updates instead of going silent until wal_sender_timeout.
+func TestDeliver_ACKsWhileBlocked(t *testing.T) {
+	t.Parallel()
+	fc := newFakeConn(nil)
+	r := newReaderForTest(fc, zerolog.Nop())
+	r.standbyInterval = 20 * time.Millisecond
+	r.txCh = make(chan Tx) // unbuffered and never read: delivery blocks
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- r.deliver(ctx, Tx{}) }()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for len(fc.AckCalls()) < 3 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	cancel()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("deliver err = %v; want context.Canceled", err)
+	}
+	if n := len(fc.AckCalls()); n < 3 {
+		t.Fatalf("ACKs while blocked = %d; want >= 3", n)
+	}
+}
+
+func TestDeliver_SendsWhenReceiverReady(t *testing.T) {
+	t.Parallel()
+	fc := newFakeConn(nil)
+	r := newReaderForTest(fc, zerolog.Nop())
+	r.txCh = make(chan Tx, 1)
+	if err := r.deliver(context.Background(), Tx{}); err != nil {
+		t.Fatalf("deliver: %v", err)
+	}
+	if len(r.txCh) != 1 {
+		t.Fatal("tx not delivered")
+	}
+}
+
+// A peer that never reads must not block the standby write forever: pglogrepl
+// ignores ctx, so only the write deadline bounds it.
+func TestPgConnAdapter_SendACKWriteDeadline(t *testing.T) {
+	old := standbyWriteTimeout
+	standbyWriteTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { standbyWriteTimeout = old })
+
+	cfg, err := pgconn.ParseConfig("postgres://walera@127.0.0.1/walera")
+	if err != nil {
+		t.Fatalf("ParseConfig: %v", err)
+	}
+	c1, c2 := net.Pipe() // nobody reads c2: every write blocks
+	t.Cleanup(func() { _ = c1.Close(); _ = c2.Close() })
+	conn, err := pgconn.Construct(&pgconn.HijackedConn{
+		Conn:              c1,
+		Frontend:          pgproto3.NewFrontend(c1, c1),
+		Config:            cfg,
+		ParameterStatuses: map[string]string{},
+		TxStatus:          'I',
+	})
+	if err != nil {
+		t.Fatalf("pgconn.Construct: %v", err)
+	}
+	a := &pgConnAdapter{conn: conn}
+
+	start := time.Now()
+	err = a.SendACK(context.Background(), pglogrepl.StandbyStatusUpdate{ClientTime: time.Now()})
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("SendACK blocked %v; want < 1s", elapsed)
+	}
+	var ne net.Error
+	if !errors.Is(err, os.ErrDeadlineExceeded) && (!errors.As(err, &ne) || !ne.Timeout()) {
+		t.Fatalf("SendACK err = %v; want write timeout", err)
 	}
 }

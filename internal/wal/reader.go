@@ -42,7 +42,14 @@ func (a *pgConnAdapter) ReceiveMessage(ctx context.Context) (pgproto3.BackendMes
 	return a.conn.ReceiveMessage(ctx)
 }
 
+// standbyWriteTimeout bounds a standby update write: pglogrepl ignores ctx, so
+// a stuck socket would otherwise block the reader (and shutdown) forever.
+var standbyWriteTimeout = 10 * time.Second
+
 func (a *pgConnAdapter) SendACK(ctx context.Context, ssu pglogrepl.StandbyStatusUpdate) error {
+	nc := a.conn.Conn()
+	_ = nc.SetWriteDeadline(time.Now().Add(standbyWriteTimeout))
+	defer func() { _ = nc.SetWriteDeadline(time.Time{}) }()
 	return pglogrepl.SendStandbyStatusUpdate(ctx, a.conn, ssu)
 }
 
@@ -298,6 +305,24 @@ func (r *Reader) sendStandby(ctx context.Context) {
 	r.log.Warn().Err(err).Msg("standby status update failed")
 }
 
+// deliver hands a committed tx to the router. While the router is busy the
+// reader still owes Postgres standby updates, so they go out from here (same
+// goroutine; the connection keeps a single owner).
+func (r *Reader) deliver(ctx context.Context, tx Tx) error {
+	t := time.NewTicker(r.standbyEvery())
+	defer t.Stop()
+	for {
+		select {
+		case r.txCh <- tx:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-t.C:
+			r.sendStandby(ctx)
+		}
+	}
+}
+
 func handleKeepaliveMsg(pkm pglogrepl.PrimaryKeepaliveMessage, sendStandby func(context.Context)) bool {
 	if pkm.ReplyRequested {
 		sendStandby(context.Background())
@@ -355,10 +380,8 @@ func (r *Reader) processWALMessage(ctx context.Context, walData []byte, txBld *t
 			setLSN(m.CommitLSN)
 
 			r.metrics.WALTxSizeChanges().Observe(float64(len(tx.Changes)))
-			select {
-			case r.txCh <- *tx:
-			case <-ctx.Done():
-				return ctx.Err()
+			if err := r.deliver(ctx, *tx); err != nil {
+				return err
 			}
 		}
 
