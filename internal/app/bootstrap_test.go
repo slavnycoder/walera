@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"reflect"
@@ -293,6 +294,26 @@ func TestBootstrapVerifyTablesUnit(t *testing.T) {
 	bootstrapVerifyTables(ctx, &fakeBootstrapDB{queryErrs: []error{errors.New("boom")}}, "pub", []string{"public.a"}, zerolog.Nop())
 	bootstrapVerifyTables(ctx, &fakeBootstrapDB{queryRows: []pgx.Rows{&fakeRows{values: [][]any{{"public.a"}}, scanErr: errors.New("boom")}}}, "pub", []string{"public.a"}, zerolog.Nop())
 	bootstrapVerifyTables(ctx, &fakeBootstrapDB{queryRows: []pgx.Rows{&fakeRows{values: [][]any{{"public.a"}}, err: errors.New("boom")}}}, "pub", []string{"public.a"}, zerolog.Nop())
+}
+
+func TestPrepareDatabase_SlotNameUsesHostnameFn(t *testing.T) {
+	cfg := newSingletonTestConfig(t)
+	cfg.WAL.PublicationName = "pub"
+	cfg.WAL.SlotHeadroomMin = 2
+	db := &fakeBootstrapDB{rowResults: []fakeRow{
+		{values: []any{"logical"}}, {values: []any{"2"}}, {values: []any{"2"}},
+		{values: []any{"repl", true, false}},
+		{values: []any{false}}, {values: []any{150004}}, {values: []any{false}}, {values: []any{1}},
+		{values: []any{10}}, {values: []any{10}}, // no headroom: the warning names the slot
+	}}
+	var buf bytes.Buffer
+	if err := prepareDatabase(context.Background(), cfg, zerolog.New(&buf), db,
+		func() (string, error) { return "Pod-7", nil }, func() int { return 42 }); err != nil {
+		t.Fatalf("prepareDatabase: %v", err)
+	}
+	if !strings.Contains(buf.String(), `"slot":"walera_pod_7_42"`) {
+		t.Fatalf("log = %s; want slot named from hostnameFn", buf.String())
+	}
 }
 
 func TestPrepareDatabaseUnit(t *testing.T) {

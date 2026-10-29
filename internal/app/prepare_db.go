@@ -29,7 +29,7 @@ func prepareDatabase(ctx context.Context, cfg *AppConfig, logger zerolog.Logger,
 		return err
 	}
 
-	hostname, err := os.Hostname()
+	hostname, err := hostnameFn()
 	if err != nil {
 		hostname = "unknown"
 	}
