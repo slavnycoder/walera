@@ -621,7 +621,7 @@ func TestHandler_PreludeArrivesAtConnectionOpen(t *testing.T) {
 		t.Fatalf("did not receive prelude within 1.5s; got %d bytes (%q)", len(buf), buf)
 	}
 	if !strings.HasPrefix(string(buf), prelude) {
-		t.Errorf("body does not begin with WALERA-01 prelude %q; got first %d bytes = %q", prelude, len(prelude), buf[:len(prelude)])
+		t.Errorf("body does not begin with prelude %q; got first %d bytes = %q", prelude, len(prelude), buf[:len(prelude)])
 	}
 
 	kit.bc.firstSub(t).Drop("test")
@@ -1466,7 +1466,7 @@ func TestHandler_RawWireBytes(t *testing.T) {
 		t.Errorf("Content-Type = %q; want %q", gotContentType, "text/event-stream")
 	}
 	if sawChunkedTE {
-		t.Errorf("Transfer-Encoding contains chunked; want absent ( / WIRE-02)")
+		t.Errorf("Transfer-Encoding contains chunked; want absent")
 	}
 
 	const prelude = "retry: 15000\n\n"

@@ -162,7 +162,7 @@ func Test14SlotLifecycle(t *testing.T) {
 			t.Fatalf("walera_* slot never appeared; stderr:\n%s", h.Binary.Stderr())
 		}
 		if !temporary {
-			t.Errorf("slot %q temporary=false; expected true (WAL-06 / ADR-04 temporary slot policy)", slotName)
+			t.Errorf("slot %q temporary=false; expected true (temporary slot policy)", slotName)
 		}
 		if !active {
 			t.Errorf("slot %q active=false; expected true (Walera holds the slot for the lifetime of the connection)", slotName)
@@ -226,7 +226,7 @@ func Test14SlotLifecycle(t *testing.T) {
 			t.Fatalf("slot never appeared; stderr:\n%s", bin.Stderr())
 		}
 		if !temporary {
-			t.Fatalf("WAL-06 / D-10 finding: slot %q is not temporary; fix internal/wal/slot.go::bootstrapSlot to pass Temporary: true", slotName)
+			t.Fatalf("slot %q is not temporary; fix internal/wal/slot.go::bootstrapSlot to pass Temporary: true", slotName)
 		}
 
 		if err := bin.Signal(syscall.SIGTERM); err != nil {

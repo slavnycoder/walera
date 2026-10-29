@@ -69,7 +69,7 @@ command-line configuration.
 | `WALERA_DATABASE_URL` | yes | | PostgreSQL URL, e.g. `postgres://walera:secret@db:5432/app`. Walera adds `replication=database` itself for the replication connection. |
 | `WALERA_AUTH_URL` | yes | | Base URL of your auth backend; Walera calls `<url>/auth/sessions`. Must be `https://` unless `WALERA_AUTH_ALLOW_PLAINTEXT=1`. |
 | `WALERA_ADDR` | no | `:8080` | Listen address for SSE, health and metrics. |
-| `WALERA_PUBLICATION` | no | `walera_pub` | Name of the publication to stream. |
+| `WALERA_PUBLICATION` | no | `walera_pub` | Name of the publication to stream. An unquoted identifier (`[A-Za-z_][A-Za-z0-9_]{0,62}`), not `walera` (the slot name prefix). |
 | `WALERA_TABLES` | no | empty | Comma-separated `schema.table` list. Used to create the publication when it does not exist; compared against it (warning only) when it does. |
 | `WALERA_CORS_ORIGINS` | no | empty | Comma-separated origins allowed to read streams cross-origin, e.g. `https://app.example`. Empty means no CORS headers. |
 | `WALERA_AUTH_TTL` | no | `60s` | How often a live stream re-checks its permissions. Go duration, at least `1s`. |
@@ -92,7 +92,8 @@ variable but never print its value.
 
 `{table}` is a table in the `public` schema (lowercase, `[a-z_][a-z0-9_]*`,
 at most 64 characters); `{pk}` is the primary-key value as text (at most 256
-characters). The table must be in the publication and needs a single-column
+characters). A row whose primary key is literally `all` cannot be subscribed
+to: that path is the table stream. The table must be in the publication and needs a single-column
 primary key of type `smallint`, `integer`, `bigint`, `uuid` or `text`.
 
 Request options:
@@ -218,7 +219,8 @@ only for publicly enumerable tables.
 
 - PostgreSQL 14 or newer with `wal_level = logical`, connected directly (not
   through PgBouncer).
-- A role with the `REPLICATION` attribute and `SELECT` on the streamed tables.
+- A role with the `REPLICATION` attribute. Walera itself needs no `SELECT` on
+  the published tables (it does not copy initial data).
 - A publication listing tables explicitly (`FOR TABLE …`), or `WALERA_TABLES`
   so Walera creates one. `FOR ALL TABLES` and `FOR TABLES IN SCHEMA` are
   refused.

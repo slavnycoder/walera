@@ -95,10 +95,10 @@ func TestHandleCORS_TimingAllowOrigin_EnablesH2cProbe(t *testing.T) {
 
 	allowed, _ := handleCORS(w, r, []string{"http://localhost:8081"})
 	if !allowed {
-		t.Fatalf("allowed = false; want true (UI-11 prerequisite: allowlist match)")
+		t.Fatalf("allowed = false; want true (allowlist match)")
 	}
 	if got := w.Header().Get("Timing-Allow-Origin"); got != "http://localhost:8081" {
-		t.Errorf("Timing-Allow-Origin = %q; want %q (UI-11: h2c probe needs TAO to read nextHopProtocol)",
+		t.Errorf("Timing-Allow-Origin = %q; want %q (h2c probe needs TAO to read nextHopProtocol)",
 			got, "http://localhost:8081")
 	}
 }

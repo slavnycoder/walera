@@ -103,15 +103,16 @@ groups:
 
 ## Shutdown
 
-On `SIGTERM` or `SIGINT` Walera:
+On `SIGTERM` or `SIGINT`, at the same time:
 
-1. stops accepting connections and ends every stream with
-   `event: shutdown` (`{"reason":"service_restart"}`), so clients reconnect
-   elsewhere or later;
-2. stops reading WAL and closes the replication connection, which drops the
-   temporary slot.
+- the WAL reader stops and closes the replication connection, which drops
+  the temporary slot; no further transactions are routed;
+- the HTTP server stops accepting connections and waits up to 9 s for open
+  streams to finish;
+- every stream gets `event: shutdown` (`{"reason":"service_restart"}`) and
+  closes, so clients reconnect elsewhere or later.
 
-This normally takes well under a second. If it is not done after 10 s,
+Finally the admin connection to PostgreSQL is closed. This normally takes well under a second. If it is not done after 10 s,
 Walera exits with status 1. Give the container at least 10 s to stop (the
 `docker stop` default).
 
@@ -159,5 +160,6 @@ header values or `initial_data`. Messages worth watching:
 | `WARNING: low replication slot headroom — risk of slot exhaustion` | warn | Fewer than 2 free replication slots at startup. |
 | `shutdown: hard cap reached; forced exit` | error | Shutdown took longer than 10 s. |
 
-`WALERA_LOG_LEVEL=debug` adds per-message WAL detail; `info` (default) logs
+`WALERA_LOG_LEVEL=debug` adds notes on ignored WAL messages (type, origin,
+truncate) and cancelled standby updates; `info` (default) logs
 each subscriber's connect and disconnect.

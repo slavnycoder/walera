@@ -35,7 +35,7 @@ func New() *Registry {
 		subscriberDisconnects: prometheus.NewCounterVec(
 			prometheus.CounterOpts{
 				Name: "walera_subscriber_disconnects_total",
-				Help: "Total subscriber disconnects by reason (slow_consumer|tx_too_large|client_closed|shutdown).",
+				Help: "Total subscriber disconnects by reason (slow_consumer|tx_too_large|client_closed|shutdown|auth_revoked|auth_unavailable).",
 			},
 			[]string{"reason"},
 		),

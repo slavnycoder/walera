@@ -95,11 +95,13 @@ subscriber.
 
 ## Shutdown
 
-On `SIGTERM` the HTTP server stops accepting connections while the router
-marks every subscriber `shutdown` (later arrivals too). Each stream loop
-writes `event: shutdown` and returns. Then the reader stops and the
-replication connection closes, dropping the slot. A 10 s timer forces exit
-if anything hangs.
+`SIGTERM` cancels the context every long-running goroutine shares, so the
+WAL reader and the router's ingest loop stop at once; the replication
+connection closes and the slot is dropped. In parallel the HTTP server stops
+accepting connections and the router marks every subscriber `shutdown`
+(later arrivals too); each stream loop writes `event: shutdown` and returns.
+Then the admin connection closes. A 10 s timer forces exit if anything
+hangs.
 
 ## Security decisions
 

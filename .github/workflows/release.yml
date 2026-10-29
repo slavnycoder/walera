@@ -1,5 +1,5 @@
 # =============================================================================
-# .github/workflows/release.yml — Phase 11 / RELEASE-02.
+# .github/workflows/release.yml — GitHub release from CHANGELOG.md.
 #
 # Triggered by `v*` tag pushes. Extracts the matching `## [<version>]`
 # section from CHANGELOG.md and calls `gh release create` with the
@@ -12,7 +12,7 @@
 #   - release.yml is text-extract focused (awk on CHANGELOG.md + gh).
 #   Keeping them apart keeps each workflow file's responsibility clear.
 #
-# RELEASE-03 verification (D-15): publish-image.yml already produces
+# publish-image.yml already produces
 # immutable semver tags (`v<semver>`, `<major>.<minor>.<patch>`,
 # `<major>.<minor>`, `<major>`) plus a `latest` gated on
 # `is_default_branch`. No change required to that workflow.

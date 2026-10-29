@@ -54,7 +54,7 @@ func confirmedSlotDrained(t *testing.T, p *PG, prefix string, tolerance int64, d
 	return last, false
 }
 
-// TestLargeTransactionBackpressure (WAL-05): one Postgres transaction with
+// TestLargeTransactionBackpressure: one Postgres transaction with
 // 10 050 row changes must not wedge the pipeline. It exceeds the fixed
 // 10 000-change per-tx limit, so the wildcard subscriber is dropped
 // with an explicit tx_too_large error frame (never a silent truncation), the

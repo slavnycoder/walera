@@ -36,7 +36,8 @@ services:
       postgres:
         condition: service_healthy
     environment:
-      # The demo role is a superuser; a real one needs only REPLICATION and SELECT.
+      # The demo role is a superuser; a real one needs only REPLICATION
+      # (Walera itself needs no SELECT on the published tables).
       WALERA_DATABASE_URL: "postgres://walera:walera@postgres:5432/walera?sslmode=disable"
       # Walera creates the publication (walera_pub) FOR TABLE from this list.
       WALERA_TABLES: "${WALERA_TABLES:-public.items}"

@@ -93,9 +93,10 @@ for slow subscribers, so `wal_sender_timeout` does not cut it off.
 ## Managed PostgreSQL
 
 - **Amazon RDS / Aurora:** set `rds.logical_replication = 1` in the
-  parameter group and reboot. RDS grants replication through membership in
-  `rds_replication` rather than the `REPLICATION` attribute; Walera's startup
-  check reads the attribute, so it refuses a role that does not have it.
+  parameter group and reboot. Walera's startup check
+  requires `rolreplication` or `rolsuper` in `pg_roles` for the connecting
+  role. Membership in `rds_replication` alone does not set either, so a role
+  that has only that membership is refused at startup.
 - **Google Cloud SQL:** set the `cloudsql.logical_decoding` flag to `on`, then
   `ALTER ROLE walera REPLICATION`.
 - Connect to the database host itself, not to a provider's connection pooler.

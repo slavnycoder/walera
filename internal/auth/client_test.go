@@ -298,13 +298,13 @@ func TestOpenSession_OutboundRequestID_InvalidSubstituted(t *testing.T) {
 		t.Errorf("expected Warn log; got %q", logOut)
 	}
 	if !strings.Contains(logOut, `"invalid_len":`) {
-		t.Errorf("WR-02: missing invalid_len; got %q", logOut)
+		t.Errorf("missing invalid_len; got %q", logOut)
 	}
 	if !strings.Contains(logOut, `"invalid_id_truncated":`) {
-		t.Errorf("WR-02: missing invalid_id_truncated; got %q", logOut)
+		t.Errorf("missing invalid_id_truncated; got %q", logOut)
 	}
 	if !strings.Contains(logOut, `"substitute_id":"`+got+`"`) {
-		t.Errorf("WR-02: substitute_id mismatch with backend-seen %q; got %q", got, logOut)
+		t.Errorf("substitute_id mismatch with backend-seen %q; got %q", got, logOut)
 	}
 }
 
@@ -330,11 +330,11 @@ func TestOpenSession_OutboundRequestID_Truncated_LogsBoundedOriginal(t *testing.
 	logOut := buf.String()
 	wantLen := fmt.Sprintf(`"invalid_len":%d`, len(bad))
 	if !strings.Contains(logOut, wantLen) {
-		t.Errorf("WR-02: invalid_len must record full length %d; got %q", len(bad), logOut)
+		t.Errorf("invalid_len must record full length %d; got %q", len(bad), logOut)
 	}
 	wantTrunc := `"invalid_id_truncated":"` + strings.Repeat("A", 16) + `..."`
 	if !strings.Contains(logOut, wantTrunc) {
-		t.Errorf("WR-02: invalid_id_truncated must be 16-byte prefix+\"...\"; got %q", logOut)
+		t.Errorf("invalid_id_truncated must be 16-byte prefix+\"...\"; got %q", logOut)
 	}
 }
 

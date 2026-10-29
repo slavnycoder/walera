@@ -1,5 +1,5 @@
 # =============================================================================
-# .github/workflows/checks.yml — PR gate workflow (Phase 11 / CI-01..03, CI-05).
+# .github/workflows/checks.yml — PR gate workflow.
 #
 # Every job is a top-level entry so the PR Checks tab shows one row per
 # concern. Failures are easy to read; jobs run in parallel.
@@ -9,8 +9,8 @@
 #   - vet               go vet, golangci-lint
 #   - vulncheck         govulncheck ./... (gate on confirmed-affected only)
 #   - test-race         go test -race -timeout 5m ./... (unit tests; no integration)
-#   - deps-check        make deps-check (Phase 6 target)
-#   - changelog-date-test  scripts/check-changelog-date_test.sh (RELEASE-02)
+#   - deps-check        make deps-check
+#   - changelog-date-test  scripts/check-changelog-date_test.sh
 #
 # Relationship to existing workflows:
 #   - publish-image.yml multi-arch image push on `v*` tags; orthogonal.
