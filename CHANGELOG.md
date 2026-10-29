@@ -44,6 +44,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Mixed-case `WALERA_PUBLICATION` / `WALERA_TABLES` work after a restart.**
+  Both are folded to lower case, as PostgreSQL folds unquoted identifiers,
+  so a publication created as `MyPub` is found again as `mypub` and
+  `public.Items` no longer reports a false membership difference.
 - **The replication slot no longer holds back WAL while published tables
   are quiet.** On PostgreSQL 15+ writes to unpublished tables reach Walera
   only as keepalives; Walera now confirms their WAL position, so

@@ -18,9 +18,11 @@ type fakeBootstrapDB struct {
 	queryErrs  []error
 	execErrs   []error
 	execSQL    []string
+	rowArgs    [][]any
 }
 
-func (f *fakeBootstrapDB) QueryRow(context.Context, string, ...any) pgx.Row {
+func (f *fakeBootstrapDB) QueryRow(_ context.Context, _ string, args ...any) pgx.Row {
+	f.rowArgs = append(f.rowArgs, args)
 	if len(f.rowResults) == 0 {
 		return fakeRow{err: errors.New("unexpected QueryRow")}
 	}
@@ -205,6 +207,38 @@ func TestBootstrapPublication_MissingIsCreatedFromTables(t *testing.T) {
 	}
 	if len(db.execSQL) != 1 || !strings.Contains(db.execSQL[0], "CREATE PUBLICATION pub FOR TABLE public.a, public.b") {
 		t.Fatalf("exec = %#v", db.execSQL)
+	}
+}
+
+// CREATE PUBLICATION MyPub creates "mypub"; the lookup on the next start must
+// use the same folded name or it never finds the publication again.
+func TestBootstrapPublication_MixedCaseNameAcrossRuns(t *testing.T) {
+	cfg, err := LoadFromEnv(append(baseEnv(), "WALERA_PUBLICATION=MyPub", "WALERA_TABLES=Public.Items"))
+	if err != nil {
+		t.Fatalf("LoadFromEnv: %v", err)
+	}
+	bc := bootstrapConfig{PublicationName: string(cfg.WAL.PublicationName), Tables: cfg.WAL.Tables}
+
+	first := &fakeBootstrapDB{rowResults: []fakeRow{{err: pgx.ErrNoRows}}}
+	if err := bootstrapPublication(context.Background(), first, bc, zerolog.Nop()); err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+	if len(first.execSQL) != 1 || !strings.Contains(first.execSQL[0], "CREATE PUBLICATION mypub FOR TABLE public.items") {
+		t.Fatalf("first run exec = %#v", first.execSQL)
+	}
+
+	second := &fakeBootstrapDB{
+		rowResults: []fakeRow{{values: []any{false}}, {values: []any{150004}}, {values: []any{false}}, {values: []any{1}}},
+		queryRows:  []pgx.Rows{&fakeRows{values: [][]any{{"public.items"}}}},
+	}
+	if err := bootstrapPublication(context.Background(), second, bc, zerolog.Nop()); err != nil {
+		t.Fatalf("second run: %v", err)
+	}
+	if got := second.rowArgs[0]; len(got) != 1 || got[0] != "mypub" {
+		t.Fatalf("lookup args = %v; want the folded name mypub", got)
+	}
+	if len(second.execSQL) != 0 {
+		t.Fatalf("second run exec = %#v; want no DDL", second.execSQL)
 	}
 }
 

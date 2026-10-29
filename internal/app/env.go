@@ -81,10 +81,12 @@ func LoadFromEnv(environ []string) (*AppConfig, error) {
 	if v := env["WALERA_ADDR"]; v != "" {
 		cfg.HTTP.Addr = v
 	}
+	// Unquoted identifiers: PostgreSQL folds them to lower case, so fold here
+	// too or catalog lookups by the configured name miss what CREATE made.
 	if v := env["WALERA_PUBLICATION"]; v != "" {
-		cfg.WAL.PublicationName = wal.PublicationName(v)
+		cfg.WAL.PublicationName = wal.PublicationName(strings.ToLower(v))
 	}
-	cfg.WAL.Tables = splitList(env["WALERA_TABLES"])
+	cfg.WAL.Tables = splitList(strings.ToLower(env["WALERA_TABLES"]))
 	cfg.HTTP.CORSOrigins = splitList(env["WALERA_CORS_ORIGINS"])
 	cfg.Auth.ForwardedCookies = splitList(env["WALERA_AUTH_FORWARD_COOKIES"])
 	cfg.Auth.ForwardedHeaders = splitList(env["WALERA_AUTH_FORWARD_HEADERS"])

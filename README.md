@@ -69,8 +69,8 @@ command-line configuration.
 | `WALERA_DATABASE_URL` | yes | | PostgreSQL URL (`postgres://` or `postgresql://`; the key=value form is not accepted), e.g. `postgres://walera:secret@db:5432/app`. Walera adds `replication=database` itself for the replication connection. |
 | `WALERA_AUTH_URL` | yes | | Base URL of your auth backend; Walera calls `<url>/auth/sessions`. Must be `https://` unless `WALERA_AUTH_ALLOW_PLAINTEXT=1`. |
 | `WALERA_ADDR` | no | `:8080` | Listen address for SSE, health and metrics. |
-| `WALERA_PUBLICATION` | no | `walera_pub` | Name of the publication to stream. An unquoted identifier (`[A-Za-z_][A-Za-z0-9_]{0,62}`), not `walera` (the slot name prefix). |
-| `WALERA_TABLES` | no | empty | Comma-separated `schema.table` list. Used to create the publication when it does not exist; compared against it (warning only) when it does. |
+| `WALERA_PUBLICATION` | no | `walera_pub` | Name of the publication to stream. An unquoted identifier (`[A-Za-z_][A-Za-z0-9_]{0,62}`), not `walera` (the slot name prefix). Folded to lower case, as PostgreSQL does: `MyPub` means `mypub`. |
+| `WALERA_TABLES` | no | empty | Comma-separated `schema.table` list, folded to lower case like `WALERA_PUBLICATION`. Used to create the publication when it does not exist; compared against it (warning only) when it does. |
 | `WALERA_CORS_ORIGINS` | no | empty | Comma-separated origins allowed to read streams cross-origin, e.g. `https://app.example`. Empty means no CORS headers. |
 | `WALERA_AUTH_TTL` | no | `60s` | How often a live stream re-checks its permissions. Go duration, at least `1s`. |
 | `WALERA_AUTH_FORWARD_COOKIES` | no | empty | Comma-separated cookie names forwarded from the client to the auth backend. |
