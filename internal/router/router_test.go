@@ -77,6 +77,8 @@ func mkChange(op wal.Op, schema, table, pk string) wal.Change {
 		c.Data = map[string]any{"id": pk}
 	case wal.OpUpdate:
 		c.Changed = map[string]any{"id": pk}
+	case wal.OpDelete:
+		// PK-only change: no column payload.
 	}
 	return c
 }

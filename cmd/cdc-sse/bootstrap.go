@@ -16,7 +16,7 @@ func runHealthcheckProbe() {
 		}
 	}
 	client := &http.Client{Timeout: 2 * time.Second}
-	resp, err := client.Get("http://127.0.0.1:" + port + "/healthz")
+	resp, err := client.Get("http://127.0.0.1:" + port + "/healthz") //nolint:gosec // G704: loopback self-probe, port from our own config
 	if err != nil {
 		os.Exit(1)
 	}

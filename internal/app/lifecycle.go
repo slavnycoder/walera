@@ -80,7 +80,7 @@ func (a *App) shutdownStep1WaveWithCallbacks(
 
 	if a.PProfServer != nil {
 		wg.Add(1)
-		go func() {
+		go func() { //nolint:gosec // G118: shutdown runs after the parent ctx is cancelled and needs its own deadline
 			defer wg.Done()
 			if onPProfStart != nil {
 				onPProfStart()
@@ -102,7 +102,7 @@ func (a *App) shutdownStep1WaveWithCallbacks(
 		}()
 	}
 
-	go func() {
+	go func() { //nolint:gosec // G118: shutdown runs after the parent ctx is cancelled and needs its own deadline
 		defer wg.Done()
 		if onHTTPStart != nil {
 			onHTTPStart()

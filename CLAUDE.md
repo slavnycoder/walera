@@ -78,7 +78,7 @@ Walera is a Go service that streams PostgreSQL row-level changes to clients over
 ### Circuit Breaker: removed
 - Removed 2026-10-28: refresh is fail-closed and re-calls `/auth/sessions`; there is no circuit breaker.
 ### Schema Validation Library: None needed
-### Build Tooling: golangci-lint v2 `v2.12.2`
+### Build Tooling: golangci-lint v2 `v2.15.0`
 - `exhaustive`: The pgoutput message-type switch (`case *pglogrepl.InsertMessageV2`,
 - `errcheck`: Every `conn.Write()` and `flusher.Flush()` in the SSE writer must be
 - `nilerr`: Common bug pattern in error-wrapping code.
@@ -108,7 +108,7 @@ Walera is a Go service that streams PostgreSQL row-level changes to clients over
 ### Dev Tools (not go.mod)
 | Tool | Version | Purpose |
 |------|---------|---------|
-| `golangci-lint` | `v2.12.2` | Static analysis |
+| `golangci-lint` | `v2.15.0` | Static analysis (v2.12.2 cannot type-check Go 1.26) |
 | `air` | `v1.65.1` | Dev hot-reload |
 ## What NOT to Use
 | Avoid | Why | Use Instead |

@@ -4,7 +4,6 @@ package writer
 
 import (
 	"context"
-	"fmt"
 	mathrand "math/rand/v2"
 	"os"
 	"path/filepath"
@@ -12,7 +11,6 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 	"github.com/testcontainers/testcontainers-go/wait"
@@ -195,7 +193,3 @@ func TestBootPG_Reachable(t *testing.T) {
 		t.Errorf("orders count = %d, want >= 5 (demo seed)", n)
 	}
 }
-
-var _ = pgxpool.Pool{}
-
-func _unused() { _ = fmt.Sprintf("") }

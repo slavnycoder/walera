@@ -213,12 +213,12 @@ shutdown:
 `, pgDSN, bootstrapLines, addr, writeTimeoutLine, mockAuthURL, forwardedLines, sc.globalConcurrent, sc.perUserConcurrent)
 
 	cfgFile := filepath.Join(t.TempDir(), "walera-test.yaml")
-	if err := os.WriteFile(cfgFile, []byte(cfg), 0o644); err != nil {
+	if err := os.WriteFile(cfgFile, []byte(cfg), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 
 	stderrBuf := &syncBuffer{}
-	cmd := exec.Command(binaryPath(), "--config", cfgFile)
+	cmd := exec.Command(binaryPath(), "--config", cfgFile) //nolint:gosec // G204: fixed repo-relative test binary path and a t.TempDir() config file, no external input
 	cmd.Stderr = stderrBuf
 	cmd.Stdout = nil
 
@@ -240,11 +240,16 @@ shutdown:
 		doneCh := make(chan error, 1)
 		go func() { doneCh <- cmd.Wait() }()
 		select {
-		case <-doneCh:
+		case err := <-doneCh:
+			if err != nil {
+				t.Logf("binary exited with error after SIGTERM: %v", err)
+			}
 		case <-time.After(10 * time.Second):
 			t.Logf("binary did not exit on SIGTERM within 10s; sending SIGKILL\nstderr:\n%s", stderrBuf.String())
 			_ = cmd.Process.Kill()
-			<-doneCh
+			if err := <-doneCh; err != nil {
+				t.Logf("binary exited with error after SIGKILL: %v", err)
+			}
 		}
 	})
 

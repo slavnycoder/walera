@@ -144,7 +144,7 @@ func (c *Client) ForwardedFromRequest(r *http.Request) ForwardedAuth {
 	if len(c.fwdCookies) > 0 {
 		for _, ck := range r.Cookies() {
 			if _, ok := c.fwdCookies[ck.Name]; ok {
-				fwd.Cookies = append(fwd.Cookies, &http.Cookie{Name: ck.Name, Value: ck.Value})
+				fwd.Cookies = append(fwd.Cookies, &http.Cookie{Name: ck.Name, Value: ck.Value}) //nolint:gosec // G124: outbound copy of a request cookie, never sent as Set-Cookie
 			}
 		}
 	}
@@ -298,8 +298,8 @@ func (c *Client) doAndDecode(req *http.Request, requestID string) (*Whitelist, e
 		return nil, &ErrUnavailable{Cause: readErr}
 	}
 
-	switch {
-	case resp.StatusCode == http.StatusOK:
+	switch resp.StatusCode {
+	case http.StatusOK:
 		m, perr := ParseWhitelist(body)
 		if perr != nil {
 			c.mc.AuthRequests("unavailable").Inc()
@@ -313,15 +313,15 @@ func (c *Client) doAndDecode(req *http.Request, requestID string) (*Whitelist, e
 		c.mc.AuthRequests("ok").Inc()
 		return m, nil
 
-	case resp.StatusCode == http.StatusUnauthorized:
+	case http.StatusUnauthorized:
 		c.mc.AuthRequests("unauthorized").Inc()
 		return nil, &ErrUnauthorized{Body: body}
 
-	case resp.StatusCode == http.StatusForbidden:
+	case http.StatusForbidden:
 		c.mc.AuthRequests("forbidden").Inc()
 		return nil, &ErrForbidden{Body: body}
 
-	case resp.StatusCode == http.StatusNotFound:
+	case http.StatusNotFound:
 		c.mc.AuthRequests("not_found").Inc()
 		return nil, &ErrNotFound{Body: body}
 

@@ -126,7 +126,7 @@ func lookupPublication(ctx context.Context, conn bootstrapDB, name string) (exis
 func errAllTablesPublication(name string) error {
 	return fmt.Errorf(
 		"publication %q is FOR ALL TABLES, which streams every table in the database — "+
-			"recreate it with an explicit list: DROP PUBLICATION %s; CREATE PUBLICATION %s FOR TABLE ...",
+			"recreate it with an explicit table list: DROP PUBLICATION %s; CREATE PUBLICATION %s FOR TABLE <list>",
 		name, name, name,
 	)
 }

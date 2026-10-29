@@ -328,7 +328,7 @@ func parseInterval(s string) (string, error) {
 		m, err2 := strconv.Atoi(parts[1])
 		sec, err3 := strconv.ParseFloat(parts[2], 64)
 		if err1 != nil || err2 != nil || err3 != nil {
-			return s, nil
+			return s, nil //nolint:nilerr // an unparseable interval passes through verbatim by design
 		}
 		if negative {
 			h, m = -h, -m

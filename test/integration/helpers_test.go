@@ -73,14 +73,6 @@ func readTxWithin(t *testing.T, events <-chan SSEEvent, errCh <-chan error, d ti
 	}
 }
 
-// expectNoTxWithin fails if any tx event arrives within d.
-func expectNoTxWithin(t *testing.T, events <-chan SSEEvent, errCh <-chan error, d time.Duration) {
-	t.Helper()
-	if p, ok := readTxWithin(t, events, errCh, d); ok {
-		t.Fatalf("expected no tx event, got changes: %+v", p.Changes)
-	}
-}
-
 // waitForRefresh blocks until the mock auth has served at least n more
 // /auth/sessions requests than base, so a mid-stream SetMap is guaranteed to
 // have been picked up before the test proceeds. Refresh now replays the

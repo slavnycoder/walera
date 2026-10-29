@@ -12,16 +12,19 @@ linters:
     - exhaustive
     - nilerr
     - bodyclose
-
-linters-settings:
-  exhaustive:
-    # Require exhaustive type-switches on pgoutput message types.
-    default-signifies-exhaustive: true
-
-issues:
-  exclude-rules:
-    # Relax errcheck and gosec in test files — test helpers routinely ignore errors.
-    - path: "_test\\.go"
-      linters:
-        - errcheck
-        - gosec
+  settings:
+    exhaustive:
+      # Require exhaustive type-switches on pgoutput message types.
+      default-signifies-exhaustive: true
+  exclusions:
+    rules:
+      # Test helpers routinely ignore errors and close bodies via t.Cleanup.
+      - path: '_test\.go'
+        linters:
+          - errcheck
+          - gosec
+          - bodyclose
+      # Load-generation tooling, not part of the shipped service.
+      - path: '^(cmd/writer|cmd/loadgen|internal/writer)/'
+        linters:
+          - gosec

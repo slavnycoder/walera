@@ -25,7 +25,7 @@ var initialJitterFunc = func(ttl time.Duration) time.Duration {
 	if half <= 0 {
 		return 0
 	}
-	return time.Duration(mathrand.Int64N(half))
+	return time.Duration(mathrand.Int64N(half)) //nolint:gosec // G404: refresh jitter to avoid thundering herd, not security-sensitive
 }
 
 var defaultBackoffs = []time.Duration{1 * time.Second, 3 * time.Second, 9 * time.Second}

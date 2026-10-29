@@ -88,7 +88,7 @@ func New(cfg Config, deps Deps) (*Reader, <-chan Tx) {
 		txCh:    txCh,
 		metrics: deps.Metrics,
 
-		rng: mathrand.New(mathrand.NewPCG(uint64(time.Now().UnixNano()), uint64(os.Getpid()))),
+		rng: mathrand.New(mathrand.NewPCG(uint64(time.Now().UnixNano()), uint64(os.Getpid()))), //nolint:gosec // G404: reconnect backoff jitter, not security-sensitive
 	}
 	r.runOnceFn = r.runOnce
 	r.computeBackoffFn = r.computeBackoff
@@ -116,7 +116,7 @@ func newReaderForTest(conn replConn, log zerolog.Logger) *Reader {
 		txCh:     txCh,
 		replConn: conn,
 		metrics:  metrics.New(),
-		rng:      mathrand.New(mathrand.NewPCG(1, 2)),
+		rng:      mathrand.New(mathrand.NewPCG(1, 2)), //nolint:gosec // G404: deterministic seed for test reproducibility, not security-sensitive
 	}
 }
 

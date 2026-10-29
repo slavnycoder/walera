@@ -305,7 +305,10 @@ func gracefulShutdown(srv *http.Server, commitDone chan error, logger zerolog.Lo
 		logger.Warn().Err(err).Msg("HTTP server shutdown returned error")
 	}
 	select {
-	case <-commitDone:
+	case err := <-commitDone:
+		if err != nil {
+			logger.Warn().Err(err).Msg("commit loop exited with error")
+		}
 	case <-time.After(2 * time.Second):
 	}
 }

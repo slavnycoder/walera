@@ -59,7 +59,7 @@ func WithoutBearer() ConnectOption {
 // WithCookie attaches a request cookie to the handshake.
 func WithCookie(name, value string) ConnectOption {
 	return func(c *connectConfig) {
-		c.cookies = append(c.cookies, &http.Cookie{Name: name, Value: value})
+		c.cookies = append(c.cookies, &http.Cookie{Name: name, Value: value}) //nolint:gosec // G124: outbound test-harness cookie for a request, never sent as Set-Cookie
 	}
 }
 
@@ -111,7 +111,7 @@ func (c *Client) ConnectWith(ctx context.Context, channel, token string, opts ..
 	req.Header.Set("Accept", "text/event-stream")
 
 	hc := &http.Client{}
-	resp, err := hc.Do(req)
+	resp, err := hc.Do(req) //nolint:bodyclose // closed on every path below: error branches close it inline, the success path closes it via the returned closeFn
 	if err != nil {
 		errCh <- fmt.Errorf("sse client: do: %w", err)
 		close(events)
