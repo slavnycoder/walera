@@ -17,7 +17,7 @@ var allowedPKOIDs = map[uint32]bool{
 
 var errUnsupportedPKType = errors.New("relation: PK column OID not in allowed scalar set (int2/int4/int8/uuid/text)")
 
-var errCompositePK = errors.New("relation: composite PK not supported — single-column scalar PK required (ENT-02)")
+var errCompositePK = errors.New("relation: composite PK not supported — single-column scalar PK required")
 
 type relationInfo struct {
 	OID uint32

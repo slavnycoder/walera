@@ -163,6 +163,6 @@ jobs:
         # Pure bash + grep; no setup-go required. The unit test exercises
         # the guard's exit codes against synthetic fixtures so a future
         # contributor cannot disable the release-tag placeholder check
-        # without this job failing. See REQUIREMENTS.md RELEASE-02 and
+        # without this job failing. See
         # .github/workflows/release.yml (`Extract CHANGELOG section`).
         run: bash scripts/check-changelog-date_test.sh

@@ -27,7 +27,7 @@ func Test02TxAtomicity(t *testing.T) {
 	defer closeFn()
 
 	// One transaction, multiple changes for the SAME anchor row (users:1):
-	// INSERT then two UPDATEs. Under the multi_root guard (spec §1.6) this is
+	// INSERT then two UPDATEs. Under the multi_root guard this is
 	// the only legal shape for >1 change per tx on the anchor table — multiple
 	// distinct PKs in one tx would be dropped per-subscriber as a writer-side
 	// discipline violation (see README "Writer-side discipline").

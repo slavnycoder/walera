@@ -54,7 +54,7 @@ type Config struct {
 // DocsURL points operators at the auth-feature documentation. Included in
 // log lines surfaced from the periodic-refresh loop so an on-call engineer
 // can jump straight to the contract.
-const DocsURL = "https://github.com/walera/walera/blob/master/docs/auth.md"
+const DocsURL = "https://github.com/slavnycoder/walera/blob/master/docs/auth.md"
 
 // Defaults are the auth settings used when the corresponding WALERA_*
 // variables are unset; RequestTimeout is not configurable.

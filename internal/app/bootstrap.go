@@ -87,7 +87,7 @@ func verifyReplicationRole(ctx context.Context, conn bootstrapDB, logger zerolog
 		return fmt.Errorf(
 			"PostgreSQL role %q lacks the REPLICATION attribute, which is a required prerequisite "+
 				"for logical replication — grant it with `ALTER ROLE %s REPLICATION;` (or connect as a "+
-				"superuser); see docs/operations.md#required-runtime",
+				"superuser); see docs/postgres.md#replication-role",
 			rolname, rolname,
 		)
 	}

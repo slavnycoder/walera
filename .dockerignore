@@ -1,16 +1,10 @@
-# .dockerignore — RESEARCH Pattern 11 / D4-21.
-#
 # Keep the build context minimal: only cmd/, internal/, go.mod, go.sum
-# need to enter the build stage. Everything else (planning docs, spec,
-# tests, deploy manifests, Makefile, READMEs, build artefacts) is intentionally excluded.
+# need to enter the build stage. Everything else (docs, tests, compose
+# files, Makefile, build artefacts) is intentionally excluded.
 
 .git/
 .gitignore
 .gitattributes
-
-# Planning, design, and spec — never bake into image.
-.planning/
-spec/
 
 # Tests — the production binary doesn't need them.
 test/
@@ -21,8 +15,8 @@ testbin/
 README.md
 Makefile
 
-# Deploy artefacts — k8s YAML / compose / prometheus rules are operator-side.
-deploy/
+# Compose files are operator-side.
+docker-compose*.yml
 docker-compose*.yaml
 
 # Build artefacts and coverage reports.

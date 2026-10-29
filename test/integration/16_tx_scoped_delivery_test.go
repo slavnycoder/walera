@@ -291,7 +291,7 @@ func Test16TxScopedDelivery(t *testing.T) {
 
 	// Sub-scenario 6: writer-side discipline — multi-root drop.
 	// A transaction that touches two different root rows of the subscriber's
-	// anchor table violates the one-root-per-tx discipline (spec §1.6, README
+	// anchor table violates the one-root-per-tx discipline (README
 	// "Writer-side discipline"). The broker must drop the tx for the
 	// subscriber — no event is delivered — but MUST NOT disconnect the
 	// subscriber. A subsequent well-formed tx is delivered normally.

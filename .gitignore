@@ -30,6 +30,3 @@ coverage.html
 __pycache__/
 *.pyc
 *.pyo
-
-# GSD planning artifacts (kept locally only)
-.planning/

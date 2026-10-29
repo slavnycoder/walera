@@ -84,7 +84,7 @@ func DeriveDSNs(base string) (walconn.AdminDSN, walconn.ReplicationDSN, error) {
 			"WALERA_DATABASE_URL",
 			config.RedactDSN(base),
 			"DSN parse failed: invalid URL",
-			"see docs/operations.md#configuration",
+			"see README.md#configuration",
 		)
 	}
 	adminQuery := adminURL.Query()
@@ -101,7 +101,7 @@ func DeriveDSNs(base string) (walconn.AdminDSN, walconn.ReplicationDSN, error) {
 			"WALERA_DATABASE_URL",
 			config.RedactDSN(base),
 			"DSN parse failed: "+err.Error(),
-			"see docs/operations.md#configuration",
+			"see README.md#configuration",
 		)
 	}
 	if _, err := pgconn.ParseConfig(admin); err != nil {
@@ -109,7 +109,7 @@ func DeriveDSNs(base string) (walconn.AdminDSN, walconn.ReplicationDSN, error) {
 			"WALERA_DATABASE_URL",
 			config.RedactDSN(admin),
 			"DSN parse failed: "+err.Error(),
-			"see docs/operations.md#configuration",
+			"see README.md#configuration",
 		)
 	}
 	u := *adminURL

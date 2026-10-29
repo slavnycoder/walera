@@ -1,66 +1,60 @@
-# docker-compose.yml — quick start with the published Walera image.
+# Quick start: PostgreSQL with a demo table, plus Walera.
 #
-# `docker compose up` boots:
-#   - postgres — postgres:18-alpine with wal_level=logical enabled.
-#   - walera   — ghcr.io/slavnycoder/walera:latest, configured entirely
-#                through WALERA_* environment variables.
+#   docker compose up
 #
-# It does NOT include an auth backend — point WALERA_AUTH_URL at your own
-# (see README §Quick Start). Readiness stays 503 until it answers.
+# Walera needs your auth backend at WALERA_AUTH_URL (default: port 9000 on
+# the docker host; the example backend in docs/auth.md listens there).
+# Health, readiness and metrics do not depend on it.
 #
-#   WALERA_TABLES=public.orders AUTH_URL=http://host.docker.internal:9000 docker compose up
+# Override with host variables, e.g.:
+#   WALERA_TABLES=public.orders WALERA_AUTH_URL=http://host.docker.internal:8000 docker compose up
 #
-# To build the image from local source instead of pulling, replace the
-# `image:` line under `walera` with:
-#   build:
-#     context: .
-#     dockerfile: Dockerfile
+# To run a local build instead of the published image, replace `image:`
+# under `walera` with `build: .`.
 
 services:
   postgres:
     image: postgres:18-alpine
-    container_name: walera-pg
     environment:
       POSTGRES_USER: walera
       POSTGRES_PASSWORD: walera
       POSTGRES_DB: walera
-    command:
-      - "postgres"
-      - "-c"
-      - "wal_level=logical"
-      - "-c"
-      - "max_replication_slots=10"
-      - "-c"
-      - "max_wal_senders=10"
-    ports:
-      - "5432:5432"
+    command: ["postgres", "-c", "wal_level=logical"]
+    configs:
+      - source: demo-schema
+        target: /docker-entrypoint-initdb.d/demo.sql
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U walera -d walera"]
+      # TCP, so the check stays red while init scripts run on the socket-only server.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U walera -d walera"]
       interval: 2s
       timeout: 2s
-      retries: 15
+      retries: 30
 
   walera:
     image: ghcr.io/slavnycoder/walera:latest
-    container_name: walera-app
     depends_on:
       postgres:
         condition: service_healthy
     environment:
-      # Admin connection; Walera derives the replication connection itself.
-      # The role needs the REPLICATION attribute.
+      # The demo role is a superuser; a real one needs only REPLICATION and SELECT.
       WALERA_DATABASE_URL: "postgres://walera:walera@postgres:5432/walera?sslmode=disable"
-      # The publication (default walera_pub) is created FOR TABLE from this
-      # list when it does not exist yet.
-      WALERA_TABLES: "${WALERA_TABLES:?set the tables to stream, e.g. public.orders}"
-      WALERA_AUTH_URL: "${AUTH_URL:-http://host.docker.internal:9000}"
-      # Plain http:// auth URL is for local evaluation only.
+      # Walera creates the publication (walera_pub) FOR TABLE from this list.
+      WALERA_TABLES: "${WALERA_TABLES:-public.items}"
+      WALERA_AUTH_URL: "${WALERA_AUTH_URL:-http://host.docker.internal:9000}"
+      # Plain http:// auth URL: local evaluation only.
       WALERA_AUTH_ALLOW_PLAINTEXT: "1"
-      WALERA_CORS_ORIGINS: "${CORS_ORIGINS:-http://localhost:3000,http://localhost:5173}"
-      GOGC: "200"
-      GOMEMLIMIT: "6500MiB"
+      WALERA_CORS_ORIGINS: "${WALERA_CORS_ORIGINS:-}"
     ports:
       - "8080:8080"
     extra_hosts:
       # Lets the container reach an auth backend running on the docker host.
       - "host.docker.internal:host-gateway"
+
+configs:
+  demo-schema:
+    content: |
+      CREATE TABLE items (
+        id    serial PRIMARY KEY,
+        title text NOT NULL,
+        done  boolean NOT NULL DEFAULT false
+      );

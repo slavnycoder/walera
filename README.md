@@ -1,410 +1,254 @@
 # Walera
 
-> Stream PostgreSQL row changes to authenticated SSE subscribers without
-> standing up Kafka or Debezium. A single Go binary — ~10k concurrent
-> connections at ~5k tx/s on a 4-CPU pod.
+Walera streams PostgreSQL row changes to browsers over Server-Sent Events:
+one stream per row (or per table), authorized by your own backend, with
+every row filtered down to the columns the user may see.
 
 ```
-PostgreSQL WAL ──▶ Walera ──▶ SSE clients
-                      │
-                      └──▶ your auth backend
+PostgreSQL ──(logical replication)──▶ Walera ──(SSE)──▶ clients
+                                        │
+                                        └──▶ your auth backend (POST /auth/sessions)
 ```
 
-> AI-assisted reference implementation. Review before production use.
+It is a single Go binary with no broker and no extra storage. It targets small
+projects that want live updates without building change-data-capture
+plumbing, and it fails closed: no grant, no data.
 
----
+## Quick start
 
-## When it fits
+You need Docker and Python 3.9+.
 
-You already have:
+1. Start the example auth backend from [docs/auth.md](docs/auth.md#example-backend):
+   save it as `auth.py` and run `python3 auth.py`. It listens on port 9000
+   and accepts the token `alice-token`.
 
-- A PostgreSQL database that owns your domain state.
-- An auth backend that knows what each user is allowed to see.
-- Clients that want **real-time per-entity push** — not analytics, not
-  audit logs.
+2. Start PostgreSQL (with a demo table `items`) and Walera:
 
-Walera adds an SSE layer between them. No new message broker. No
-schema-change pipeline. No client-acked queue. The product backend
-keeps owning the source of truth; Walera just streams what already
-landed in the WAL.
+   ```bash
+   docker compose up
+   ```
 
----
+3. Subscribe to row 1 of `items`:
 
-## Subscribe in 30 seconds
+   ```bash
+   curl -N -H "Authorization: Bearer alice-token" localhost:8080/sse/v1/items/1
+   ```
 
-```bash
-docker run --rm -p 8080:8080 \
-  -e WALERA_DATABASE_URL='postgres://walera:secret@host:5432/app?sslmode=disable' \
-  -e WALERA_AUTH_BACKEND_URL='https://auth.example.com' \
-  ghcr.io/slavnycoder/walera:latest
-```
+4. In another terminal, write to the row:
 
-```bash
-curl -N -H "Authorization: Bearer alice-token" \
-  http://localhost:8080/sse/v1/orders/42
+   ```bash
+   docker compose exec postgres psql -U walera -c "INSERT INTO items (title) VALUES ('buy milk')"
+   docker compose exec postgres psql -U walera -c "UPDATE items SET done = true WHERE id = 1"
+   ```
 
-event: tx
-id: 735
-data: {"tx_id":735,"commit_ts":"2026-05-18T08:30:12Z","changes":[
-  {"op":"update","table":"orders","pk":"42","data":{"status":"paid"}}
-]}
-```
+   The `curl` window prints:
 
-Two endpoints, that's the whole API:
+   ```
+   retry: 15000
 
-| Endpoint                       | Streams                              |
-| ------------------------------ | ------------------------------------ |
-| `GET /sse/v1/{table}/{pk}`     | Changes to one row.                  |
-| `GET /sse/v1/{table}/all`      | Changes to every row in the table.   |
+   event: tx
+   id: 756
+   data: {"tx_id":756,"commit_ts":"2026-10-29T19:10:33.780755Z","changes":[{"op":"insert","table":"items","pk":"1","data":{"done":false,"id":1,"title":"buy milk"}}]}
 
-The URL is versioned (`/sse/v1/`). Breaking changes will be served from
-`/sse/v2/` rather than mutating `v1`.
+   event: tx
+   id: 757
+   data: {"tx_id":757,"commit_ts":"2026-10-29T19:10:33.862668Z","changes":[{"op":"update","table":"items","pk":"1","data":{"done":true,"id":1,"title":"buy milk"}}]}
+   ```
 
----
-
-## Events are diffs
-
-Each SSE event corresponds to **exactly one Postgres transaction**. The
-`data` field is a primary key plus the columns that changed:
-
-```ts
-type WaleraTx = {
-  tx_id: number;
-  commit_ts: string;
-  changes: Array<{
-    op: "insert" | "update" | "delete";
-    table: string;
-    pk: string;
-    // insert: full new row
-    // update: only modified columns (absence ≠ null)
-    // delete: absent
-    data?: Record<string, unknown>;
-  }>;
-};
-```
-
-Apply each event to a local mirror — IndexedDB, a Redux/Zustand store,
-a `Map` in memory — and render from the mirror. Stop hitting REST on
-every event:
-
-```js
-for (const change of tx.changes) {
-  if (change.op === "insert")      store.set(change.pk, change.data);
-  else if (change.op === "update") store.merge(change.pk, change.data);
-  else if (change.op === "delete") store.delete(change.pk);
-}
-```
-
-REST stays in the loop for two things and two things only:
-
-- **Bootstrap.** Load initial state when the page opens.
-- **Gap-closing.** Refetch after SSE reconnect — Walera does not
-  replay across the disconnect window.
-
-A worked example using Dexie/IndexedDB as the mirror, with
-`liveQuery`-driven re-render and optimistic-update rollback, lives in
-[`walera-demo`](https://github.com/slavnycoder/walera-demo).
-
-Other event types Walera emits:
-
-| Event          | When it fires                                                                                    |
-| -------------- | ------------------------------------------------------------------------------------------------ |
-| `initial_data` | Optional first frame, only if the auth backend returns an `initial_data` field. Opaque JSON.     |
-| `error`        | Permission revoked, payload too large, etc. Includes reason.                                     |
-| `shutdown`     | Service is restarting; the client should reconnect.                                              |
-| `:` comment    | Heartbeat. Not visible to browser JS.                                                            |
-
----
-
-## Writer-side discipline
-
-This is the part that asks something of you. Walera routes by the root
-row(s) touched in a transaction; the broker is **not** FK-aware. Three
-rules govern how your write path must behave so subscribers see clean,
-atomic events.
-
-### Rule 1 — One root row per transaction
-
-A transaction that mutates a root table (a table users subscribe to)
-must touch **exactly one** PK of that root.
-
-```sql
--- ✓ OK
-BEGIN;
-  UPDATE orders SET status = 'paid' WHERE id = 42;
-COMMIT;
-
--- ✗ DROPPED for exact subscribers (multi-root violation):
-BEGIN;
-  UPDATE orders SET reordered_at = now();   -- touches every order!
-COMMIT;
-```
-
-This rule is **broker-enforced for exact subscribers** (`/sse/v1/{table}/{pk}`):
-a multi-root transaction is silently skipped for them (a warn-level log
-fires, the connection stays open). Wildcard subscribers (`/sse/v1/{table}/all`)
-are authorized for every row and receive the transaction whole, subject to
-`router.max_changes_per_tx`. Split bulk operations across roots in your
-application layer if exact subscribers must see them.
-
-### Rule 2 — Co-write children with their root
-
-When a transaction modifies a child row, the same transaction must
-touch the corresponding root row. The root touch is the routing
-anchor; without it, subscribers don't see the child change at all.
-
-```sql
-BEGIN;
-  UPDATE line_items SET qty = 3 WHERE id = 17;
-  -- root anchor (a trigger usually does this for you):
-  UPDATE orders SET updated_at = now() WHERE id = 42;
-COMMIT;
-```
-
-A common pattern is `updated_at`-bump triggers on every child table, so
-child writes automatically anchor their root. The
-[demo schema](https://github.com/slavnycoder/walera-demo/blob/master/db/002_schema.sql)
-wires this up through three FK levels (`todo_lists ← tasks ← subtasks`)
-and a single subtask write produces one Walera event containing all
-three layers.
-
-### Rule 3 — Don't mix children of different roots
-
-A transaction that touches one root but also writes a child of a
-*different* root leaks: the foreign child rides along to the first
-root's subscribers. The broker does **not** detect this — its
-multi-root guard (Rule 1) counts only PKs of the subscriber's own root
-table, never the child tables.
-
-```sql
--- ✗ Caller-enforced: this leaks. Split it.
--- A subscriber on orders:42 also receives line_item 88, a child of order 99.
-BEGIN;
-  UPDATE orders     SET updated_at = now() WHERE id = 42;  -- the only root anchored
-  UPDATE line_items SET qty = 3 WHERE id = 17;             -- child of order 42 (fine)
-  UPDATE line_items SET qty = 1 WHERE id = 88;             -- child of order 99 → leaks
-COMMIT;
-```
-
-Note the contrast with Rule 1: had this anchored `orders` 42 **and**
-99, the broker would drop it as multi-root. With only one root touched,
-nothing trips the guard and the stray child slips through. Walera
-cannot distinguish "child of my root" from "child of someone else's
-root" without FK-aware scope declarations, which are out of scope for
-the current model. If you need this stricter isolation, please file an
-issue.
-
----
-
-## Auth model
-
-Walera does not authenticate users. On each SSE open it calls an auth
-backend **you operate** and receives back a per-user whitelist of tables
-and columns. By default it forwards the client's bearer token; it can
-also forward a configured allowlist of the client's cookies and headers
-(`auth.forwarded_cookies` / `auth.forwarded_headers`), in which case the
-bearer becomes optional. Field filtering is enforced inside Walera before
-any event reaches the wire.
-
-The open is a single POST:
-
-```http
-POST /auth/sessions
-Authorization: Bearer <user-token>   # optional when a cookie/header is forwarded
-Content-Type: application/json
-
-{"channel":"orders:42"}
-```
-
-```json
-{
-  "user_id": "alice",
-  "tables": {
-    "orders": ["id", "status", "total_cents", "updated_at"]
-  },
-  "roots": ["orders"],
-  "ttl_seconds": 60
-}
-```
-
-The full contract — status-code handling, refresh semantics, wildcard
-policy, backend-outage posture — lives in [`docs/auth.md`](./docs/auth.md).
-A minimal Django reference implementation is in that doc; the
-[demo backend](https://github.com/slavnycoder/walera-demo/blob/master/backend/app.py)
-shows a FastAPI version that doubles as the product API.
-
-When the auth backend goes sideways, Walera takes a fail-closed posture:
-established streams are dropped with `auth_unavailable` once a refresh
-fails past its retries, and new opens get `503` after `auth.request_timeout`.
-This stops an auth outage from becoming a fleet-wide reconnect storm.
-
----
-
-## Frontend integration
-
-Native `EventSource` can't send `Authorization`. Use
-[`@microsoft/fetch-event-source`](https://www.npmjs.com/package/@microsoft/fetch-event-source):
-
-```js
-import { fetchEventSource } from "https://esm.sh/@microsoft/fetch-event-source";
-
-fetchEventSource("http://localhost:8080/sse/v1/orders/42", {
-  headers: { Authorization: "Bearer alice-token" },
-  onmessage(msg) {
-    if (msg.event !== "tx") return;
-    const tx = JSON.parse(msg.data);
-    for (const c of tx.changes) applyToStore(c);
-  },
-  onerror() {
-    // Walera does not replay across reconnect — refetch from REST
-    // before resubscribing, then come back.
-    return 15000;
-  },
-});
-```
-
-If you'd rather not pull in a polyfill, native `EventSource` still sends
-cookies (same-origin, or cross-origin with `withCredentials: true`). Pair
-that with `auth.forwarded_cookies` so Walera relays the session cookie to
-your auth backend — the bearer header becomes optional. See
-[`docs/auth.md`](./docs/auth.md#forwarding-cookies-and-headers).
-
-Rules of thumb:
-
-- **Events are diffs, not refresh hints.** Steady-state UI updates
-  should make zero further network calls.
-- **Never authorise on event data alone.** Walera filters fields at
-  fan-out, but the client cannot assume the whitelist matches your
-  full product permissions. Drive auth from the same source REST uses.
-- **Jittered exponential backoff on reconnect.** A fleet-wide
-  reconnect storm after a deploy will otherwise hit your primary API
-  as a synchronous spike.
-
----
+The compose file points Walera at `http://host.docker.internal:9000`. Set
+`WALERA_AUTH_URL` (and `WALERA_TABLES` for your own tables) in your shell to
+change that.
 
 ## Configuration
 
-Two env vars get you off the ground:
+Walera reads environment variables only. There is no config file and no
+command-line configuration.
 
-```bash
-WALERA_DATABASE_URL=postgres://walera:secret@host:5432/app?sslmode=disable
-WALERA_AUTH_BACKEND_URL=https://auth.example.com
+| Variable | Required | Default | Meaning |
+| --- | --- | --- | --- |
+| `WALERA_DATABASE_URL` | yes | | PostgreSQL URL, e.g. `postgres://walera:secret@db:5432/app`. Walera adds `replication=database` itself for the replication connection. |
+| `WALERA_AUTH_URL` | yes | | Base URL of your auth backend; Walera calls `<url>/auth/sessions`. Must be `https://` unless `WALERA_AUTH_ALLOW_PLAINTEXT=1`. |
+| `WALERA_ADDR` | no | `:8080` | Listen address for SSE, health and metrics. |
+| `WALERA_PUBLICATION` | no | `walera_pub` | Name of the publication to stream. |
+| `WALERA_TABLES` | no | empty | Comma-separated `schema.table` list. Used to create the publication when it does not exist; compared against it (warning only) when it does. |
+| `WALERA_CORS_ORIGINS` | no | empty | Comma-separated origins allowed to read streams cross-origin, e.g. `https://app.example`. Empty means no CORS headers. |
+| `WALERA_AUTH_TTL` | no | `60s` | How often a live stream re-checks its permissions. Go duration, at least `1s`. |
+| `WALERA_AUTH_FORWARD_COOKIES` | no | empty | Comma-separated cookie names forwarded from the client to the auth backend. |
+| `WALERA_AUTH_FORWARD_HEADERS` | no | empty | Comma-separated header names forwarded from the client to the auth backend. |
+| `WALERA_AUTH_ALLOW_PLAINTEXT` | no | `0` | `1` allows an `http://` auth URL. For local development only. |
+| `WALERA_MAX_CONNECTIONS` | no | `50000` | Maximum concurrent SSE connections; beyond it new ones get `503`. |
+| `WALERA_LOG_LEVEL` | no | `info` | `debug`, `info`, `warn` or `error`. |
+
+Startup fails on any other `WALERA_*` variable, so a typo or an outdated
+name never silently falls back to a default. Configuration errors name the
+variable but never print its value.
+
+## Subscribing
+
+| Endpoint | Streams |
+| --- | --- |
+| `GET /sse/v1/{table}/{pk}` | Transactions that touch one row. |
+| `GET /sse/v1/{table}/all` | Transactions that touch any row of the table. |
+
+`{table}` is a table in the `public` schema (lowercase, `[a-z_][a-z0-9_]*`,
+at most 64 characters); `{pk}` is the primary-key value as text (at most 256
+characters). The table must be in the publication and needs a single-column
+primary key of type `smallint`, `integer`, `bigint`, `uuid` or `text`.
+
+Request options:
+
+- `Authorization: Bearer <token>` — passed to your auth backend. It may be
+  omitted when a forwarded cookie or header carries the credentials
+  ([docs/auth.md](docs/auth.md#forwarding-cookies-and-headers)).
+- `X-Request-ID` — optional, up to 128 characters of `[A-Za-z0-9._-]`;
+  forwarded to the auth backend. Walera generates one when absent.
+- `?since_lsn=16/B374D848` — skip transactions committed at or before this
+  WAL position. Default: the last position Walera has processed. It filters
+  only; it cannot replay older changes.
+- CORS: origins listed in `WALERA_CORS_ORIGINS` get
+  `Access-Control-Allow-Origin` and `Access-Control-Allow-Credentials: true`.
+  `OPTIONS` preflights are answered for both endpoints.
+
+Browsers' `EventSource` cannot send an `Authorization` header. Use a
+fetch-based client, or forward a session cookie with
+`WALERA_AUTH_FORWARD_COOKIES`.
+
+### Frames
+
+The stream starts with `retry: 15000` (reconnect after 15 s). Then:
+
+| Frame | Meaning |
+| --- | --- |
+| `event: initial_data` | Sent first, only if the auth backend returned `initial_data`. Its JSON value, compacted onto one line. |
+| `event: tx` | One committed transaction. `id:` is the PostgreSQL transaction ID. |
+| `event: error` | The stream is ending. `data: {"reason":"…"}`, see below. |
+| `event: shutdown` | Walera is stopping. `data: {"reason":"service_restart"}`. Reconnect. |
+| `:` | Heartbeat comment after 15 s without other frames. |
+
+A `tx` frame:
+
+```json
+{
+  "tx_id": 757,
+  "commit_ts": "2026-10-29T19:10:33.862668Z",
+  "changes": [
+    {"op": "update", "table": "items", "pk": "1", "data": {"done": true, "id": 1, "title": "buy milk"}}
+  ]
+}
 ```
 
-YAML config and the full env reference (CORS, trusted-proxy parsing,
-pprof, etc.) live in [`docs/operations.md`](./docs/operations.md#configuration).
+- `op` is `insert`, `update` or `delete`. `pk` is always a string.
+- `data` holds only the columns the auth backend allowed, plus the primary
+  key. For `update` it is the new row; columns whose large (TOASTed) value
+  did not change are left out. `delete` has no `data`.
+- Value types: `smallint`/`integer`/`real`/`double precision` become JSON
+  numbers, `boolean` becomes a boolean, `json`/`jsonb` are embedded as JSON,
+  timestamps become RFC 3339 UTC strings, `bytea` becomes base64, supported
+  arrays become JSON arrays, and everything else (including `bigint` and
+  `numeric`, to keep precision) is a string.
+- An `update` that leaves no allowed column besides the primary key is not
+  sent.
 
-### PostgreSQL prerequisites
+Error reasons:
 
-- Version ≥ 14, `wal_level = logical`.
-- A DBA-owned publication enumerating the tables Walera may decode.
-- A replication user with the `REPLICATION` attribute.
-- **No PgBouncer in the replication path.** PgBouncer does not speak
-  the replication protocol — connect directly to PostgreSQL.
+| Reason | Cause |
+| --- | --- |
+| `auth_revoked` | A permission refresh denied the stream (401/403/404, table gone from the grant, or a different `user_id`). |
+| `auth_unavailable` | A permission refresh kept failing after retries. |
+| `slow_consumer` | The client did not keep up (its queue filled up). |
+| `tx_too_large` | A transaction had more than 10,000 changes for this subscriber, or its frame exceeded 10 MiB. |
 
-The replication slot is temporary: created on boot, dropped by
-PostgreSQL when the connection closes. No manual cleanup is needed
-when the deployment is decommissioned. A restart causes a brief
-delivery gap; clients reconnect and resync through the primary API.
+### Handshake errors
 
----
+| Status | When |
+| --- | --- |
+| `400` | Invalid table or primary key (`{"error":"invalid_channel"}`), `since_lsn` (`invalid_since_lsn`) or `X-Request-ID` (`invalid_request_id`). |
+| `401` | No credentials, or the auth backend answered `401` (its body is passed through). |
+| `403` | The auth backend answered `403` (body passed through), or its grant does not include the table (`{"reason":"not_allowed"}`). |
+| `404` | The auth backend answered `404` (body passed through). |
+| `429` | The user already has 10 open streams. |
+| `503` | `WALERA_MAX_CONNECTIONS` reached, or the auth backend is unreachable or answered anything else. Sent with `Retry-After: 5`. |
 
-## Run the full demo stack
+## Delivery guarantees
 
-PostgreSQL + Walera + mock auth + load writer + Prometheus + Grafana +
-a browser UI, all wired up:
+- **Atomic.** One `tx` frame per committed transaction, containing all of
+  that transaction's changes the subscriber may see — never part of one.
+- **Ordered.** Frames arrive in commit order. Nothing is delivered twice.
+- **No resume.** Walera stores nothing. There is no `Last-Event-ID`
+  replay; changes committed while a client is disconnected are lost to it.
+  After every reconnect, reload state from your API, then apply new frames.
+- **Gaps on replication reconnect.** If the replication connection drops,
+  Walera reconnects with a fresh temporary slot. Transactions committed in
+  between are not delivered, and open streams are not told. Watch
+  `walera_pg_connection_status`.
 
-```bash
-cd testbench
-cp .env.example .env
-make demo-up
-```
+A row subscriber receives a transaction when it touches that row. The frame
+then also carries the transaction's other changes in the `public` schema that
+the user may see — this is how child rows (an order's line items) reach the
+order's subscribers.
 
-| Service          | URL                              |
-| ---------------- | -------------------------------- |
-| Demo UI          | http://localhost:8081            |
-| Walera metrics   | http://localhost:8080/metrics    |
-| Prometheus       | http://localhost:9090            |
-| Grafana          | http://localhost:3000            |
+### Writer-side discipline
 
-For a showcase application built **on top of** Walera — Dexie diff
-source, optimistic UI, bulk transactional ops, failure-injection
-rollback — see [`walera-demo`](https://github.com/slavnycoder/walera-demo).
+1. **One root row per transaction.** A transaction that changes two
+   different rows of the subscribed table (say `orders` 42 and 99) is not
+   delivered to row subscribers of that table at all; Walera logs a
+   `multi_root` warning and keeps the stream open. Table (`/all`)
+   subscribers still receive it.
+2. **Touch the root with its children.** A change to a child row reaches the
+   root's subscribers only if the same transaction also changes the root row
+   (an `updated_at` trigger on the child table does this).
+3. **Do not mix children of different roots.** Walera does not follow
+   foreign keys: in a transaction that touches `orders` 42 and a line item of
+   order 99, the line item reaches order 42's subscribers. Split such
+   writes.
 
----
+## Authorization
 
-## What Walera does not guarantee
+Walera never decides access itself. On every subscription, and again every
+`WALERA_AUTH_TTL` while it is open, it calls `POST <WALERA_AUTH_URL>/auth/sessions`
+with the client's credentials and the channel (`items:1`). Your backend
+answers with the user ID and, per table, the columns that user may see.
+Anything else — a denial, an error, a timeout — closes or refuses the
+stream. Contract and example backend: [docs/auth.md](docs/auth.md).
 
-Walera is intentionally narrow:
+Table streams (`/all`) reveal every primary key that changes; grant them
+only for publicly enumerable tables.
 
-- **No durable event store.** Events are not persisted past fan-out.
-- **No `Last-Event-ID` resume.** No replay across reconnect.
-- **No across-restart delivery to disconnected clients.** Clients
-  resync state from the primary API.
-- **No client-side filtering.** The per-user field whitelist is
-  enforced inside Walera, not negotiated by the client.
-- **No client acknowledgement protocol.**
+## PostgreSQL requirements
 
-If durable, replayable, exactly-once-style delivery is what you need,
-Walera is not the right tool — that scope belongs to a different
-product with a different failure model. The full delivery posture is
-documented in [`docs/delivery-semantics.md`](./docs/delivery-semantics.md).
+- PostgreSQL 14 or newer with `wal_level = logical`, connected directly (not
+  through PgBouncer).
+- A role with the `REPLICATION` attribute and `SELECT` on the streamed tables.
+- A publication listing tables explicitly (`FOR TABLE …`), or `WALERA_TABLES`
+  so Walera creates one. `FOR ALL TABLES` and `FOR TABLES IN SCHEMA` are
+  refused.
 
----
+Details: [docs/postgres.md](docs/postgres.md).
 
-## Operations
+## Health and metrics
 
-| Endpoint        | Purpose                                                |
-| --------------- | ------------------------------------------------------ |
-| `GET /healthz`  | Liveness. `200` when the WAL reader is connected.      |
-| `GET /readyz`   | Readiness. `200` when PostgreSQL is healthy (does not probe auth). |
-| `GET /metrics`  | Prometheus metrics.                                    |
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /healthz` | `200` while the replication connection is up, otherwise `503`. |
+| `GET /readyz` | Same check, cached and refreshed every 5 s. Does not call the auth backend. |
+| `GET /metrics` | Prometheus metrics. |
 
-Metrics: `walera_subscribers_active{type}`, `walera_events_sent_total{type}`,
-`walera_subscriber_disconnects_total{reason}`, `walera_auth_requests_total{result}`,
-`walera_pg_connection_status`, plus Go runtime and process metrics.
-
-Subscribers that cannot drain at WAL pace are disconnected rather
-than buffered indefinitely, keeping the per-subscriber memory
-footprint predictable at the ~10,000-subscriber target.
-
-Deployment targets a single Kubernetes pod per environment:
-2 CPU / 4 GiB requests, 4 CPU / 8 GiB limits,
-`terminationGracePeriodSeconds: 30`. Full deployment manifests, the
-slow-client policy, and the upgrade procedure live in
-[`docs/operations.md`](./docs/operations.md).
-
----
+Metrics: `walera_subscribers_active`, `walera_events_sent_total`,
+`walera_subscriber_disconnects_total`, `walera_auth_requests_total`,
+`walera_pg_connection_status`, plus the Go runtime and process collectors.
+Alerts, limits, logs and shutdown: [docs/operations.md](docs/operations.md).
+How it works inside: [docs/architecture.md](docs/architecture.md).
 
 ## Development
 
+Go 1.26 and Docker (for integration tests).
+
 ```bash
-git clone https://github.com/slavnycoder/walera.git
-cd walera
-make build               # ./cdc-sse
-make test                # unit tests with -race
-make test-integration    # testcontainers-go + PostgreSQL
-make deps-check          # internal/ import-graph gate
-./cdc-sse --config ./config.yaml --dev-log
+make test                                       # unit tests with -race
+make testbin/cdc-sse && make test-integration   # end-to-end against PostgreSQL in Docker
+make lint                                       # golangci-lint
 ```
-
-Go 1.22 or later is required. The test suite must pass under `-race`
-on every change; coverage target is > 85% lines. Integration tests use
-`testcontainers-go` to spin up a real PostgreSQL with
-`wal_level=logical` and run the WAL pipeline end-to-end.
-
-The package layout, the runtime component breakdown, the failure
-model, and the operational assumptions are in
-[`docs/architecture.md`](./docs/architecture.md).
-
-A standalone SSE load generator (`cmd/loadgen`) and a benchmark
-orchestrator (`scripts/bench.sh`) capture heap, CPU, and goroutine
-pprof snapshots alongside Prometheus output — see
-[`docs/operations.md`](./docs/operations.md) for the full workflow.
-
----
 
 ## License
 
-MIT — see [`LICENSE`](./LICENSE). Third-party attributions in
-[`docs/licenses.md`](./docs/licenses.md).
+MIT — see [LICENSE](LICENSE).

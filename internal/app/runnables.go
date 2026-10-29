@@ -74,7 +74,7 @@ func newMainHTTPServer(cfg AppConfig, mux *http.ServeMux, logger zerolog.Logger)
 		p.SetHTTP1(true)
 		p.SetUnencryptedHTTP2(true)
 		srv.Protocols = p
-		logger.Info().Msg("h2c enabled on SSE listener (http.h2c_enabled=true)")
+		logger.Info().Msg("h2c enabled on SSE listener")
 	}
 	return srv
 }

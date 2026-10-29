@@ -28,7 +28,7 @@ func New() *Registry {
 		eventsSentTotal: prometheus.NewCounterVec(
 			prometheus.CounterOpts{
 				Name: "walera_events_sent_total",
-				Help: "Total SSE frames sent to subscribers by kind (exact|wildcard). Includes both tx-data frames and per-sub heartbeat (`:` comment) frames; for a tx-only rate subtract heartbeat cadence × active subs.",
+				Help: "Total SSE frames sent to subscribers by kind (exact|wildcard). Counts tx frames only (not heartbeats or initial_data).",
 			},
 			[]string{"type"},
 		),

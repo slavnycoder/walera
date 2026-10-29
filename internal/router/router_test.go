@@ -1084,7 +1084,7 @@ func TestBroadcaster_TxTooLarge_PreFilterNoFalsePositive(t *testing.T) {
 	}
 }
 
-// TestBroadcaster_FanOutRaceStress (SAFE-01 race):
+// TestBroadcaster_FanOutRaceStress:
 // Many subscribers + large tx routed under -race with no data race.
 // All routing occurs in the single routeTx goroutine (WAL ingest goroutine).
 // fullIndices is read-only across sequential dispatchEvent calls; no new goroutines.
@@ -1188,7 +1188,7 @@ func TestRouteTxSchemaScoped_StripsCrossSchema(t *testing.T) {
 
 // TestBroadcaster_MultiRoot_ExactDropsOnTwoPKs:
 // Exact subscriber on todo_lists:42 must NOT receive a tx that touches both
-// todo_lists:42 and todo_lists:99 in one commit. Per spec §1.6, this is a
+// todo_lists:42 and todo_lists:99 in one commit. Per README, this is a
 // writer-side discipline violation; the broker drops the tx for this
 // subscriber and logs a multi_root warning, but keeps
 // the connection alive (no sub.Drop, no Reason set).
@@ -1324,7 +1324,7 @@ func TestBroadcaster_MultiRoot_ChildOfOtherTableNotGuarded(t *testing.T) {
 
 // TestBroadcaster_MultiRoot_OneWarningPerSubscriber:
 // Each eligible subscriber gets its own multi_root drop, logged per
-// (tx, subscriber) pair, not per tx (spec §8.2).
+// (tx, subscriber) pair, not per tx.
 func TestBroadcaster_MultiRoot_OneWarningPerSubscriber(t *testing.T) {
 	t.Parallel()
 

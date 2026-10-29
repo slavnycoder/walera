@@ -2,7 +2,7 @@
 #
 # Walera — PostgreSQL CDC over SSE.
 #
-# Multi-stage build per RESEARCH Pattern 11 / D4-21:
+# Multi-stage build:
 #   Stage 1: golang:1.26.10-alpine → static binary with CGO disabled.
 #   Stage 2: gcr.io/distroless/static-debian12:nonroot → ca-certificates,
 #            /etc/passwd, /etc/group, timezone db — everything a static Go
@@ -16,7 +16,7 @@
 #
 # DO NOT use `FROM scratch` — lacks ca-certificates so the auth-backend HTTPS
 # call would fail. distroless/static-debian12 ships the minimum runtime files
-# (ca-certificates, /etc/passwd, /etc/group, tzdata) — see RESEARCH anti-pattern.
+# (ca-certificates, /etc/passwd, /etc/group, tzdata).
 
 FROM golang:1.26.10-alpine AS build
 WORKDIR /src

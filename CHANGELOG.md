@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Documentation rewritten.** README plus docs/auth.md, docs/postgres.md, docs/operations.md and docs/architecture.md replace the spec, ADRs, invariants files and llm.txt.
 - **Subscriber index is a plain map under one RWMutex.** The xxhash-sharded index and the github.com/cespare/xxhash/v2 dependency are gone.
 - **Configuration is environment-only.** The config file, `--config`,
   koanf and every tuning key are gone; Walera reads 12 `WALERA_*`

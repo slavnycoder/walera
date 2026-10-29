@@ -1,11 +1,10 @@
 -- test/integration/testdata/001_publication.sql.test
 -- Test fixture: DBA-owned logical replication publication for the Walera
--- integration suite. Extends migrations/001_publication.sql with the table
--- stubs the scenarios need (users, orders, audit_log).
+-- integration suite: the table stubs the scenarios need (users, orders, audit_log).
 --
--- Conventions (matching the production migration):
+-- Conventions Walera requires:
 --   - REPLICA IDENTITY DEFAULT (no FULL, no NOTHING).
---   - Single-column int/uuid/text PRIMARY KEY only (ENT-02 / D-24).
+--   - Single-column int/uuid/text PRIMARY KEY only.
 --   - publish = 'insert, update, delete' (no TRUNCATE).
 --
 -- audit_log is INTENTIONALLY EXCLUDED from the publication so scenario 03

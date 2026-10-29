@@ -2,8 +2,7 @@
 # =============================================================================
 # scripts/check-changelog-date.sh
 #
-# CHANGELOG date-placeholder guard. Closes REQUIREMENTS.md RELEASE-02
-# (ROADMAP Phase 4 SC1 + SC2). Run on every PR via
+# CHANGELOG date-placeholder guard. Run on every PR via
 # .github/workflows/checks.yml (`changelog-date-test` job), invoked at
 # tag-cut time by .github/workflows/release.yml, and exposed locally as
 # `make check-changelog-date`.

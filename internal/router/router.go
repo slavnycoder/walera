@@ -134,7 +134,7 @@ func (b *Broadcaster) routeTx(tx wal.Tx) {
 	}
 
 	// fullIndices is allocated once and shared read-only across the sequential
-	// dispatch loop (SAFE-01: no goroutine spawned in dispatchEvent).
+	// dispatch loop (dispatchEvent spawns no goroutines).
 	fullIndices := make([]int, len(tx.Changes))
 	for i := range fullIndices {
 		fullIndices[i] = i
@@ -191,7 +191,7 @@ func matchesAnchor(sub *Subscriber, ch wal.Change) bool {
 
 // dispatchEvent applies the subscriber's whitelist filter to the full tx index
 // set, enforces the post-filter MaxChangesPerTx cap, encodes, and sends.
-// All Drop call sites must stay inside this function (INVARIANT #3).
+// All Drop call sites must stay inside this function.
 func (b *Broadcaster) dispatchEvent(tx wal.Tx, sub *Subscriber, indices []int) {
 	if tx.CommitLSN <= sub.StartLSN() {
 		return
@@ -241,7 +241,7 @@ func (b *Broadcaster) dispatchEvent(tx wal.Tx, sub *Subscriber, indices []int) {
 		filtered = append(filtered, ch)
 	}
 	if len(filtered) == 0 || !anchorSurvived {
-		return // silent drop — no Drop() (INVARIANT #3)
+		return // silent drop — no Drop()
 	}
 	// Cap is post-filter, not pre-filter: pre-filter would falsely drop
 	// narrow-whitelist subscribers on large txs.
@@ -281,7 +281,7 @@ func (b *Broadcaster) dispatchEvent(tx wal.Tx, sub *Subscriber, indices []int) {
 // hasMultipleAnchorRoots reports whether tx contains >1 distinct PK on the
 // (schema, table) anchor pair. A single-PK anchor table (one or more changes
 // for the same row) is normal; two distinct anchor PKs in the same tx signals
-// a writer-side discipline violation (spec §1.6, §4.4).
+// a writer-side discipline violation (README "Delivery guarantees").
 func hasMultipleAnchorRoots(tx wal.Tx, schema, table string) bool {
 	var first string
 	for _, ch := range tx.Changes {

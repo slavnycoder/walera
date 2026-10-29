@@ -145,7 +145,7 @@ func TestVerifyReplicationRole_AllCases(t *testing.T) {
 		if strings.Contains(lower, "slot") {
 			t.Errorf("error must NOT mention slot; got: %q", msg)
 		}
-		if !strings.Contains(msg, "docs/operations.md#required-runtime") {
+		if !strings.Contains(msg, "docs/postgres.md#replication-role") {
 			t.Errorf("error must reference the ops docs anchor; got: %q", msg)
 		}
 	})

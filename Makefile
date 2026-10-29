@@ -26,7 +26,7 @@ testbin/cdc-sse: $(shell find cmd internal -name '*.go') go.mod go.sum
 	@mkdir -p testbin
 	go build -o testbin/cdc-sse $(CMD)
 
-# CRITICAL — Pitfall G4: the `-tags=integration` flag and the explicit
+# The `-tags=integration` flag and the explicit
 # `./test/integration/...` path are MANDATORY. Without the tag, the
 # `//go:build integration`-gated test files compile to zero tests and the
 # target appears to pass while running nothing. Without the explicit path
@@ -51,10 +51,9 @@ lint:
 vet:
 	go vet ./...
 
-# Enforce the directional `internal/` import graph (DEPS-01..04). Any match in
-# any of the four `go list -deps | grep -E` invocations is a violation and
-# fails the build. Phase 11 wires this into CI; locally it is invoked by hand
-# or via pre-push hooks. Uses bash explicitly so `pipefail` propagates a
+# Enforce the directional `internal/` import graph. Any match in any of the
+# four `go list -deps | grep -E` invocations is a violation and fails the
+# build. Uses bash explicitly so `pipefail` propagates a
 # failed `go list` (e.g. import cycle) instead of being swallowed by the
 # subsequent `grep`.
 deps-check: SHELL := /bin/bash
@@ -74,7 +73,7 @@ deps-check:
 	fi; \
 	echo "deps-check: OK"
 
-# CHANGELOG date-placeholder guard. Closes REQUIREMENTS.md RELEASE-02:
+# CHANGELOG date-placeholder guard:
 # release.yml fails fast at tag-cut time on a residual `YYYY-MM-DD`
 # placeholder. The CI gate `changelog-date-test` in
 # .github/workflows/checks.yml runs the unit test on every PR and push
@@ -91,7 +90,7 @@ check-changelog-date:
 check-changelog-date-test:
 	@bash scripts/check-changelog-date_test.sh
 
-# Build the production container image. Tags `walera:dev` per D4-25; the CI
+# Build the production container image as `walera:dev`; the CI
 # pipeline retags with the release semver before pushing to a registry.
 docker:
 	docker build -t walera:dev .
