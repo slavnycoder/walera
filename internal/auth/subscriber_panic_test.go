@@ -41,10 +41,9 @@ func validSubscriberDeps(t *testing.T) SubscriberDeps {
 		RequestTimeout: time.Second,
 	}, Deps{Logger: zerolog.Nop(), Metrics: metrics.New()})
 	return SubscriberDeps{
-		Sub:     rsub,
-		Client:  c,
-		Logger:  zerolog.Nop(),
-		Metrics: metrics.New(),
+		Sub:    rsub,
+		Client: c,
+		Logger: zerolog.Nop(),
 	}
 }
 
@@ -64,11 +63,6 @@ func TestNewSubscriber_PanicsOnNilDeps(t *testing.T) {
 			name:    "Client",
 			mutate:  func(d *SubscriberDeps) { d.Client = nil },
 			wantMsg: "auth.NewSubscriber: Deps.Client is required",
-		},
-		{
-			name:    "Metrics",
-			mutate:  func(d *SubscriberDeps) { d.Metrics = nil },
-			wantMsg: "auth.NewSubscriber: Deps.Metrics is required",
 		},
 	}
 	for _, tc := range cases {

@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	dto "github.com/prometheus/client_model/go"
 	"github.com/rs/zerolog"
 
 	"github.com/walera/walera/internal/metrics"
@@ -390,7 +391,7 @@ func TestStream_BatchesQueuedFramesIntoOneFlush(t *testing.T) {
 
 // Once the client has the response, it must already be routable: a row it
 // writes right after connecting is never missed.
-func TestStream_RegistersBeforeFirstFlush(t *testing.T) {
+func TestStream_RegistersBeforeFirstWrite(t *testing.T) {
 	t.Parallel()
 	kit := newTestHandler(t, nil, nil)
 	gate := make(chan struct{})
@@ -440,5 +441,30 @@ func TestStream_LateRegistrantGetsShutdownFrame(t *testing.T) {
 	}
 	if !strings.Contains(body, "event: shutdown") {
 		t.Fatalf("body = %q; want a shutdown frame", body)
+	}
+}
+
+// A client that goes away is counted as client_closed, not left unlabelled.
+func TestStream_RequestCancelCountsClientClosed(t *testing.T) {
+	t.Parallel()
+	kit := newTestHandler(t, nil, nil)
+	sub := router.NewSubscriber(router.SubscriberConfig{Kind: router.KindExact, Schema: "public", Table: "users", PK: "42"},
+		router.SubscriberDeps{Parent: context.Background()})
+	ctx, cancel := context.WithCancel(context.Background())
+	r := httptest.NewRequest(http.MethodGet, "/sse/v1/users/42", nil).WithContext(ctx)
+	done := make(chan struct{})
+	go func() { defer close(done); kit.h.stream(httptest.NewRecorder(), r, sub, nil) }()
+	kit.bc.firstSub(t)
+	cancel()
+	<-done
+	if got := sub.Reason(); got != "client_closed" {
+		t.Fatalf("Reason = %q; want client_closed", got)
+	}
+	var m dto.Metric
+	if err := kit.h.metrics.SubscriberDisconnects("client_closed").Write(&m); err != nil {
+		t.Fatal(err)
+	}
+	if v := m.GetCounter().GetValue(); v != 1 {
+		t.Fatalf("disconnects{client_closed} = %v; want 1", v)
 	}
 }

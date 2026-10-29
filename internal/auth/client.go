@@ -196,11 +196,6 @@ func newHTTPClient(cfg Config) *http.Client {
 }
 
 func (c *Client) OpenSession(ctx context.Context, bearer string, fwd ForwardedAuth, channel, requestID string) (*Whitelist, error) {
-	start := time.Now()
-	defer func() {
-		c.mc.AuthRequestDuration().Observe(time.Since(start).Seconds())
-	}()
-
 	// Credential gate: never make an unauthenticated backend call. The open
 	// proceeds when a bearer OR any forwarded cookie/header is present.
 	if bearer == "" && fwd.Empty() {

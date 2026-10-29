@@ -293,8 +293,7 @@ func Test16TxScopedDelivery(t *testing.T) {
 	// A transaction that touches two different root rows of the subscriber's
 	// anchor table violates the one-root-per-tx discipline (spec §1.6, README
 	// "Writer-side discipline"). The broker must drop the tx for the
-	// subscriber — counter walera_tx_dropped_total{reason="multi_root"}
-	// increments and no event is delivered — but MUST NOT disconnect the
+	// subscriber — no event is delivered — but MUST NOT disconnect the
 	// subscriber. A subsequent well-formed tx is delivered normally.
 	t.Run("MultiRootSameTableDropped", func(t *testing.T) {
 		t.Parallel()
@@ -326,12 +325,6 @@ func Test16TxScopedDelivery(t *testing.T) {
 			t.Fatalf("seed event mismatch: %+v", seed.Changes)
 		}
 
-		metricsURL := h.Binary.BaseURL() + "/metrics"
-		baseline, err := scrapeMetric(ctx, metricsURL, `walera_tx_dropped_total{reason="multi_root"}`)
-		if err != nil {
-			t.Fatalf("scrape baseline multi_root: %v", err)
-		}
-
 		// Discipline violation: two distinct roots in one tx.
 		if err := h.PG.ExecBatch(ctx,
 			[]string{
@@ -346,25 +339,8 @@ func Test16TxScopedDelivery(t *testing.T) {
 			t.Fatalf("multi-root tx: %v", err)
 		}
 
-		if _, err := waitForMetric(ctx, t, metricsURL,
-			`walera_tx_dropped_total{reason="multi_root"}`,
-			func(v float64) bool { return v > baseline },
-			3*time.Second, 50*time.Millisecond,
-		); err != nil {
-			t.Fatalf("multi_root counter did not increment: %v", err)
-		}
-
-		// No tx event must reach the subscriber from the bad tx.
-		select {
-		case ev := <-events:
-			if ev.Type == "tx" {
-				t.Fatalf("multi_root:unexpected tx event delivered (writer-side violation): %+v", ev)
-			}
-		case err := <-errCh:
-			t.Fatalf("multi_root:subscriber unexpectedly errored: %v (must NOT disconnect on multi_root)", err)
-		case <-time.After(500 * time.Millisecond):
-			// OK — silently dropped, subscriber stays connected.
-		}
+		// No tx event from the bad tx, and the subscriber stays connected.
+		expectNoTxWithin(t, events, errCh, 3*time.Second)
 
 		// Follow-up well-formed tx is delivered normally — confirms the
 		// connection survived the drop.

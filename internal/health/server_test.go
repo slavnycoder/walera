@@ -19,11 +19,9 @@ import (
 
 type stubReader struct {
 	connected atomic.Bool
-	calls     atomic.Int64
 }
 
 func (s *stubReader) CheckPG(_ context.Context) error {
-	s.calls.Add(1)
 	if s.connected.Load() {
 		return nil
 	}
@@ -225,7 +223,6 @@ func TestMetrics_ContainsPhase3Metrics(t *testing.T) {
 	mc := metrics.New()
 
 	mc.AuthRequests("ok").Add(0)
-	mc.LimitRejected("global_concurrent").Add(0)
 	s := newServerInternal(r, mc, Config{ReadyzProbeInterval: time.Hour}, zerolog.Nop())
 
 	mux := http.NewServeMux()
@@ -246,8 +243,6 @@ func TestMetrics_ContainsPhase3Metrics(t *testing.T) {
 
 	want := []string{
 		"walera_auth_requests_total",
-		"walera_auth_request_duration_seconds",
-		"walera_limit_rejected_total",
 		"walera_pg_connection_status",
 	}
 	for _, name := range want {

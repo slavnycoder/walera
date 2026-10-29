@@ -141,8 +141,7 @@ COMMIT;
 ```
 
 This rule is **broker-enforced for exact subscribers** (`/sse/v1/{table}/{pk}`):
-a multi-root transaction is silently skipped for them
-(`walera_tx_dropped_total{reason="multi_root"}` increments, a warn-level log
+a multi-root transaction is silently skipped for them (a warn-level log
 fires, the connection stays open). Wildcard subscribers (`/sse/v1/{table}/all`)
 are authorized for every row and receive the transaction whole, subject to
 `router.max_changes_per_tx`. Split bulk operations across roots in your
@@ -361,9 +360,9 @@ documented in [`docs/delivery-semantics.md`](./docs/delivery-semantics.md).
 | `GET /readyz`   | Readiness. `200` when PostgreSQL is healthy (does not probe auth). |
 | `GET /metrics`  | Prometheus metrics.                                    |
 
-Key metrics: WAL lag histogram, PG slot lag gauge, connected-subscriber
-gauge, auth-failure counter (by status), per-event fan-out latency
-histogram, slow-client disconnect counter, slot connection-state gauge.
+Metrics: `walera_subscribers_active{type}`, `walera_events_sent_total{type}`,
+`walera_subscriber_disconnects_total{reason}`, `walera_auth_requests_total{result}`,
+`walera_pg_connection_status`, plus Go runtime and process metrics.
 
 Subscribers that cannot drain at WAL pace are disconnected rather
 than buffered indefinitely, keeping the per-subscriber memory

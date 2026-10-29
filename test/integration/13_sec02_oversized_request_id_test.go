@@ -111,13 +111,6 @@ func Test13SecHandshakeAdmission(t *testing.T) {
 			t.Fatalf("4th stream neither streamed nor 429'd; stderr:\n%s", h.Binary.Stderr())
 		}
 
-		if v, err := scrapeMetric(ctx, h.Binary.BaseURL()+"/metrics",
-			`walera_limit_rejected_total{kind="per_user_concurrent"}`); err != nil {
-			t.Fatalf("scrape per_user metric: %v", err)
-		} else if v < 1 {
-			t.Errorf("per_user_concurrent rejections = %v; want >= 1", v)
-		}
-
 		// Release one slot → a new stream is admitted again.
 		closes[0]()
 		closes[0] = func() {}
@@ -159,13 +152,6 @@ func Test13SecHandshakeAdmission(t *testing.T) {
 		}
 		if retryAfter == "" {
 			t.Errorf("503 over global cap missing Retry-After header")
-		}
-
-		if v, err := scrapeMetric(ctx, h.Binary.BaseURL()+"/metrics",
-			`walera_limit_rejected_total{kind="global_concurrent"}`); err != nil {
-			t.Fatalf("scrape global metric: %v", err)
-		} else if v < 1 {
-			t.Errorf("global_concurrent rejections = %v; want >= 1", v)
 		}
 
 		closes[0]()

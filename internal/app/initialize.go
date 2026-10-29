@@ -37,7 +37,6 @@ type httpWiring struct {
 	Mux          *http.ServeMux
 	MainServer   *http.Server
 	PProfServer  *http.Server
-	SlotName     wal.SlotName
 }
 
 func InitializeApp(cfg AppConfig, logger zerolog.Logger, adminConn walconn.AdminConn) (*App, func(), error) {
@@ -62,17 +61,14 @@ func InitializeApp(cfg AppConfig, logger zerolog.Logger, adminConn walconn.Admin
 		HTTPServer:   hw.MainServer,
 		PProfServer:  hw.PProfServer,
 	}
-	a.Runnables = buildRunnables(a, hw.SlotName)
+	a.Runnables = buildRunnables(a)
 	return a, func() {}, nil
 }
 
 func wireCore(cfg AppConfig, logger zerolog.Logger) coreWiring {
 	registry := metrics.New()
 
-	walReader, txCh := wal.New(cfg.WAL, wal.Deps{
-		Logger:  logger,
-		Metrics: registry,
-	})
+	walReader, txCh := wal.New(cfg.WAL, wal.Deps{Logger: logger})
 
 	return coreWiring{
 		Registry:  registry,
@@ -87,10 +83,7 @@ func wireAuth(cfg AppConfig, logger zerolog.Logger, registry *metrics.Registry) 
 		Metrics: registry,
 	})
 
-	lim := limits.New(cfg.Limits, limits.Deps{
-		Logger:  logger,
-		Metrics: registry,
-	})
+	lim := limits.New(cfg.Limits, limits.Deps{Logger: logger})
 
 	return authWiring{
 		AuthClient: authClient,
@@ -151,13 +144,10 @@ func wireHTTP(cfg AppConfig, logger zerolog.Logger, cw coreWiring, aw authWiring
 
 	pprofSrv := newPProfHTTPServer(cfg, logger)
 
-	slotName := deriveSlotName(cfg)
-
 	return httpWiring{
 		HealthServer: healthSrv,
 		Mux:          mux,
 		MainServer:   mainSrv,
 		PProfServer:  pprofSrv,
-		SlotName:     slotName,
 	}
 }

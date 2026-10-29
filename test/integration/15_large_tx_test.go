@@ -74,12 +74,6 @@ func TestLargeTransactionBackpressure(t *testing.T) {
 	events, errCh, closeFn := h.Client.Connect(ctx, "users/all", "test-token")
 	defer closeFn()
 
-	metricsURL := h.Binary.BaseURL() + "/metrics"
-	baseTooLarge, err := scrapeMetric(ctx, metricsURL, `walera_tx_dropped_total{reason="tx_too_large"}`)
-	if err != nil {
-		t.Fatalf("scrape baseline tx_too_large: %v", err)
-	}
-
 	if err := h.PG.Exec(ctx, `
         INSERT INTO users (id, email, name)
         SELECT g + 10000, 'u' || g || '@x', repeat('n', 50)
@@ -104,20 +98,14 @@ wait:
 					t.Fatalf("error event = %s; want tx_too_large", ev.Data)
 				}
 				break wait
+			default:
+				// heartbeats and other frames are irrelevant here
 			}
 		case err := <-errCh:
 			t.Fatalf("client error before tx_too_large: %v", err)
 		case <-deadline:
 			t.Fatalf("no tx_too_large frame within 15s; stderr:\n%s", h.Binary.Stderr())
 		}
-	}
-
-	if _, err := waitForMetric(ctx, t, metricsURL,
-		`walera_tx_dropped_total{reason="tx_too_large"}`,
-		func(v float64) bool { return v >= baseTooLarge+1 },
-		5*time.Second, 50*time.Millisecond,
-	); err != nil {
-		t.Fatalf("tx_too_large counter did not increment (baseline=%v): %v", baseTooLarge, err)
 	}
 
 	if lag, drained := confirmedSlotDrained(t, h.PG, "walera_test_", 4*1024, 15*time.Second); !drained {

@@ -27,7 +27,11 @@ func TestLoad_RejectsRemovedKeys(t *testing.T) {
 		{"yaml drain threshold subs", "http:\n  drain_threshold_subs: 10\n", "", "http.drain_threshold_subs"},
 		{"yaml max batch bytes per sub", "http:\n  max_batch_bytes_per_sub: 1024\n", "", "http.max_batch_bytes_per_sub"},
 		{"yaml batching", "http:\n  batching_disabled: true\n", "", "http.batching_disabled"},
+		{"yaml lag sample interval", "wal:\n  lag_sample_interval: 5s\n", "", "wal.lag_sample_interval"},
+		{"yaml metrics block", "metrics:\n  sample_interval: 30s\n", "", "metrics.sample_interval"},
 		{"env signing secret", "", "WALERA_AUTH_SIGNING_SECRET", "auth.signing_secret"},
+		{"env lag sample interval", "", "WALERA_WAL_LAG_SAMPLE_INTERVAL", "wal.lag_sample_interval"},
+		{"env metrics sample interval", "", "WALERA_METRICS_SAMPLE_INTERVAL", "metrics.sample_interval"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -490,60 +494,12 @@ func TestLoad_AppliesPhase4Defaults(t *testing.T) {
 		want any
 	}{
 		{"wal.reconnect.reset_after_success_duration", cfg.WAL.Reconnect.ResetAfterSuccessDuration, 60 * time.Second},
-		{"wal.lag_sample_interval", cfg.WAL.LagSampleInterval, 5 * time.Second},
-		{"metrics.sample_interval", cfg.Metrics.SampleInterval, 30 * time.Second},
 		{"shutdown.deadline", cfg.Shutdown.Deadline.Duration(), 10 * time.Second},
 	}
 	for _, tc := range tests {
 		if tc.got != tc.want {
 			t.Errorf("%s: got %v; want %v", tc.name, tc.got, tc.want)
 		}
-	}
-}
-
-func TestValidate_RejectsInvalidPhase4Values(t *testing.T) {
-	tests := []struct {
-		name      string
-		yaml      string
-		wantInErr string
-	}{
-		{
-			name: "metrics.sample_interval zero",
-			yaml: `
-database:
-  url: "postgres://a:b@localhost/db"
-wal:
-  publication_name: p
-metrics:
-  sample_interval: 0s
-`,
-			wantInErr: "metrics.sample_interval must be > 0",
-		},
-		{
-			name: "wal.lag_sample_interval zero",
-			yaml: `
-database:
-  url: "postgres://a:b@localhost/db"
-wal:
-  publication_name: p
-  lag_sample_interval: 0s
-`,
-			wantInErr: "wal.lag_sample_interval must be > 0",
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			setPhase3RequiredEnv(t)
-			path := writeTempYAML(t, tc.yaml)
-			_, err := LoadAppConfig(path)
-			if err == nil {
-				t.Fatalf("Load() expected error containing %q, got nil", tc.wantInErr)
-			}
-			if !strings.Contains(err.Error(), tc.wantInErr) {
-				t.Errorf("err = %v; want substring %q", err, tc.wantInErr)
-			}
-		})
 	}
 }
 

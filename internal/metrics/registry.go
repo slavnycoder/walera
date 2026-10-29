@@ -9,67 +9,57 @@ type Registry struct {
 	reg                   *prometheus.Registry
 	subscribersActive     *prometheus.GaugeVec
 	eventsSentTotal       *prometheus.CounterVec
-	txDroppedTotal        *prometheus.CounterVec
 	subscriberDisconnects *prometheus.CounterVec
-	routeLookupDuration   prometheus.Histogram
-
-	authRequestsTotal   *prometheus.CounterVec
-	authRequestDuration prometheus.Histogram
-	limitRejectedTotal  *prometheus.CounterVec
-	pgConnectionStatus  prometheus.Gauge
-
-	pgReconnectsTotal prometheus.Counter
-	walLSNLagBytes    prometheus.Gauge
-	walTxSizeChanges  prometheus.Histogram
-	walDecodeDuration prometheus.Histogram
-
-	walStandbyACKFailures prometheus.Counter
-
-	routingFanOut        prometheus.Histogram
-	txFanOutWork         prometheus.Histogram
-	coBeyondAnchorTotal  prometheus.Counter
-	routingIndexSize     *prometheus.GaugeVec
-	subscriberQueueDepth *prometheus.HistogramVec
-	subscriberLifetime   prometheus.Histogram
-
-	authRefreshTotal *prometheus.CounterVec
-
-	slowClientDrops prometheus.Counter
+	authRequestsTotal     *prometheus.CounterVec
+	pgConnectionStatus    prometheus.Gauge
 }
 
 func New() *Registry {
 	reg := prometheus.NewRegistry()
-	r := &Registry{reg: reg}
-
-	newSSEMetrics(r)
-	newAuthMetrics(r)
-	newLimitsMetrics(r)
-	newWALMetrics(r)
-	newRouterMetrics(r)
+	r := &Registry{
+		reg: reg,
+		subscribersActive: prometheus.NewGaugeVec(
+			prometheus.GaugeOpts{
+				Name: "walera_subscribers_active",
+				Help: "Active SSE subscribers by kind (exact|wildcard).",
+			},
+			[]string{"type"},
+		),
+		eventsSentTotal: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Name: "walera_events_sent_total",
+				Help: "Total SSE frames sent to subscribers by kind (exact|wildcard). Includes both tx-data frames and per-sub heartbeat (`:` comment) frames; for a tx-only rate subtract heartbeat cadence × active subs.",
+			},
+			[]string{"type"},
+		),
+		subscriberDisconnects: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Name: "walera_subscriber_disconnects_total",
+				Help: "Total subscriber disconnects by reason (slow_consumer|tx_too_large|client_closed|shutdown).",
+			},
+			[]string{"reason"},
+		),
+		authRequestsTotal: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Name: "walera_auth_requests_total",
+				Help: "Auth backend requests by result (ok|unauthorized|forbidden|not_found|unavailable).",
+			},
+			[]string{"result"},
+		),
+		pgConnectionStatus: prometheus.NewGauge(
+			prometheus.GaugeOpts{
+				Name: "walera_pg_connection_status",
+				Help: "PG replication connection status (0=disconnected, 1=connected).",
+			},
+		),
+	}
 
 	reg.MustRegister(
 		r.subscribersActive,
 		r.eventsSentTotal,
-		r.txDroppedTotal,
 		r.subscriberDisconnects,
-		r.routeLookupDuration,
 		r.authRequestsTotal,
-		r.authRequestDuration,
-		r.limitRejectedTotal,
 		r.pgConnectionStatus,
-		r.pgReconnectsTotal,
-		r.walStandbyACKFailures,
-		r.walLSNLagBytes,
-		r.walTxSizeChanges,
-		r.walDecodeDuration,
-		r.routingFanOut,
-		r.txFanOutWork,
-		r.coBeyondAnchorTotal,
-		r.routingIndexSize,
-		r.subscriberQueueDepth,
-		r.subscriberLifetime,
-		r.authRefreshTotal,
-		r.slowClientDrops,
 	)
 
 	reg.MustRegister(collectors.NewGoCollector(
@@ -77,167 +67,15 @@ func New() *Registry {
 	))
 	reg.MustRegister(collectors.NewProcessCollector(
 		collectors.ProcessCollectorOpts{
-
 			ReportErrors: false,
 		},
 	))
-
-	r.coBeyondAnchorTotal.Add(0)
-	r.routingIndexSize.WithLabelValues("exact").Add(0)
-	r.routingIndexSize.WithLabelValues("wildcard").Add(0)
-	r.subscriberQueueDepth.WithLabelValues("exact").Observe(0)
-	r.subscriberQueueDepth.WithLabelValues("wildcard").Observe(0)
-	r.txFanOutWork.Observe(0)
-	for _, result := range []string{"ok", "unauthorized", "forbidden", "not_found", "unavailable"} {
-		r.authRefreshTotal.WithLabelValues(result).Add(0)
-	}
 
 	for _, reason := range []string{"slow_consumer", "tx_too_large", "client_closed", "shutdown"} {
 		r.subscriberDisconnects.WithLabelValues(reason).Add(0)
 	}
 
 	return r
-}
-
-func newSSEMetrics(r *Registry) {
-	r.subscribersActive = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Name: "walera_subscribers_active",
-			Help: "Active SSE subscribers by kind (exact|wildcard).",
-		},
-		[]string{"type"},
-	)
-	r.eventsSentTotal = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Name: "walera_events_sent_total",
-
-			Help: "Total SSE frames sent to subscribers by kind (exact|wildcard). Includes both tx-data frames and per-sub heartbeat (`:` comment) frames; for a tx-only rate subtract heartbeat cadence × active subs.",
-		},
-		[]string{"type"},
-	)
-	r.txDroppedTotal = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Name: "walera_tx_dropped_total",
-			Help: "Total transactions dropped before delivery by reason (slow_consumer|tx_too_large|multi_root).",
-		},
-		[]string{"reason"},
-	)
-	r.subscriberDisconnects = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Name: "walera_subscriber_disconnects_total",
-			Help: "Total subscriber disconnects by reason (slow_consumer|tx_too_large|client_closed|shutdown).",
-		},
-		[]string{"reason"},
-	)
-	r.routeLookupDuration = prometheus.NewHistogram(
-		prometheus.HistogramOpts{
-			Name:    "walera_route_lookup_duration_seconds",
-			Help:    "Per-tx routing lookup duration (exact + wildcard combined).",
-			Buckets: prometheus.DefBuckets,
-		},
-	)
-
-	r.slowClientDrops = prometheus.NewCounter(prometheus.CounterOpts{
-		Name: "walera_slow_client_drops_total",
-		Help: "Total SSE subscribers dropped because their per-client queue could not keep pace (slow-client policy). Complements walera_subscriber_disconnects_total{reason=\"slow_consumer\"}, which remains the general disconnect-by-reason surface; both counters move in lockstep.",
-	})
-}
-
-func newAuthMetrics(r *Registry) {
-
-	r.authRequestsTotal = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Name: "walera_auth_requests_total",
-			Help: "Auth backend requests by result (ok|unauthorized|forbidden|not_found|unavailable).",
-		},
-		[]string{"result"},
-	)
-	r.authRequestDuration = prometheus.NewHistogram(
-		prometheus.HistogramOpts{
-			Name:    "walera_auth_request_duration_seconds",
-			Help:    "Auth backend request duration in seconds.",
-			Buckets: prometheus.DefBuckets,
-		},
-	)
-	r.authRefreshTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Name: "walera_auth_refresh_total",
-		Help: "Per-subscriber auth refresh attempts by result (separates from handshake auth_requests_total).",
-	}, []string{"result"})
-}
-
-func newLimitsMetrics(r *Registry) {
-	r.limitRejectedTotal = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Name: "walera_limit_rejected_total",
-			Help: "Admission-control rejections by kind (global_concurrent|per_user_concurrent).",
-		},
-		[]string{"kind"},
-	)
-}
-
-func newWALMetrics(r *Registry) {
-	r.pgConnectionStatus = prometheus.NewGauge(
-		prometheus.GaugeOpts{
-			Name: "walera_pg_connection_status",
-			Help: "PG replication connection status (0=disconnected, 1=connected).",
-		},
-	)
-
-	r.pgReconnectsTotal = prometheus.NewCounter(prometheus.CounterOpts{
-		Name: "walera_pg_reconnects_total",
-		Help: "Total PG replication-connection reconnect attempts.",
-	})
-	r.walStandbyACKFailures = prometheus.NewCounter(prometheus.CounterOpts{
-		Name: "walera_wal_standby_ack_failures_total",
-		Help: "Total SendStandbyStatusUpdate errors from the wal-standby-ticker goroutine. Incremented on every transient ACK failure; the ticker continues running so this counter drives the WaleraStandbyAckFailures alert rather than gating any control-plane behaviour.",
-	})
-	r.walLSNLagBytes = prometheus.NewGauge(prometheus.GaugeOpts{
-		Name: "walera_wal_lsn_lag_bytes",
-		Help: "PG WAL lag: pg_wal_lsn_diff(pg_current_wal_lsn(), confirmed_flush_lsn) — sampled every 5s.",
-	})
-	r.walTxSizeChanges = prometheus.NewHistogram(prometheus.HistogramOpts{
-		Name:    "walera_wal_tx_size_changes",
-		Help:    "Number of changes per decoded WAL transaction.",
-		Buckets: []float64{1, 10, 100, 1000, 10000, 100000},
-	})
-	r.walDecodeDuration = prometheus.NewHistogram(prometheus.HistogramOpts{
-		Name:    "walera_wal_decode_duration_seconds",
-		Help:    "Per-WAL-message decode duration in seconds (µs..1s range).",
-		Buckets: []float64{1e-6, 1e-5, 1e-4, 1e-3, 1e-2, 0.1, 1},
-	})
-}
-
-func newRouterMetrics(r *Registry) {
-	r.routingFanOut = prometheus.NewHistogram(prometheus.HistogramOpts{
-		Name:    "walera_routing_fan_out",
-		Help:    "Number of subscribers matched per tx (per-tx fan-out).",
-		Buckets: []float64{1, 5, 25, 100, 500, 2500, 10000},
-	})
-	r.txFanOutWork = prometheus.NewHistogram(prometheus.HistogramOpts{
-		Name: "walera_tx_fan_out_work",
-		Help: "Per-transaction delivered-change fan-out work (Σ post-filter delivered changes across eligible subscribers). Observe-only; the per-subscriber post-filter MaxChangesPerTx cap is the protective control.",
-		// Buckets extend the walera_routing_fan_out tail to 50000 because
-		// work = changes × subscribers can exceed pure fan-out counts.
-		Buckets: []float64{1, 5, 25, 100, 500, 2500, 10000, 50000},
-	})
-	r.coBeyondAnchorTotal = prometheus.NewCounter(prometheus.CounterOpts{
-		Name: "walera_co_tx_beyond_anchor_total",
-		Help: "Cumulative delivered changes that a subscriber received from a matched transaction beyond their own anchor-matched key(s) — the incremental volume added by whole-transaction delivery. Observe-only; complements walera_tx_fan_out_work.",
-	})
-	r.routingIndexSize = prometheus.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "walera_routing_index_size",
-		Help: "Subscribers registered per index kind, sampled every 30s.",
-	}, []string{"index_kind"})
-	r.subscriberQueueDepth = prometheus.NewHistogramVec(prometheus.HistogramOpts{
-		Name:    "walera_subscriber_queue_depth",
-		Help:    "Per-subscriber buffered-channel len(), sampled every 30s.",
-		Buckets: []float64{1, 4, 16, 64, 256, 1024, 4096},
-	}, []string{"type"})
-	r.subscriberLifetime = prometheus.NewHistogram(prometheus.HistogramOpts{
-		Name:    "walera_subscriber_lifetime_seconds",
-		Help:    "Connection lifetime of disconnected subscribers in seconds (business-range buckets).",
-		Buckets: []float64{1, 10, 60, 600, 3600, 21600, 86400},
-	})
 }
 
 func (r *Registry) SubscribersActive(kind string) prometheus.Gauge {
@@ -248,62 +86,16 @@ func (r *Registry) EventsSent(kind string) prometheus.Counter {
 	return r.eventsSentTotal.WithLabelValues(kind)
 }
 
-func (r *Registry) TxDropped(reason string) prometheus.Counter {
-	return r.txDroppedTotal.WithLabelValues(reason)
-}
-
 func (r *Registry) SubscriberDisconnects(reason string) prometheus.Counter {
 	return r.subscriberDisconnects.WithLabelValues(reason)
-}
-
-func (r *Registry) RouteLookupDuration() prometheus.Histogram {
-	return r.routeLookupDuration
 }
 
 func (r *Registry) AuthRequests(result string) prometheus.Counter {
 	return r.authRequestsTotal.WithLabelValues(result)
 }
 
-func (r *Registry) AuthRequestDuration() prometheus.Histogram {
-	return r.authRequestDuration
-}
-
-func (r *Registry) LimitRejected(kind string) prometheus.Counter {
-	return r.limitRejectedTotal.WithLabelValues(kind)
-}
-
 func (r *Registry) PGConnectionStatus() prometheus.Gauge {
 	return r.pgConnectionStatus
-}
-
-func (r *Registry) PGReconnects() prometheus.Counter { return r.pgReconnectsTotal }
-
-func (r *Registry) WALStandbyACKFailures() prometheus.Counter { return r.walStandbyACKFailures }
-
-func (r *Registry) WALLSNLagBytes() prometheus.Gauge { return r.walLSNLagBytes }
-
-func (r *Registry) WALTxSizeChanges() prometheus.Histogram { return r.walTxSizeChanges }
-
-func (r *Registry) WALDecodeDuration() prometheus.Histogram { return r.walDecodeDuration }
-
-func (r *Registry) RoutingFanOut() prometheus.Histogram { return r.routingFanOut }
-
-func (r *Registry) TxFanOutWork() prometheus.Histogram { return r.txFanOutWork }
-
-func (r *Registry) CoBeyondAnchorTotal() prometheus.Counter { return r.coBeyondAnchorTotal }
-
-func (r *Registry) RoutingIndexSize(kind string) prometheus.Gauge {
-	return r.routingIndexSize.WithLabelValues(kind)
-}
-
-func (r *Registry) SubscriberLifetime() prometheus.Histogram { return r.subscriberLifetime }
-
-func (r *Registry) AuthRefresh(result string) prometheus.Counter {
-	return r.authRefreshTotal.WithLabelValues(result)
-}
-
-func (r *Registry) SlowClientDrops() prometheus.Counter {
-	return r.slowClientDrops
 }
 
 func (r *Registry) Gatherer() prometheus.Gatherer {

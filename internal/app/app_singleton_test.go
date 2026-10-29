@@ -9,7 +9,6 @@ import (
 	"github.com/walera/walera/internal/auth"
 	"github.com/walera/walera/internal/health"
 	"github.com/walera/walera/internal/limits"
-	"github.com/walera/walera/internal/metrics"
 	"github.com/walera/walera/internal/router"
 	"github.com/walera/walera/internal/wal"
 	"github.com/walera/walera/internal/walconn"
@@ -37,17 +36,11 @@ func TestApp_MetricsRegistrySingleton(t *testing.T) {
 	if got := a.AuthClient.Metrics(); got != want {
 		t.Errorf("AuthClient.Metrics() = %p; want %p", got, want)
 	}
-	if got := a.WalReader.Metrics(); got != want {
-		t.Errorf("WalReader.Metrics() = %p; want %p", got, want)
-	}
 	if got := a.RouterIndex.Metrics(); got != want {
 		t.Errorf("RouterIndex.Metrics() = %p; want %p", got, want)
 	}
 	if got := a.HealthServer.Metrics(); got != want {
 		t.Errorf("HealthServer.Metrics() = %p; want %p", got, want)
-	}
-	if got := a.Limits.Metrics(); got != want {
-		t.Errorf("Limits.Metrics() = %p; want %p", got, want)
 	}
 }
 
@@ -69,7 +62,6 @@ func newSingletonTestConfig(t *testing.T) *AppConfig {
 			PublicationName:         "walera_pub",
 			SlotNamePrefix:          "walera",
 			SlotHeadroomMin:         1,
-			LagSampleInterval:       5 * time.Second,
 			NaiveTimestampAssumeUTC: true,
 			Bootstrap:               wal.BootstrapConfig{Mode: "off"},
 		},
@@ -86,8 +78,7 @@ func newSingletonTestConfig(t *testing.T) *AppConfig {
 		Limits: limits.Config{
 			GlobalConcurrent: 50000,
 		},
-		Health:  health.Config{},
-		Metrics: metrics.Config{SampleInterval: 5 * time.Second},
+		Health: health.Config{},
 		Shutdown: ShutdownConfig{
 			Deadline: ShutdownDeadline(10 * time.Second),
 		},

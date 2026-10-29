@@ -12,10 +12,7 @@ import (
 	"github.com/jackc/pglogrepl"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgproto3"
-	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog"
-
-	"github.com/walera/walera/internal/metrics"
 )
 
 var lastCommittedLSN atomic.Uint64
@@ -64,8 +61,6 @@ type Reader struct {
 
 	connected atomic.Bool
 
-	metrics *metrics.Registry
-
 	rng *mathrand.Rand
 
 	runOnceFn func(context.Context) error
@@ -75,24 +70,14 @@ type Reader struct {
 
 type Deps struct {
 	Logger zerolog.Logger
-
-	Metrics *metrics.Registry
-}
-
-func validateDeps(d Deps) {
-	if d.Metrics == nil {
-		panic("wal.New: Deps.Metrics is required")
-	}
 }
 
 func New(cfg Config, deps Deps) (*Reader, <-chan Tx) {
-	validateDeps(deps)
 	txCh := make(chan Tx, 128)
 	r := &Reader{
-		cfg:     cfg,
-		log:     deps.Logger,
-		txCh:    txCh,
-		metrics: deps.Metrics,
+		cfg:  cfg,
+		log:  deps.Logger,
+		txCh: txCh,
 
 		rng: mathrand.New(mathrand.NewPCG(uint64(time.Now().UnixNano()), uint64(os.Getpid()))), //nolint:gosec // G404: reconnect backoff jitter, not security-sensitive
 	}
@@ -104,8 +89,6 @@ func New(cfg Config, deps Deps) (*Reader, <-chan Tx) {
 func (r *Reader) IsConnected() bool {
 	return r.connected.Load()
 }
-
-func (r *Reader) Metrics() *metrics.Registry { return r.metrics }
 
 func (r *Reader) CheckPG(_ context.Context) error {
 	if r.connected.Load() {
@@ -121,7 +104,6 @@ func newReaderForTest(conn replConn, log zerolog.Logger) *Reader {
 		log:      log,
 		txCh:     txCh,
 		replConn: conn,
-		metrics:  metrics.New(),
 		rng:      mathrand.New(mathrand.NewPCG(1, 2)), //nolint:gosec // G404: deterministic seed for test reproducibility, not security-sensitive
 	}
 }
@@ -144,7 +126,6 @@ func (r *Reader) Run(ctx context.Context) error {
 			attempt = 0
 		}
 
-		r.metrics.PGReconnects().Inc()
 		backoff := r.computeBackoffFn(attempt)
 
 		r.log.Warn().Err(err).
@@ -301,7 +282,6 @@ func (r *Reader) sendStandby(ctx context.Context) {
 		r.log.Debug().Err(err).Msg("standby status update cancelled (shutdown/reconnect)")
 		return
 	}
-	r.metrics.WALStandbyACKFailures().Inc()
 	r.log.Warn().Err(err).Msg("standby status update failed")
 }
 
@@ -332,10 +312,6 @@ func handleKeepaliveMsg(pkm pglogrepl.PrimaryKeepaliveMessage, sendStandby func(
 }
 
 func (r *Reader) processWALMessage(ctx context.Context, walData []byte, txBld *txBuilder, relCache *relationCache) error {
-
-	decodeTimer := prometheus.NewTimer(r.metrics.WALDecodeDuration())
-	defer decodeTimer.ObserveDuration()
-
 	if len(walData) == 0 {
 		r.log.Warn().Msg("processWALMessage: empty WAL data; skipping")
 		return nil
@@ -378,8 +354,6 @@ func (r *Reader) processWALMessage(ctx context.Context, walData []byte, txBld *t
 		tx := txBld.HandleCommit(m)
 		if tx != nil {
 			setLSN(m.CommitLSN)
-
-			r.metrics.WALTxSizeChanges().Observe(float64(len(tx.Changes)))
 			if err := r.deliver(ctx, *tx); err != nil {
 				return err
 			}

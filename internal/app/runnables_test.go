@@ -57,7 +57,7 @@ func TestBuildRunnablesRunnableClosures(t *testing.T) {
 	cancelCalls := 0
 	a.cancel = func() { cancelCalls++ }
 
-	runs := buildRunnables(a, "slot")
+	runs := buildRunnables(a)
 	byName := make(map[string]Runnable, len(runs))
 	for _, r := range runs {
 		byName[r.Name] = r
@@ -71,15 +71,11 @@ func TestBuildRunnablesRunnableClosures(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	for _, name := range []string{"router-ingest", "metrics-sampler"} {
-		r, ok := byName[name]
-		if !ok {
-			t.Fatalf("missing runnable %q", name)
-		}
-		if err := r.Run(ctx); err != nil && name != "router-ingest" {
-			t.Fatalf("%s Run: %v", name, err)
-		}
+	ingest, ok := byName["router-ingest"]
+	if !ok {
+		t.Fatal("missing runnable router-ingest")
 	}
+	_ = ingest.Run(ctx)
 
 	runServerRunnable(t, byName["http-server"], a.HTTPServer)
 	runServerRunnable(t, byName["pprof-server"], a.PProfServer)

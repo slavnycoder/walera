@@ -19,7 +19,6 @@ import (
 	"github.com/walera/walera/internal/config"
 	"github.com/walera/walera/internal/health"
 	"github.com/walera/walera/internal/limits"
-	"github.com/walera/walera/internal/metrics"
 	"github.com/walera/walera/internal/router"
 	"github.com/walera/walera/internal/wal"
 )
@@ -65,7 +64,6 @@ type AppConfig struct {
 	Auth     auth.Config
 	Limits   limits.Config
 	Health   health.Config
-	Metrics  metrics.Config
 	Shutdown ShutdownConfig
 }
 
@@ -120,12 +118,12 @@ func applyAppDefaults(k *koanf.Koanf) {
 	limits.ApplyDefaults(k)
 	router.ApplyDefaults(k)
 	health.ApplyDefaults(k)
-	metrics.ApplyDefaults(k)
 }
 
 // removedConfigKeys are keys from earlier releases that no longer do anything.
 // Setting one fails startup so nobody believes a removed control (HMAC
-// signing, the circuit breaker, the writer pool) is still in effect. Prefix
+// signing, the circuit breaker, the writer pool, the metric samplers) is still
+// in effect. Prefix
 // match covers both the YAML (auth.signing.secret) and the env
 // (WALERA_AUTH_SIGNING_SECRET -> auth.signing_secret) spellings.
 var removedConfigKeys = []string{
@@ -139,6 +137,8 @@ var removedConfigKeys = []string{
 	"http.drain_threshold_subs",
 	"http.max_batch_bytes_per_sub",
 	"http.batching_disabled",
+	"wal.lag_sample_interval",
+	"metrics",
 }
 
 // rejectRemovedKeys names offending keys only; values may be secrets.
@@ -221,12 +221,6 @@ func LoadAppConfig(path string) (*AppConfig, error) {
 		errs = append(errs, err)
 	}
 	cfg.Health = healthCfg
-
-	metricsCfg, err := metrics.LoadConfig(k)
-	if err != nil {
-		errs = append(errs, err)
-	}
-	cfg.Metrics = metricsCfg
 
 	if vErr := validateHTTP(&cfg.HTTP); vErr != nil {
 		errs = append(errs, vErr)

@@ -12,7 +12,6 @@ import (
 	"github.com/jackc/pglogrepl"
 	"github.com/rs/zerolog"
 
-	"github.com/walera/walera/internal/metrics"
 	"github.com/walera/walera/internal/router"
 	"github.com/walera/walera/internal/wal"
 )
@@ -54,8 +53,6 @@ type SubscriberDeps struct {
 
 	Logger zerolog.Logger
 
-	Metrics *metrics.Registry
-
 	NowFunc func() time.Time
 
 	LSNFunc func() pglogrepl.LSN
@@ -67,9 +64,6 @@ func validateSubscriberDeps(deps SubscriberDeps) {
 	}
 	if deps.Client == nil {
 		panic("auth.NewSubscriber: Deps.Client is required")
-	}
-	if deps.Metrics == nil {
-		panic("auth.NewSubscriber: Deps.Metrics is required")
 	}
 }
 
@@ -87,7 +81,6 @@ type Subscriber struct {
 	lastRefresh atomic.Int64
 
 	log zerolog.Logger
-	mc  *metrics.Registry
 
 	userID  string
 	channel string
@@ -132,7 +125,6 @@ func NewSubscriber(cfg SubscriberConfig, deps SubscriberDeps) *Subscriber {
 		bearer:   cfg.Bearer,
 		fwd:      cfg.Forwarded,
 		log:      deps.Logger,
-		mc:       deps.Metrics,
 		userID:   userID,
 		channel:  cfg.Channel,
 		ttl:      ttl,
@@ -243,7 +235,6 @@ func (s *Subscriber) tryRefresh(ctx context.Context) {
 		if ctx.Err() != nil {
 			return // the stream is gone; nothing to refresh or report
 		}
-		s.recordRefreshResult(err)
 		if err != nil {
 			s.logRefreshError(err, attempt)
 		}
@@ -342,13 +333,6 @@ func (s *Subscriber) logRefreshError(err error, attempt int) {
 		Int("attempt", attempt).
 		Str("docs", DocsURL).
 		Msg("auth permission refresh failed")
-}
-
-func (s *Subscriber) recordRefreshResult(err error) {
-	if s.mc == nil {
-		return
-	}
-	s.mc.AuthRefresh(refreshResultLabel(err)).Inc()
 }
 
 func newRequestID() string {

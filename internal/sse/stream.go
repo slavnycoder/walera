@@ -91,10 +91,9 @@ func (h *Handler) headersAndPreamble(
 			Forwarded:  hs.fwd,
 		},
 		auth.SubscriberDeps{
-			Sub:     sub,
-			Client:  h.authClient,
-			Logger:  h.logger,
-			Metrics: h.metrics,
+			Sub:    sub,
+			Client: h.authClient,
+			Logger: h.logger,
 		},
 	)
 	sub.Filter = authSub.FilterWithLSN
@@ -123,7 +122,6 @@ func (h *Handler) headersAndPreamble(
 // nobody but itself and is dropped by the write deadline.
 func (h *Handler) stream(w http.ResponseWriter, r *http.Request, sub *router.Subscriber, initialFrame []byte) {
 	rc := http.NewResponseController(w)
-	connectedAt := time.Now()
 	kind := sub.KindString()
 
 	queueCap := h.routerCfg.ExactBuffer
@@ -156,13 +154,7 @@ func (h *Handler) stream(w http.ResponseWriter, r *http.Request, sub *router.Sub
 	}
 
 	reason := "client_closed"
-	defer func() {
-		h.metrics.SubscriberLifetime().Observe(time.Since(connectedAt).Seconds())
-		h.metrics.SubscriberDisconnects(reason).Inc()
-		if reason == "slow_consumer" {
-			h.metrics.SlowClientDrops().Inc()
-		}
-	}()
+	defer func() { h.metrics.SubscriberDisconnects(reason).Inc() }()
 
 	// Registered before the first flush: once the client sees the response,
 	// rows written after that moment reach it.
@@ -201,7 +193,6 @@ func (h *Handler) stream(w http.ResponseWriter, r *http.Request, sub *router.Sub
 					break batch
 				}
 			}
-			// Frames queued before a drop may carry a revoked grant.
 			select {
 			case <-sub.Done():
 				finish()

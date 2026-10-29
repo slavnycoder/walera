@@ -1,9 +1,11 @@
 package router
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -192,25 +194,6 @@ func mkBroadcaster(maxChanges int) (*Broadcaster, *metrics.Registry) {
 	return b, m
 }
 
-func gatherCounter(t *testing.T, reg *metrics.Registry, name, labelKey, labelVal string) float64 {
-	t.Helper()
-	families, err := reg.Gatherer().Gather()
-	if err != nil {
-		t.Fatalf("Gather: %v", err)
-	}
-	for _, fam := range families {
-		if fam.GetName() != name {
-			continue
-		}
-		for _, m := range fam.GetMetric() {
-			if matchLabel(m, labelKey, labelVal) {
-				return m.GetCounter().GetValue()
-			}
-		}
-	}
-	return 0
-}
-
 func gatherGauge(t *testing.T, reg *metrics.Registry, name, labelKey, labelVal string) float64 {
 	t.Helper()
 	families, err := reg.Gatherer().Gather()
@@ -230,25 +213,6 @@ func gatherGauge(t *testing.T, reg *metrics.Registry, name, labelKey, labelVal s
 	return 0
 }
 
-func gatherHasSeries(t *testing.T, reg *metrics.Registry, name, labelKey, labelVal string) bool {
-	t.Helper()
-	families, err := reg.Gatherer().Gather()
-	if err != nil {
-		t.Fatalf("Gather: %v", err)
-	}
-	for _, fam := range families {
-		if fam.GetName() != name {
-			continue
-		}
-		for _, m := range fam.GetMetric() {
-			if matchLabel(m, labelKey, labelVal) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
 func matchLabel(m *dto.Metric, key, val string) bool {
 	for _, lp := range m.GetLabel() {
 		if lp.GetName() == key && lp.GetValue() == val {
@@ -256,6 +220,15 @@ func matchLabel(m *dto.Metric, key, val string) bool {
 		}
 	}
 	return false
+}
+
+// mkBroadcasterLog is mkBroadcaster with warnings captured; only for tests that
+// call routeTx synchronously (the buffer is not goroutine-safe).
+func mkBroadcasterLog(maxChanges int) (*Broadcaster, *bytes.Buffer) {
+	b, _ := mkBroadcaster(maxChanges)
+	var buf bytes.Buffer
+	b.log = zerolog.New(&buf)
+	return b, &buf
 }
 
 func drainOne(t *testing.T, sub *Subscriber, timeout time.Duration) Event {
@@ -354,7 +327,7 @@ func sendTx(t *testing.T, txCh chan<- wal.Tx, tx wal.Tx) {
 func TestBroadcaster_ExactFanOut_SingleMatch(t *testing.T) {
 	t.Parallel()
 
-	b, reg := mkBroadcaster(10000)
+	b, _ := mkBroadcaster(10000)
 	sub := mkExactSub("public", "users", "42", 0, 4)
 	recordedFor(t, sub).useEncoder(b.enc.(*stubEncoder))
 	b.Register(sub)
@@ -376,12 +349,6 @@ func TestBroadcaster_ExactFanOut_SingleMatch(t *testing.T) {
 	}
 	if ev.Tx.CommitLSN != tx.CommitLSN {
 		t.Errorf("Tx.CommitLSN: got %s; want %s", ev.Tx.CommitLSN, tx.CommitLSN)
-	}
-
-	for _, reason := range []string{"slow_consumer", "tx_too_large", "multi_root"} {
-		if v := gatherCounter(t, reg, "walera_tx_dropped_total", "reason", reason); v != 0 {
-			t.Errorf("tx_dropped_total{reason=%s}: got %v; want 0", reason, v)
-		}
 	}
 
 	cancel()
@@ -531,7 +498,7 @@ func TestBroadcaster_ExactAndWildcardSameTx_SingleEventPerSub(t *testing.T) {
 func TestBroadcaster_StartLSN_FilterBelow(t *testing.T) {
 	t.Parallel()
 
-	b, reg := mkBroadcaster(10000)
+	b, _ := mkBroadcaster(10000)
 	sub := mkExactSub("public", "users", "42", pglogrepl.LSN(0x100), 4)
 	recordedFor(t, sub).useEncoder(b.enc.(*stubEncoder))
 	b.Register(sub)
@@ -552,12 +519,6 @@ func TestBroadcaster_StartLSN_FilterBelow(t *testing.T) {
 
 	expectNoFrame(t, sub, 50*time.Millisecond)
 
-	for _, reason := range []string{"slow_consumer", "tx_too_large", "multi_root"} {
-		if v := gatherCounter(t, reg, "walera_tx_dropped_total", "reason", reason); v != 0 {
-			t.Errorf("tx_dropped_total{reason=%s}: got %v; want 0", reason, v)
-		}
-	}
-
 	cancel()
 	<-done
 }
@@ -565,7 +526,7 @@ func TestBroadcaster_StartLSN_FilterBelow(t *testing.T) {
 func TestBroadcaster_TxTooLarge_ExactCap(t *testing.T) {
 	t.Parallel()
 
-	b, reg := mkBroadcaster(3)
+	b, _ := mkBroadcaster(3)
 	sub := mkExactSub("public", "users", "42", 0, 16)
 	b.Register(sub)
 
@@ -593,10 +554,6 @@ func TestBroadcaster_TxTooLarge_ExactCap(t *testing.T) {
 
 	expectNoFrame(t, sub, 50*time.Millisecond)
 
-	if v := gatherCounter(t, reg, "walera_tx_dropped_total", "reason", "tx_too_large"); v != 1 {
-		t.Errorf("tx_dropped_total{reason=tx_too_large}: got %v; want 1", v)
-	}
-
 	cancel()
 	<-done
 }
@@ -604,7 +561,7 @@ func TestBroadcaster_TxTooLarge_ExactCap(t *testing.T) {
 func TestBroadcaster_TxTooLarge_WildcardCap(t *testing.T) {
 	t.Parallel()
 
-	b, reg := mkBroadcaster(2)
+	b, _ := mkBroadcaster(2)
 	sub := mkWildcardSub("public", "users", 0, 16)
 	b.Register(sub)
 
@@ -632,10 +589,6 @@ func TestBroadcaster_TxTooLarge_WildcardCap(t *testing.T) {
 		t.Errorf("Reason: got %q; want %q", got, want)
 	}
 
-	if v := gatherCounter(t, reg, "walera_tx_dropped_total", "reason", "tx_too_large"); v != 1 {
-		t.Errorf("tx_dropped_total{reason=tx_too_large}: got %v; want 1", v)
-	}
-
 	cancel()
 	<-done
 }
@@ -643,7 +596,7 @@ func TestBroadcaster_TxTooLarge_WildcardCap(t *testing.T) {
 func TestBroadcaster_TxTooLarge_ExactRelaxed_GEN03(t *testing.T) {
 	t.Parallel()
 
-	b, reg := mkBroadcaster(10000)
+	b, _ := mkBroadcaster(10000)
 	sub := mkExactSub("public", "users", "42", 0, 0)
 	b.Register(sub)
 
@@ -665,12 +618,6 @@ func TestBroadcaster_TxTooLarge_ExactRelaxed_GEN03(t *testing.T) {
 		t.Errorf("MatchedIndices length: got %d; want %d", got, want)
 	}
 
-	for _, reason := range []string{"slow_consumer", "tx_too_large", "multi_root"} {
-		if v := gatherCounter(t, reg, "walera_tx_dropped_total", "reason", reason); v != 0 {
-			t.Errorf("tx_dropped_total{reason=%s}: got %v; want 0 (GEN-03 relaxation)", reason, v)
-		}
-	}
-
 	cancel()
 	<-done
 }
@@ -678,7 +625,7 @@ func TestBroadcaster_TxTooLarge_ExactRelaxed_GEN03(t *testing.T) {
 func TestBroadcaster_SlowConsumerDisconnect(t *testing.T) {
 	t.Parallel()
 
-	b, reg := mkBroadcaster(10000)
+	b, _ := mkBroadcaster(10000)
 	sub := mkExactSub("public", "users", "42", 0, 2)
 	b.Register(sub)
 
@@ -698,9 +645,6 @@ func TestBroadcaster_SlowConsumerDisconnect(t *testing.T) {
 	}
 	if got, want := sub.Reason(), "slow_consumer"; got != want {
 		t.Errorf("Reason: got %q; want %q", got, want)
-	}
-	if v := gatherCounter(t, reg, "walera_tx_dropped_total", "reason", "slow_consumer"); v < 1 {
-		t.Errorf("tx_dropped_total{reason=slow_consumer}: got %v; want >= 1", v)
 	}
 
 	cancel()
@@ -765,25 +709,6 @@ func TestBroadcaster_DeregisterDecrementsGauge(t *testing.T) {
 	}
 }
 
-func TestBroadcaster_MultiRootCounter_RegisteredAtZero(t *testing.T) {
-	t.Parallel()
-
-	_, reg := mkBroadcaster(10000)
-
-	if !gatherHasSeries(t, reg, "walera_tx_dropped_total", "reason", "multi_root") {
-		t.Fatal("walera_tx_dropped_total{reason=multi_root} series missing from Gather() — sentinel regressed")
-	}
-	if v := gatherCounter(t, reg, "walera_tx_dropped_total", "reason", "multi_root"); v != 0 {
-		t.Errorf("multi_root counter initial value: got %v; want 0", v)
-	}
-
-	for _, reason := range []string{"slow_consumer", "tx_too_large"} {
-		if !gatherHasSeries(t, reg, "walera_tx_dropped_total", "reason", reason) {
-			t.Errorf("walera_tx_dropped_total{reason=%s} series missing from Gather()", reason)
-		}
-	}
-}
-
 func TestRouterSubscriberFilterFieldDefaultNil(t *testing.T) {
 	t.Parallel()
 	sub := NewSubscriber(
@@ -802,7 +727,7 @@ func TestRouterSubscriberFilterFieldDefaultNil(t *testing.T) {
 
 func TestRouteTxFilterAllDroppedSilently(t *testing.T) {
 	t.Parallel()
-	b, reg := mkBroadcaster(10000)
+	b, _ := mkBroadcaster(10000)
 	sub := mkExactSub("public", "users", "42", 0, 4)
 	sub.Filter = func(c wal.Change, _ pglogrepl.LSN) (wal.Change, bool) { return c, true }
 	b.Register(sub)
@@ -818,11 +743,6 @@ func TestRouteTxFilterAllDroppedSilently(t *testing.T) {
 		t.Errorf("Reason: got %q; want empty (silent drop must not call sub.Drop)", sub.Reason())
 	}
 
-	for _, reason := range []string{"slow_consumer", "tx_too_large", "multi_root"} {
-		if v := gatherCounter(t, reg, "walera_tx_dropped_total", "reason", reason); v != 0 {
-			t.Errorf("tx_dropped_total{reason=%s}: got %v; want 0", reason, v)
-		}
-	}
 }
 
 func TestRouteTxFilterPartialKept(t *testing.T) {
@@ -899,54 +819,6 @@ func TestRouteTx_NilFilterDeliversNothing(t *testing.T) {
 	expectNoFrame(t, sub, 100*time.Millisecond)
 }
 
-func gatherHistogramCount(t *testing.T, reg *metrics.Registry, name string) uint64 {
-	t.Helper()
-	families, err := reg.Gatherer().Gather()
-	if err != nil {
-		t.Fatalf("Gather: %v", err)
-	}
-	for _, fam := range families {
-		if fam.GetName() != name {
-			continue
-		}
-		var total uint64
-		for _, m := range fam.GetMetric() {
-			total += m.GetHistogram().GetSampleCount()
-		}
-		return total
-	}
-	return 0
-}
-
-func TestBroadcaster_RoutingFanOut_ObservedPerTx(t *testing.T) {
-	t.Parallel()
-
-	b, reg := mkBroadcaster(10000)
-	sub := mkExactSub("public", "users", "42", 0, 4)
-	b.Register(sub)
-
-	txCh := make(chan wal.Tx, 3)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	done, _ := runIngest(b, ctx, txCh)
-
-	sendTx(t, txCh, mkTx(pglogrepl.LSN(0x100), 1, mkChange(wal.OpInsert, "public", "users", "42")))
-	sendTx(t, txCh, mkTx(pglogrepl.LSN(0x101), 2, mkChange(wal.OpInsert, "public", "orders", "99")))
-	sendTx(t, txCh, mkTx(pglogrepl.LSN(0x102), 3, mkChange(wal.OpInsert, "public", "users", "42")))
-
-	_ = drainOne(t, sub, 200*time.Millisecond)
-	_ = drainOne(t, sub, 200*time.Millisecond)
-
-	time.Sleep(20 * time.Millisecond)
-
-	if got := gatherHistogramCount(t, reg, "walera_routing_fan_out"); got != 3 {
-		t.Errorf("walera_routing_fan_out SampleCount = %d; want 3", got)
-	}
-
-	cancel()
-	<-done
-}
-
 func equalInts(a, b []int) bool {
 	if len(a) != len(b) {
 		return false
@@ -967,7 +839,7 @@ func equalInts(a, b []int) bool {
 func TestBroadcaster_WholeTransactionEligibility(t *testing.T) {
 	t.Parallel()
 
-	b, reg := mkBroadcaster(10000)
+	b, _ := mkBroadcaster(10000)
 	sub := mkExactSub("public", "todo_lists", "42", 0, 4)
 	recordedFor(t, sub).useEncoder(b.enc.(*stubEncoder))
 	b.Register(sub)
@@ -994,12 +866,6 @@ func TestBroadcaster_WholeTransactionEligibility(t *testing.T) {
 	}
 	if !equalInts(ev.MatchedIndices, []int{0, 1}) {
 		t.Errorf("MatchedIndices: got %v; want [0 1] (full tx in commit order)", ev.MatchedIndices)
-	}
-
-	for _, reason := range []string{"slow_consumer", "tx_too_large", "multi_root"} {
-		if v := gatherCounter(t, reg, "walera_tx_dropped_total", "reason", reason); v != 0 {
-			t.Errorf("tx_dropped_total{reason=%s}: got %v; want 0", reason, v)
-		}
 	}
 
 	cancel()
@@ -1058,7 +924,7 @@ func TestBroadcaster_CoTxWhitelistedDelivery(t *testing.T) {
 func TestBroadcaster_CoTxRequiresSurvivingAnchor(t *testing.T) {
 	t.Parallel()
 
-	b, reg := mkBroadcaster(10000)
+	b, _ := mkBroadcaster(10000)
 	sub := mkExactSub("public", "todo_lists", "42", 0, 4)
 	recordedFor(t, sub).useEncoder(b.enc.(*stubEncoder))
 	sub.Filter = func(c wal.Change, _ pglogrepl.LSN) (wal.Change, bool) {
@@ -1076,14 +942,6 @@ func TestBroadcaster_CoTxRequiresSurvivingAnchor(t *testing.T) {
 	b.routeTx(tx)
 
 	expectNoFrame(t, sub, 100*time.Millisecond)
-	for _, reason := range []string{"slow_consumer", "tx_too_large", "multi_root"} {
-		if v := gatherCounter(t, reg, "walera_tx_dropped_total", "reason", reason); v != 0 {
-			t.Errorf("tx_dropped_total{reason=%s}: got %v; want 0", reason, v)
-		}
-	}
-	if got := gatherCounterNoLabel(t, reg, "walera_co_tx_beyond_anchor_total"); got != 0 {
-		t.Errorf("walera_co_tx_beyond_anchor_total = %v; want 0", got)
-	}
 }
 
 // TestBroadcaster_SingleEventPerSubDedup:
@@ -1128,7 +986,7 @@ func TestBroadcaster_SingleEventPerSubDedup(t *testing.T) {
 func TestBroadcaster_NonMatchingTxNoDelivery(t *testing.T) {
 	t.Parallel()
 
-	b, reg := mkBroadcaster(10000)
+	b, _ := mkBroadcaster(10000)
 	sub := mkExactSub("public", "todo_lists", "42", 0, 4)
 	b.Register(sub)
 
@@ -1141,11 +999,6 @@ func TestBroadcaster_NonMatchingTxNoDelivery(t *testing.T) {
 	// No event must be delivered.
 	expectNoFrame(t, sub, 100*time.Millisecond)
 
-	for _, reason := range []string{"slow_consumer", "tx_too_large"} {
-		if v := gatherCounter(t, reg, "walera_tx_dropped_total", "reason", reason); v != 0 {
-			t.Errorf("tx_dropped_total{reason=%s}: got %v; want 0", reason, v)
-		}
-	}
 }
 
 // TestBroadcaster_TxTooLarge_PostFilterCap:
@@ -1154,7 +1007,7 @@ func TestBroadcaster_NonMatchingTxNoDelivery(t *testing.T) {
 func TestBroadcaster_TxTooLarge_PostFilterCap(t *testing.T) {
 	t.Parallel()
 
-	b, reg := mkBroadcaster(3) // cap = 3
+	b, _ := mkBroadcaster(3) // cap = 3
 	sub := mkWildcardSub("public", "todo_lists", 0, 16)
 
 	// Filter admits all changes (no drop).
@@ -1184,9 +1037,6 @@ func TestBroadcaster_TxTooLarge_PostFilterCap(t *testing.T) {
 	if got, want := sub.Reason(), "tx_too_large"; got != want {
 		t.Errorf("Reason: got %q; want %q", got, want)
 	}
-	if v := gatherCounter(t, reg, "walera_tx_dropped_total", "reason", "tx_too_large"); v != 1 {
-		t.Errorf("tx_dropped_total{reason=tx_too_large}: got %v; want 1", v)
-	}
 }
 
 // TestBroadcaster_TxTooLarge_PreFilterNoFalsePositive:
@@ -1198,7 +1048,7 @@ func TestBroadcaster_TxTooLarge_PreFilterNoFalsePositive(t *testing.T) {
 	t.Parallel()
 
 	const cap = 3
-	b, reg := mkBroadcaster(cap)
+	b, _ := mkBroadcaster(cap)
 	sub := mkExactSub("public", "todo_lists", "42", 0, 4)
 	recordedFor(t, sub).useEncoder(b.enc.(*stubEncoder))
 
@@ -1232,194 +1082,6 @@ func TestBroadcaster_TxTooLarge_PreFilterNoFalsePositive(t *testing.T) {
 	if got, want := len(ev.Tx.Changes), 2; got != want {
 		t.Errorf("ev.Tx.Changes length: got %d; want %d (only whitelisted changes)", got, want)
 	}
-	if v := gatherCounter(t, reg, "walera_tx_dropped_total", "reason", "tx_too_large"); v != 0 {
-		t.Errorf("tx_dropped_total{reason=tx_too_large}: got %v; want 0 (no false-positive drop)", v)
-	}
-}
-
-// TestBroadcaster_TxFanOutWork_ObservedPerTx:
-// After routing a tx with 2 eligible wildcard subscribers each receiving 3 changes,
-// TxFanOutWork histogram is observed once more (one observation per tx with non-zero work).
-// The old code does not observe TxFanOutWork in routeTx at all; this test FAILS.
-func TestBroadcaster_TxFanOutWork_ObservedPerTx(t *testing.T) {
-	t.Parallel()
-
-	b, reg := mkBroadcaster(10000)
-
-	// Two wildcard subscribers on todo_lists (K=2).
-	sub1 := mkWildcardSub("public", "todo_lists", 0, 8)
-	sub2 := mkWildcardSub("public", "todo_lists", 0, 8)
-	b.Register(sub1)
-	b.Register(sub2)
-
-	// Capture histogram sample count before routing (registry pre-touch adds 1).
-	countBefore := gatherHistogramCount(t, reg, "walera_tx_fan_out_work")
-
-	// Tx with 3 changes matching both subscribers (M=3, total work = 2*3 = 6).
-	// All three changes target the same anchor PK so the multi_root guard
-	// stays out of the way of the fan-out-work observation.
-	tx := mkTx(pglogrepl.LSN(0x1060), 106,
-		mkChange(wal.OpUpdate, "public", "todo_lists", "1"),
-		mkChange(wal.OpUpdate, "public", "todo_lists", "1"),
-		mkChange(wal.OpUpdate, "public", "todo_lists", "1"),
-	)
-	b.routeTx(tx)
-
-	// Drain both subscribers to ensure dispatch completed.
-	_ = drainOne(t, sub1, 200*time.Millisecond)
-	_ = drainOne(t, sub2, 200*time.Millisecond)
-
-	// TxFanOutWork must have been observed once more (one Observe() call per tx).
-	countAfter := gatherHistogramCount(t, reg, "walera_tx_fan_out_work")
-	if countAfter != countBefore+1 {
-		t.Errorf("walera_tx_fan_out_work SampleCount: got %d; want %d (one observation per routed tx)",
-			countAfter, countBefore+1)
-	}
-}
-
-// gatherCounterNoLabel reads a no-label counter value from the registry by metric family name.
-func gatherCounterNoLabel(t *testing.T, reg *metrics.Registry, name string) float64 {
-	t.Helper()
-	families, err := reg.Gatherer().Gather()
-	if err != nil {
-		t.Fatalf("Gather: %v", err)
-	}
-	for _, fam := range families {
-		if fam.GetName() != name {
-			continue
-		}
-		ms := fam.GetMetric()
-		if len(ms) == 0 {
-			return 0
-		}
-		return ms[0].GetCounter().GetValue()
-	}
-	return 0
-}
-
-// TestBroadcaster_CoBeyondAnchorCounter covers the three SAFE-02 sub-cases:
-//
-// 1. "exact co-tx": exact subscriber whitelisted for anchor + co-tx table receives both
-// in one tx → beyond-anchor delta = 1.
-//
-// 2. "exact anchor-only": exact subscriber whose tx delivers only the anchor-keyed change
-// → beyond-anchor delta = 0.
-//
-// 3. "wildcard single-table": wildcard subscriber receiving a tx where all changes share
-// the subscribed table's WildcardKey → beyond-anchor delta = 0 (every change matches the
-// anchor key for a wildcard sub).
-//
-// 4. "wildcard multi-table": wildcard subscriber receiving a tx with 1 change on the
-// subscribed table + N-1 changes on OTHER tables (distinct WildcardKeys) → delta = N-1.
-func TestBroadcaster_CoBeyondAnchorCounter(t *testing.T) {
-	t.Parallel()
-
-	t.Run("exact co-tx", func(t *testing.T) {
-		t.Parallel()
-		b, reg := mkBroadcaster(10000)
-
-		sub := mkExactSub("public", "todo_lists", "42", 0, 4)
-		// Filter admits both todo_lists and tasks changes.
-		sub.Filter = func(c wal.Change, _ pglogrepl.LSN) (wal.Change, bool) {
-			return c, false // admit all
-		}
-		b.Register(sub)
-
-		before := gatherCounterNoLabel(t, reg, "walera_co_tx_beyond_anchor_total")
-
-		// Tx: anchor change (todo_lists:42) + 1 co-tx change (tasks:99).
-		tx := mkTx(pglogrepl.LSN(0x3000), 300,
-			mkChange(wal.OpUpdate, "public", "todo_lists", "42"),
-			mkChange(wal.OpInsert, "public", "tasks", "99"),
-		)
-		b.routeTx(tx)
-
-		_ = drainOne(t, sub, 200*time.Millisecond)
-
-		after := gatherCounterNoLabel(t, reg, "walera_co_tx_beyond_anchor_total")
-		if delta := after - before; delta != 1 {
-			t.Errorf("beyond-anchor delta for exact co-tx: got %v; want 1", delta)
-		}
-	})
-
-	t.Run("exact anchor-only", func(t *testing.T) {
-		t.Parallel()
-		b, reg := mkBroadcaster(10000)
-
-		sub := mkExactSub("public", "todo_lists", "42", 0, 4)
-		b.Register(sub)
-
-		before := gatherCounterNoLabel(t, reg, "walera_co_tx_beyond_anchor_total")
-
-		// Tx: only the anchor change, no co-tx changes.
-		tx := mkTx(pglogrepl.LSN(0x3001), 301,
-			mkChange(wal.OpUpdate, "public", "todo_lists", "42"),
-		)
-		b.routeTx(tx)
-
-		_ = drainOne(t, sub, 200*time.Millisecond)
-
-		after := gatherCounterNoLabel(t, reg, "walera_co_tx_beyond_anchor_total")
-		if delta := after - before; delta != 0 {
-			t.Errorf("beyond-anchor delta for exact anchor-only: got %v; want 0", delta)
-		}
-	})
-
-	t.Run("wildcard single-table", func(t *testing.T) {
-		t.Parallel()
-		b, reg := mkBroadcaster(10000)
-
-		// Wildcard subscriber on public.todo_lists — anchor WildcardKey = "public.todo_lists".
-		sub := mkWildcardSub("public", "todo_lists", 0, 8)
-		b.Register(sub)
-
-		before := gatherCounterNoLabel(t, reg, "walera_co_tx_beyond_anchor_total")
-
-		// All changes share the subscribed table's WildcardKey → every delivered
-		// change equals the anchor key → delta = 0. Single PK keeps the
-		// multi_root guard out of this test's scope.
-		tx := mkTx(pglogrepl.LSN(0x3002), 302,
-			mkChange(wal.OpUpdate, "public", "todo_lists", "1"),
-			mkChange(wal.OpUpdate, "public", "todo_lists", "1"),
-			mkChange(wal.OpUpdate, "public", "todo_lists", "1"),
-		)
-		b.routeTx(tx)
-
-		_ = drainOne(t, sub, 200*time.Millisecond)
-
-		after := gatherCounterNoLabel(t, reg, "walera_co_tx_beyond_anchor_total")
-		if delta := after - before; delta != 0 {
-			t.Errorf("beyond-anchor delta for wildcard single-table: got %v; want 0", delta)
-		}
-	})
-
-	t.Run("wildcard multi-table", func(t *testing.T) {
-		t.Parallel()
-		b, reg := mkBroadcaster(10000)
-
-		// Wildcard subscriber on public.todo_lists (nil Filter — admits all tables).
-		sub := mkWildcardSub("public", "todo_lists", 0, 8)
-		b.Register(sub)
-
-		before := gatherCounterNoLabel(t, reg, "walera_co_tx_beyond_anchor_total")
-
-		// Tx: 1 change on the subscribed table (WildcardKey = "public.todo_lists") +
-		// 2 changes on OTHER tables (distinct WildcardKeys) → delta = 2.
-		tx := mkTx(pglogrepl.LSN(0x3003), 303,
-			mkChange(wal.OpUpdate, "public", "todo_lists", "42"), // anchor WildcardKey
-			mkChange(wal.OpInsert, "public", "tasks", "99"),      // beyond anchor
-			mkChange(wal.OpInsert, "public", "tags", "7"),        // beyond anchor
-		)
-		b.routeTx(tx)
-
-		_ = drainOne(t, sub, 200*time.Millisecond)
-
-		after := gatherCounterNoLabel(t, reg, "walera_co_tx_beyond_anchor_total")
-		// 2 changes have WildcardKey != "public.todo_lists" → delta = 2.
-		if delta := after - before; delta != 2 {
-			t.Errorf("beyond-anchor delta for wildcard multi-table: got %v; want 2", delta)
-		}
-	})
 }
 
 // TestBroadcaster_FanOutRaceStress (SAFE-01 race):
@@ -1528,12 +1190,12 @@ func TestRouteTxSchemaScoped_StripsCrossSchema(t *testing.T) {
 // Exact subscriber on todo_lists:42 must NOT receive a tx that touches both
 // todo_lists:42 and todo_lists:99 in one commit. Per spec §1.6, this is a
 // writer-side discipline violation; the broker drops the tx for this
-// subscriber, increments tx_dropped_total{reason="multi_root"}, but keeps
+// subscriber and logs a multi_root warning, but keeps
 // the connection alive (no sub.Drop, no Reason set).
 func TestBroadcaster_MultiRoot_ExactDropsOnTwoPKs(t *testing.T) {
 	t.Parallel()
 
-	b, reg := mkBroadcaster(10000)
+	b, logs := mkBroadcasterLog(10000)
 	sub := mkExactSub("public", "todo_lists", "42", 0, 4)
 	b.Register(sub)
 
@@ -1545,8 +1207,8 @@ func TestBroadcaster_MultiRoot_ExactDropsOnTwoPKs(t *testing.T) {
 
 	expectNoFrame(t, sub, 100*time.Millisecond)
 
-	if v := gatherCounter(t, reg, "walera_tx_dropped_total", "reason", "multi_root"); v != 1 {
-		t.Errorf("tx_dropped_total{reason=multi_root}: got %v; want 1", v)
+	if n := strings.Count(logs.String(), "multi_root"); n != 1 {
+		t.Errorf("multi_root log lines: got %d; want 1None", n)
 	}
 	if got := sub.Reason(); got != "" {
 		t.Errorf("Reason: got %q; want empty (multi_root must not disconnect the subscriber)", got)
@@ -1563,7 +1225,7 @@ func TestBroadcaster_MultiRoot_ExactDropsOnTwoPKs(t *testing.T) {
 func TestBroadcaster_MultiRoot_WildcardDelivers(t *testing.T) {
 	t.Parallel()
 
-	b, reg := mkBroadcaster(10000)
+	b, logs := mkBroadcasterLog(10000)
 	sub := mkWildcardSub("public", "todo_lists", 0, 8)
 	recordedFor(t, sub).useEncoder(b.enc.(*stubEncoder))
 	b.Register(sub)
@@ -1578,15 +1240,15 @@ func TestBroadcaster_MultiRoot_WildcardDelivers(t *testing.T) {
 	if got := len(ev.Tx.Changes); got != 2 {
 		t.Fatalf("delivered changes: got %d; want 2", got)
 	}
-	if v := gatherCounter(t, reg, "walera_tx_dropped_total", "reason", "multi_root"); v != 0 {
-		t.Errorf("tx_dropped_total{reason=multi_root}: got %v; want 0", v)
+	if n := strings.Count(logs.String(), "multi_root"); n != 0 {
+		t.Errorf("multi_root log lines: got %d; want 0None", n)
 	}
 }
 
 func TestBroadcaster_MultiRoot_WildcardBulkOverCapDropsTooLarge(t *testing.T) {
 	t.Parallel()
 
-	b, reg := mkBroadcaster(2)
+	b, _ := mkBroadcaster(2)
 	sub := mkWildcardSub("public", "todo_lists", 0, 8)
 	b.Register(sub)
 
@@ -1601,9 +1263,6 @@ func TestBroadcaster_MultiRoot_WildcardBulkOverCapDropsTooLarge(t *testing.T) {
 	if got := sub.Reason(); got != "tx_too_large" {
 		t.Fatalf("Reason: got %q; want tx_too_large", got)
 	}
-	if v := gatherCounter(t, reg, "walera_tx_dropped_total", "reason", "tx_too_large"); v != 1 {
-		t.Errorf("tx_dropped_total{reason=tx_too_large}: got %v; want 1", v)
-	}
 }
 
 // TestBroadcaster_MultiRoot_SamePKMultipleChangesAllowed:
@@ -1613,7 +1272,7 @@ func TestBroadcaster_MultiRoot_WildcardBulkOverCapDropsTooLarge(t *testing.T) {
 func TestBroadcaster_MultiRoot_SamePKMultipleChangesAllowed(t *testing.T) {
 	t.Parallel()
 
-	b, reg := mkBroadcaster(10000)
+	b, logs := mkBroadcasterLog(10000)
 	sub := mkExactSub("public", "todo_lists", "42", 0, 4)
 	recordedFor(t, sub).useEncoder(b.enc.(*stubEncoder))
 	b.Register(sub)
@@ -1629,8 +1288,8 @@ func TestBroadcaster_MultiRoot_SamePKMultipleChangesAllowed(t *testing.T) {
 	if got, want := len(ev.MatchedIndices), 3; got != want {
 		t.Errorf("MatchedIndices length: got %d; want %d", got, want)
 	}
-	if v := gatherCounter(t, reg, "walera_tx_dropped_total", "reason", "multi_root"); v != 0 {
-		t.Errorf("tx_dropped_total{reason=multi_root}: got %v; want 0 (same PK is not multi-root)", v)
+	if n := strings.Count(logs.String(), "multi_root"); n != 0 {
+		t.Errorf("multi_root log lines: got %d; want 0 (same PK is not multi-root)", n)
 	}
 }
 
@@ -1643,7 +1302,7 @@ func TestBroadcaster_MultiRoot_SamePKMultipleChangesAllowed(t *testing.T) {
 func TestBroadcaster_MultiRoot_ChildOfOtherTableNotGuarded(t *testing.T) {
 	t.Parallel()
 
-	b, reg := mkBroadcaster(10000)
+	b, logs := mkBroadcasterLog(10000)
 	sub := mkExactSub("public", "todo_lists", "42", 0, 4)
 	recordedFor(t, sub).useEncoder(b.enc.(*stubEncoder))
 	b.Register(sub)
@@ -1658,18 +1317,18 @@ func TestBroadcaster_MultiRoot_ChildOfOtherTableNotGuarded(t *testing.T) {
 	if got, want := len(ev.MatchedIndices), 2; got != want {
 		t.Errorf("MatchedIndices length: got %d; want %d (child-of-other-root leak is writer-side discipline, not broker-enforced)", got, want)
 	}
-	if v := gatherCounter(t, reg, "walera_tx_dropped_total", "reason", "multi_root"); v != 0 {
-		t.Errorf("tx_dropped_total{reason=multi_root}: got %v; want 0 (guard scoped to anchor table)", v)
+	if n := strings.Count(logs.String(), "multi_root"); n != 0 {
+		t.Errorf("multi_root log lines: got %d; want 0 (guard scoped to anchor table)", n)
 	}
 }
 
-// TestBroadcaster_MultiRoot_OneCounterPerSubscriber:
-// Each eligible subscriber gets its own multi_root drop; the counter
-// increments per (tx, subscriber) pair, not per tx (spec §8.2).
-func TestBroadcaster_MultiRoot_OneCounterPerSubscriber(t *testing.T) {
+// TestBroadcaster_MultiRoot_OneWarningPerSubscriber:
+// Each eligible subscriber gets its own multi_root drop, logged per
+// (tx, subscriber) pair, not per tx (spec §8.2).
+func TestBroadcaster_MultiRoot_OneWarningPerSubscriber(t *testing.T) {
 	t.Parallel()
 
-	b, reg := mkBroadcaster(10000)
+	b, logs := mkBroadcasterLog(10000)
 	a := mkExactSub("public", "todo_lists", "42", 0, 4)
 	c := mkExactSub("public", "todo_lists", "99", 0, 4)
 	b.Register(a)
@@ -1684,8 +1343,8 @@ func TestBroadcaster_MultiRoot_OneCounterPerSubscriber(t *testing.T) {
 	expectNoFrame(t, a, 50*time.Millisecond)
 	expectNoFrame(t, c, 50*time.Millisecond)
 
-	if v := gatherCounter(t, reg, "walera_tx_dropped_total", "reason", "multi_root"); v != 2 {
-		t.Errorf("tx_dropped_total{reason=multi_root}: got %v; want 2 (one per matched subscriber)", v)
+	if n := strings.Count(logs.String(), "multi_root"); n != 2 {
+		t.Errorf("multi_root log lines: got %d; want 2 (one per matched subscriber)", n)
 	}
 }
 
@@ -1695,7 +1354,7 @@ func TestBroadcaster_MultiRoot_OneCounterPerSubscriber(t *testing.T) {
 func TestBroadcaster_MultiRoot_NextTxStillDelivered(t *testing.T) {
 	t.Parallel()
 
-	b, reg := mkBroadcaster(10000)
+	b, logs := mkBroadcasterLog(10000)
 	sub := mkExactSub("public", "todo_lists", "42", 0, 4)
 	recordedFor(t, sub).useEncoder(b.enc.(*stubEncoder))
 	b.Register(sub)
@@ -1716,8 +1375,8 @@ func TestBroadcaster_MultiRoot_NextTxStillDelivered(t *testing.T) {
 	if got, want := len(ev.MatchedIndices), 1; got != want {
 		t.Errorf("MatchedIndices length: got %d; want %d", got, want)
 	}
-	if v := gatherCounter(t, reg, "walera_tx_dropped_total", "reason", "multi_root"); v != 1 {
-		t.Errorf("tx_dropped_total{reason=multi_root}: got %v; want 1", v)
+	if n := strings.Count(logs.String(), "multi_root"); n != 1 {
+		t.Errorf("multi_root log lines: got %d; want 1None", n)
 	}
 }
 
@@ -1726,7 +1385,7 @@ func TestBroadcaster_MultiRoot_NextTxStillDelivered(t *testing.T) {
 func TestBroadcaster_DroppedSubscriber_Skipped(t *testing.T) {
 	t.Parallel()
 
-	b, reg := mkBroadcaster(10000)
+	b, logs := mkBroadcasterLog(10000)
 	sub := mkWildcardSub("public", "todo_lists", 0, 1)
 	b.Register(sub)
 	sub.Drop("auth_revoked")
@@ -1737,7 +1396,7 @@ func TestBroadcaster_DroppedSubscriber_Skipped(t *testing.T) {
 	}
 
 	expectNoFrame(t, sub, 20*time.Millisecond)
-	if v := gatherCounter(t, reg, "walera_tx_dropped_total", "reason", "slow_consumer"); v != 0 {
-		t.Errorf("tx_dropped_total{reason=slow_consumer}: got %v; want 0", v)
+	if n := strings.Count(logs.String(), "slow_consumer"); n != 0 {
+		t.Errorf("slow_consumer log lines: got %d; want 0None", n)
 	}
 }

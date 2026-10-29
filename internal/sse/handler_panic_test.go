@@ -28,7 +28,7 @@ func newHandlerPanicValidDeps(t *testing.T) (Config, Deps) {
 	lim := limits.New(limits.Config{
 		GlobalConcurrent:     1024,
 		PerUserConcurrentMax: 10,
-	}, limits.Deps{Logger: logger, Metrics: m})
+	}, limits.Deps{Logger: logger})
 	cfg := Config{
 		Addr:              ":0",
 		HeartbeatInterval: 15 * time.Second,

@@ -8,30 +8,8 @@ import (
 	"testing"
 	"time"
 
-	dto "github.com/prometheus/client_model/go"
 	"github.com/rs/zerolog"
-
-	"github.com/walera/walera/internal/metrics"
 )
-
-func gatherCounterValue(t *testing.T, m *metrics.Registry, name string) float64 {
-	t.Helper()
-	mfs, err := m.Gatherer().Gather()
-	if err != nil {
-		t.Fatalf("gather: %v", err)
-	}
-	for _, mf := range mfs {
-		if mf.GetName() != name {
-			continue
-		}
-		for _, metric := range mf.GetMetric() {
-			if c := metric.GetCounter(); c != nil {
-				return c.GetValue()
-			}
-		}
-	}
-	return 0
-}
 
 func TestReader_Run_BackoffAndReconnects(t *testing.T) {
 	t.Parallel()
@@ -46,7 +24,7 @@ func TestReader_Run_BackoffAndReconnects(t *testing.T) {
 		Reconnect: ReconnectConfig{
 			ResetAfterSuccessDuration: time.Hour,
 		},
-	}, Deps{Logger: zerolog.Nop(), Metrics: metrics.New()})
+	}, Deps{Logger: zerolog.Nop()})
 
 	r.rng = rand.New(rand.NewPCG(42, 42))
 
@@ -107,10 +85,6 @@ func TestReader_Run_BackoffAndReconnects(t *testing.T) {
 		t.Errorf("runOnceFn calls: %d; want >= 4", got)
 	}
 
-	if got := gatherCounterValue(t, r.metrics, "walera_pg_reconnects_total"); got != 3 {
-		t.Errorf("walera_pg_reconnects_total: %v; want 3 (one per failed attempt)", got)
-	}
-
 	if r.IsConnected() {
 		t.Errorf("IsConnected() after Run exit: true; want false (deferred Store(false) in runOnce)")
 	}
@@ -124,7 +98,7 @@ func TestReader_Run_CtxCancelDuringBackoff(t *testing.T) {
 		Reconnect: ReconnectConfig{
 			ResetAfterSuccessDuration: time.Hour,
 		},
-	}, Deps{Logger: zerolog.Nop(), Metrics: metrics.New()})
+	}, Deps{Logger: zerolog.Nop()})
 
 	r.runOnceFn = func(ctx context.Context) error {
 		return errors.New("force transient")
@@ -154,7 +128,7 @@ func TestReader_Run_CtxCancelDuringBackoff(t *testing.T) {
 func TestReader_ComputeBackoff_CurveAndJitterEnvelope(t *testing.T) {
 	t.Parallel()
 
-	r, _ := New(Config{SlotNamePrefix: "walera"}, Deps{Logger: zerolog.Nop(), Metrics: metrics.New()})
+	r, _ := New(Config{SlotNamePrefix: "walera"}, Deps{Logger: zerolog.Nop()})
 
 	r.rng = rand.New(rand.NewPCG(7, 11))
 
@@ -190,7 +164,7 @@ func TestReader_Run_ResetAfterSuccess(t *testing.T) {
 		Reconnect: ReconnectConfig{
 			ResetAfterSuccessDuration: 50 * time.Millisecond,
 		},
-	}, Deps{Logger: zerolog.Nop(), Metrics: metrics.New()})
+	}, Deps{Logger: zerolog.Nop()})
 
 	var calls atomic.Int32
 	r.computeBackoffFn = func(attempt int) time.Duration { return time.Millisecond }
@@ -225,10 +199,4 @@ func TestReader_Run_ResetAfterSuccess(t *testing.T) {
 
 	cancel()
 	<-runDone
-
-	if got := gatherCounterValue(t, r.metrics, "walera_pg_reconnects_total"); got < 2 {
-		t.Errorf("walera_pg_reconnects_total: %v; want >= 2 (one per failed runOnce, reset does not skip inc)", got)
-	}
 }
-
-var _ = (*dto.MetricFamily)(nil)

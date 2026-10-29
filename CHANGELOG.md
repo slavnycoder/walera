@@ -29,6 +29,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the `testbench-smoke`, `bench-regression`, `flake-detect` and `coverage`
   workflows and the comment-hygiene scripts. A runnable demo lives in the
   separate `walera-demo` repository.
+- **Metrics trimmed to five.** Kept: `walera_subscribers_active`,
+  `walera_events_sent_total`, `walera_subscriber_disconnects_total{reason}`,
+  `walera_auth_requests_total{result}`, `walera_pg_connection_status`.
+  All other `walera_*` series, the WAL lag sampler and the routing-index
+  sampler are removed; drops and reconnects are visible in the logs.
+  Config keys `wal.lag_sample_interval` and `metrics.*` are rejected.
 
 ## [3.0.1] - 2026-10-29
 

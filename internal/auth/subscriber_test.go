@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -57,15 +58,14 @@ func newScriptServer(t *testing.T, h func(call int64, w http.ResponseWriter, r *
 	return s
 }
 
-func newSubTestClient(t *testing.T, server string) (*Client, *metrics.Registry) {
+func newSubTestClient(t *testing.T, server string) *Client {
 	t.Helper()
 	mc := metrics.New()
 	cfg := Config{
 		BackendURL:     server,
 		RequestTimeout: 2 * time.Second,
 	}
-	c := New(cfg, Deps{Logger: zerolog.Nop(), Metrics: mc})
-	return c, mc
+	return New(cfg, Deps{Logger: zerolog.Nop(), Metrics: mc})
 }
 
 func newTestRouterSub(t *testing.T) *router.Subscriber {
@@ -89,7 +89,6 @@ type subscriberTestOpts struct {
 	Channel    string
 	DefaultTTL time.Duration
 	Log        zerolog.Logger
-	Metrics    *metrics.Registry
 	NowFunc    func() time.Time
 	LSNFunc    func() pglogrepl.LSN
 	Backoffs   []time.Duration
@@ -111,9 +110,6 @@ func newTestSubscriber(t *testing.T, opts subscriberTestOpts) *Subscriber {
 	if opts.DefaultTTL == 0 {
 		opts.DefaultTTL = 60 * time.Second
 	}
-	if opts.Metrics == nil {
-		opts.Metrics = metrics.New()
-	}
 	if opts.Bearer == "" && opts.Forwarded.Empty() {
 		opts.Bearer = "test-token"
 	}
@@ -131,7 +127,6 @@ func newTestSubscriber(t *testing.T, opts subscriberTestOpts) *Subscriber {
 			Sub:     opts.Sub,
 			Client:  opts.Client,
 			Logger:  opts.Log,
-			Metrics: opts.Metrics,
 			NowFunc: opts.NowFunc,
 			LSNFunc: opts.LSNFunc,
 		},
@@ -173,7 +168,7 @@ func TestSubscriber_NewInstallsInitialMap(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(permissionsBody(t, map[string][]string{"orders": {"id", "name"}}))
 	})
-	c, _ := newSubTestClient(t, srv.srv.URL)
+	c := newSubTestClient(t, srv.srv.URL)
 
 	now := time.Unix(1700000000, 0)
 	s := newTestSubscriber(t, subscriberTestOpts{
@@ -200,7 +195,7 @@ func TestSubscriber_FilterClosure_UsesCurrentMap(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(permissionsBody(t, map[string][]string{"orders": {"id", "name"}}))
 	})
-	c, _ := newSubTestClient(t, srv.srv.URL)
+	c := newSubTestClient(t, srv.srv.URL)
 
 	initial := makeMap(t, 100, "id", "name")
 	s := newTestSubscriber(t, subscriberTestOpts{
@@ -225,7 +220,7 @@ func TestSubscriber_FilterWithLSN_UsesCurrentMapForRecentTx(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(permissionsBody(t, map[string][]string{"orders": {"id", "name"}}))
 	})
-	c, _ := newSubTestClient(t, srv.srv.URL)
+	c := newSubTestClient(t, srv.srv.URL)
 
 	s := newTestSubscriber(t, subscriberTestOpts{
 		Client:     c,
@@ -249,7 +244,7 @@ func TestSubscriber_FilterWithLSN_UsesPrevMapForOlderTx(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(permissionsBody(t, map[string][]string{"orders": {"id"}}))
 	})
-	c, _ := newSubTestClient(t, srv.srv.URL)
+	c := newSubTestClient(t, srv.srv.URL)
 
 	oldMap := makeMap(t, 100, "id", "name")
 	newMap := makeMap(t, 200, "id")
@@ -285,7 +280,7 @@ func TestSubscriber_FilterWithLSN_PrevMapNilDropsConservatively(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(permissionsBody(t, map[string][]string{"orders": {"id", "name"}}))
 	})
-	c, _ := newSubTestClient(t, srv.srv.URL)
+	c := newSubTestClient(t, srv.srv.URL)
 
 	current := makeMap(t, 200, "id", "name")
 	s := newTestSubscriber(t, subscriberTestOpts{
@@ -309,7 +304,7 @@ func TestSubscriber_RefreshTick_401_DropsAuthRevoked(t *testing.T) {
 		_, _ = w.Write([]byte(`{"error":"revoked"}`))
 		_ = call
 	})
-	c, _ := newSubTestClient(t, srv.srv.URL)
+	c := newSubTestClient(t, srv.srv.URL)
 
 	s := newTestSubscriber(t, subscriberTestOpts{
 		Client:     c,
@@ -337,7 +332,7 @@ func TestSubscriber_RefreshSuccess_LostTableWhitelistDropsAuthRevoked(t *testing
 			"invoices": {"id", "name"},
 		}))
 	})
-	c, _ := newSubTestClient(t, srv.srv.URL)
+	c := newSubTestClient(t, srv.srv.URL)
 
 	initial := makeMap(t, 100, "id", "name")
 	s := newTestSubscriber(t, subscriberTestOpts{
@@ -369,7 +364,7 @@ func TestSubscriber_RefreshTick_5xxRetriesThenDropsUnavailable(t *testing.T) {
 	srv := newScriptServer(t, func(_ int64, w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 	})
-	c, _ := newSubTestClient(t, srv.srv.URL)
+	c := newSubTestClient(t, srv.srv.URL)
 
 	s := newTestSubscriber(t, subscriberTestOpts{
 		Client:     c,
@@ -394,7 +389,7 @@ func TestSubscriber_RefreshSuccess_StampsRefreshLSNBeforeStore(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(permissionsBody(t, map[string][]string{"orders": {"id"}}))
 	})
-	c, _ := newSubTestClient(t, srv.srv.URL)
+	c := newSubTestClient(t, srv.srv.URL)
 
 	syntheticLSN := pglogrepl.LSN(999)
 	s := newTestSubscriber(t, subscriberTestOpts{
@@ -461,7 +456,7 @@ func TestSubscriber_RefreshLoop_TickRefreshesMap(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(permissionsBody(t, map[string][]string{"orders": {"id"}}))
 	})
-	c, _ := newSubTestClient(t, srv.srv.URL)
+	c := newSubTestClient(t, srv.srv.URL)
 
 	syntheticLSN := pglogrepl.LSN(999)
 
@@ -504,7 +499,7 @@ func TestSubscriber_RefreshLoop_ExitsOnSubDrop(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(permissionsBody(t, map[string][]string{"orders": {"id"}}))
 	})
-	c, _ := newSubTestClient(t, srv.srv.URL)
+	c := newSubTestClient(t, srv.srv.URL)
 
 	initial := makeMap(t, 100, "id")
 	initial.TTLSeconds = 0
@@ -535,7 +530,7 @@ func TestSubscriber_RefreshLoop_ZeroTTLExitsCleanly(t *testing.T) {
 	srv := newScriptServer(t, func(_ int64, w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
-	c, _ := newSubTestClient(t, srv.srv.URL)
+	c := newSubTestClient(t, srv.srv.URL)
 
 	m := &Whitelist{
 		UserID:     "user-1",
@@ -553,9 +548,8 @@ func TestSubscriber_RefreshLoop_ZeroTTLExitsCleanly(t *testing.T) {
 			DefaultTTL: 0,
 		},
 		SubscriberDeps{
-			Sub:     rsub,
-			Client:  c,
-			Metrics: metrics.New(),
+			Sub:    rsub,
+			Client: c,
 		},
 	)
 
@@ -579,7 +573,7 @@ func TestSubscriber_TryRefresh_UnknownErrorDropsUnavailable(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("not-json"))
 	})
-	c, _ := newSubTestClient(t, srv.srv.URL)
+	c := newSubTestClient(t, srv.srv.URL)
 
 	s := newTestSubscriber(t, subscriberTestOpts{
 		Client:     c,
@@ -599,7 +593,7 @@ func TestSubscriber_DefaultTTLZeroIgnoresInitialMapTTL(t *testing.T) {
 	srv := newScriptServer(t, func(_ int64, w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
-	c, _ := newSubTestClient(t, srv.srv.URL)
+	c := newSubTestClient(t, srv.srv.URL)
 
 	initial := makeMap(t, 100, "id")
 	initial.TTLSeconds = 60
@@ -612,9 +606,8 @@ func TestSubscriber_DefaultTTLZeroIgnoresInitialMapTTL(t *testing.T) {
 			DefaultTTL: 0,
 		},
 		SubscriberDeps{
-			Sub:     newTestRouterSub(t),
-			Client:  c,
-			Metrics: metrics.New(),
+			Sub:    newTestRouterSub(t),
+			Client: c,
 		},
 	)
 
@@ -718,7 +711,7 @@ func TestSubscriber_SwapMap_NilFreshNoOp(t *testing.T) {
 	t.Parallel()
 
 	srv := newScriptServer(t, func(_ int64, w http.ResponseWriter, _ *http.Request) {})
-	c, _ := newSubTestClient(t, srv.srv.URL)
+	c := newSubTestClient(t, srv.srv.URL)
 
 	initial := makeMap(t, 100, "id")
 	s := newTestSubscriber(t, subscriberTestOpts{
@@ -742,7 +735,7 @@ func TestSubscriber_FilterClosure_NilMapDrops(t *testing.T) {
 	srv := newScriptServer(t, func(_ int64, w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
-	c, _ := newSubTestClient(t, srv.srv.URL)
+	c := newSubTestClient(t, srv.srv.URL)
 
 	s := &Subscriber{
 		Sub:    newTestRouterSub(t),
@@ -760,28 +753,8 @@ func TestSubscriber_FilterClosure_NilMapDrops(t *testing.T) {
 	}
 }
 
-func gatherAuthRefreshCount(t *testing.T, reg *metrics.Registry, result string) float64 {
-	t.Helper()
-	families, err := reg.Gatherer().Gather()
-	if err != nil {
-		t.Fatalf("Gather: %v", err)
-	}
-	for _, fam := range families {
-		if fam.GetName() != "walera_auth_refresh_total" {
-			continue
-		}
-		for _, m := range fam.GetMetric() {
-			for _, lp := range m.GetLabel() {
-				if lp.GetName() == "result" && lp.GetValue() == result {
-					return m.GetCounter().GetValue()
-				}
-			}
-		}
-	}
-	return 0
-}
-
-func TestSubscriber_RefreshTick_IncrementsAuthRefreshMetric(t *testing.T) {
+// Refresh failures are only visible in the warn log, labelled by result.
+func TestSubscriber_TryRefresh_LogsFailureResult(t *testing.T) {
 	t.Parallel()
 
 	srv := newScriptServer(t, func(call int64, w http.ResponseWriter, _ *http.Request) {
@@ -796,63 +769,45 @@ func TestSubscriber_RefreshTick_IncrementsAuthRefreshMetric(t *testing.T) {
 			w.WriteHeader(http.StatusInternalServerError)
 		}
 	})
-	c, mc := newSubTestClient(t, srv.srv.URL)
+	c := newSubTestClient(t, srv.srv.URL)
 
-	s1 := newTestSubscriber(t, subscriberTestOpts{
-		Client:     c,
-		InitialMap: makeMap(t, 100, "id"),
-		Metrics:    mc,
-	})
-	s1.tryRefresh(context.Background())
-
-	if got := gatherAuthRefreshCount(t, mc, "ok"); got != 1 {
-		t.Errorf("auth_refresh_total{result=ok} after 200: got %v; want 1", got)
+	refresh := func(backoffs []time.Duration) string {
+		var buf threadSafeBuf
+		s := newTestSubscriber(t, subscriberTestOpts{
+			Client:     c,
+			InitialMap: makeMap(t, 100, "id"),
+			Backoffs:   backoffs,
+			Log:        zerolog.New(&buf),
+		})
+		s.tryRefresh(context.Background())
+		return buf.String()
 	}
 
-	s2 := newTestSubscriber(t, subscriberTestOpts{
-		Client:     c,
-		InitialMap: makeMap(t, 100, "id"),
-		Metrics:    mc,
-	})
-	s2.tryRefresh(context.Background())
-
-	if got := gatherAuthRefreshCount(t, mc, "unauthorized"); got != 1 {
-		t.Errorf("auth_refresh_total{result=unauthorized} after 401: got %v; want 1", got)
+	if log := refresh(nil); log != "" {
+		t.Errorf("log after 200 = %q; want nothing", log)
 	}
-
-	s3 := newTestSubscriber(t, subscriberTestOpts{
-		Client:     c,
-		InitialMap: makeMap(t, 100, "id"),
-		Backoffs:   []time.Duration{time.Millisecond, time.Millisecond, time.Millisecond},
-		Metrics:    mc,
-	})
-	s3.tryRefresh(context.Background())
-
-	if got := gatherAuthRefreshCount(t, mc, "unavailable"); got != 4 {
-		t.Errorf("auth_refresh_total{result=unavailable} after 4×5xx: got %v; want 4", got)
+	if got := strings.Count(refresh(nil), `"result":"unauthorized"`); got != 1 {
+		t.Errorf("unauthorized warnings after 401 = %d; want 1", got)
 	}
-
-	for _, result := range []string{"forbidden", "not_found"} {
-		if got := gatherAuthRefreshCount(t, mc, result); got != 0 {
-			t.Errorf("auth_refresh_total{result=%s}: got %v; want 0 (no producer fired)", result, got)
-		}
+	ms := []time.Duration{time.Millisecond, time.Millisecond, time.Millisecond}
+	if got := strings.Count(refresh(ms), `"result":"unavailable"`); got != 4 {
+		t.Errorf("unavailable warnings after 4x5xx = %d; want 4", got)
 	}
 }
 
 // A refresh cut short by the client disconnecting is silent: no warn log, no
-// refresh metric, no drop.
+// drop.
 func TestSubscriber_TryRefresh_CancelledContextIsSilent(t *testing.T) {
 	t.Parallel()
 	srv := newScriptServer(t, func(_ int64, w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(permissionsBody(t, map[string][]string{"orders": {"id"}}))
 	})
-	c, mc := newSubTestClient(t, srv.srv.URL)
+	c := newSubTestClient(t, srv.srv.URL)
 	var buf threadSafeBuf
 	s := newTestSubscriber(t, subscriberTestOpts{
 		Client:     c,
 		InitialMap: makeMap(t, 100, "id"),
-		Metrics:    mc,
 		Log:        zerolog.New(&buf),
 	})
 
@@ -862,9 +817,6 @@ func TestSubscriber_TryRefresh_CancelledContextIsSilent(t *testing.T) {
 
 	if buf.Len() != 0 {
 		t.Errorf("log = %q; want nothing for a cancelled refresh", buf.String())
-	}
-	if got := gatherAuthRefreshCount(t, mc, "unavailable"); got != 0 {
-		t.Errorf("auth_refresh_total{unavailable} = %v; want 0", got)
 	}
 	select {
 	case <-s.Sub.Done():

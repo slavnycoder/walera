@@ -1,6 +1,7 @@
 package metrics
 
 import (
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -8,298 +9,33 @@ import (
 	dto "github.com/prometheus/client_model/go"
 )
 
-// TestRegistry_TxFanOutWork_PreTouched asserts that walera_tx_fan_out_work is
-// present in Gather() output from a freshly constructed Registry (pre-touch
-// confirmed — no gap from t=0) and that TxFanOutWork() returns a non-nil
-// prometheus.Histogram on which Observe can be called.
-func TestRegistry_TxFanOutWork_PreTouched(t *testing.T) {
-	t.Parallel()
+func TestRegistry_ExactlyFiveFamilies(t *testing.T) {
 	r := New()
-
-	h := r.TxFanOutWork()
-	if h == nil {
-		t.Fatal("TxFanOutWork() returned nil")
-	}
-	// Verify the accessor returns a usable histogram (should not panic).
-	h.Observe(42)
-
-	mfs, err := r.Gatherer().Gather()
-	if err != nil {
-		t.Fatalf("Gather: %v", err)
-	}
-	var found *dto.MetricFamily
-	for _, mf := range mfs {
-		if mf.GetName() == "walera_tx_fan_out_work" {
-			found = mf
-			break
-		}
-	}
-	if found == nil {
-		t.Fatal("walera_tx_fan_out_work not in Gather() output — pre-touch or registration missing")
-	}
-
-	// The series must be present even before any caller-driven Observe (pre-touch).
-	// After our Observe(42) above the histogram should have at least one sample.
-	ms := found.GetMetric()
-	if len(ms) == 0 {
-		t.Fatal("walera_tx_fan_out_work: no Metric children")
-	}
-	if ms[0].GetHistogram() == nil {
-		t.Fatal("walera_tx_fan_out_work: not a Histogram")
-	}
-}
-
-// TestRegistry_TxFanOutWork_Buckets asserts the histogram uses the expected
-// extended bucket set aligned with the plan spec (tail extended to 50000 to
-// cover work = changes × subscribers which can exceed pure fan-out).
-func TestRegistry_TxFanOutWork_Buckets(t *testing.T) {
-	t.Parallel()
-	r := New()
-
-	mfs, err := r.Gatherer().Gather()
-	if err != nil {
-		t.Fatalf("Gather: %v", err)
-	}
-	var found *dto.MetricFamily
-	for _, mf := range mfs {
-		if mf.GetName() == "walera_tx_fan_out_work" {
-			found = mf
-			break
-		}
-	}
-	if found == nil {
-		t.Fatal("walera_tx_fan_out_work not in Gather() output")
-	}
-	ms := found.GetMetric()
-	if len(ms) == 0 {
-		t.Fatal("walera_tx_fan_out_work: no Metric children")
-	}
-	h := ms[0].GetHistogram()
-	if h == nil {
-		t.Fatal("walera_tx_fan_out_work: not a Histogram")
-	}
-
-	want := []float64{1, 5, 25, 100, 500, 2500, 10000, 50000}
-	got := make([]float64, 0, len(h.GetBucket()))
-	for _, b := range h.GetBucket() {
-		got = append(got, b.GetUpperBound())
-	}
-	if len(got) != len(want) {
-		t.Fatalf("walera_tx_fan_out_work bucket count: got %d %v; want %d %v",
-			len(got), got, len(want), want)
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Errorf("walera_tx_fan_out_work bucket[%d]: got %v; want %v", i, got[i], want[i])
-		}
-	}
-}
-
-func TestRegistry_GatherIncludesAllMetrics(t *testing.T) {
-	t.Parallel()
-
-	r := New()
-
 	r.SubscribersActive("exact").Set(1)
-	r.SubscribersActive("wildcard").Inc()
 	r.EventsSent("exact").Inc()
-	r.EventsSent("wildcard").Inc()
-	r.TxDropped("slow_consumer").Inc()
-	r.TxDropped("tx_too_large").Inc()
-	r.TxDropped("multi_root").Inc()
-	r.SubscriberDisconnects("slow_consumer").Inc()
 	r.SubscriberDisconnects("client_closed").Inc()
-	r.RouteLookupDuration().Observe(0.001)
-
 	r.AuthRequests("ok").Inc()
-	r.AuthRequestDuration().Observe(0.001)
-	r.LimitRejected("global_concurrent").Inc()
-	r.PGConnectionStatus().Set(0)
-
-	r.WALStandbyACKFailures().Inc()
-
-	mfs, err := r.Gatherer().Gather()
+	r.PGConnectionStatus().Set(1)
+	fams, err := r.Gatherer().Gather()
 	if err != nil {
-		t.Fatalf("Gather() returned error: %v", err)
+		t.Fatal(err)
 	}
-
-	got := make([]string, 0, len(mfs))
-	for _, mf := range mfs {
-		got = append(got, mf.GetName())
+	var walera []string
+	for _, f := range fams {
+		if strings.HasPrefix(f.GetName(), "walera_") {
+			walera = append(walera, f.GetName())
+		}
 	}
-	sort.Strings(got)
-
-	wantWalera := []string{
-		"walera_auth_refresh_total",
-		"walera_auth_request_duration_seconds",
+	sort.Strings(walera)
+	want := []string{
 		"walera_auth_requests_total",
-		"walera_co_tx_beyond_anchor_total",
 		"walera_events_sent_total",
-		"walera_limit_rejected_total",
 		"walera_pg_connection_status",
-		"walera_pg_reconnects_total",
-		"walera_route_lookup_duration_seconds",
-		"walera_routing_fan_out",
-		"walera_routing_index_size",
-		"walera_slow_client_drops_total",
 		"walera_subscriber_disconnects_total",
-		"walera_subscriber_lifetime_seconds",
-		"walera_subscriber_queue_depth",
 		"walera_subscribers_active",
-		"walera_tx_dropped_total",
-		"walera_tx_fan_out_work",
-		"walera_wal_decode_duration_seconds",
-		"walera_wal_lsn_lag_bytes",
-		"walera_wal_standby_ack_failures_total",
-		"walera_wal_tx_size_changes",
 	}
-	sort.Strings(wantWalera)
-
-	gotWalera := make([]string, 0, len(got))
-	for _, n := range got {
-		if strings.HasPrefix(n, "walera_") {
-			gotWalera = append(gotWalera, n)
-		}
-	}
-	sort.Strings(gotWalera)
-
-	if len(gotWalera) != len(wantWalera) {
-		t.Fatalf("walera_* metric family count: got %d %v; want %d %v",
-			len(gotWalera), gotWalera, len(wantWalera), wantWalera)
-	}
-	for i := range wantWalera {
-		if gotWalera[i] != wantWalera[i] {
-			t.Errorf("walera_* metric family[%d]: got %q; want %q", i, gotWalera[i], wantWalera[i])
-		}
-	}
-}
-
-func TestRegistry_OBS01Inventory(t *testing.T) {
-	t.Parallel()
-
-	r := New()
-	mfs, err := r.Gatherer().Gather()
-	if err != nil {
-		t.Fatalf("Gather: %v", err)
-	}
-
-	names := make(map[string]bool, len(mfs))
-	for _, mf := range mfs {
-		names[mf.GetName()] = true
-	}
-
-	phase4Required := []string{
-		"walera_pg_reconnects_total",
-		"walera_pg_connection_status",
-		"walera_wal_lsn_lag_bytes",
-		"walera_wal_tx_size_changes",
-		"walera_wal_decode_duration_seconds",
-		"walera_routing_fan_out",
-		"walera_routing_index_size",
-		"walera_subscriber_queue_depth",
-		"walera_subscriber_lifetime_seconds",
-		"walera_auth_refresh_total",
-	}
-	for _, n := range phase4Required {
-		if !names[n] {
-			t.Errorf("metric family missing from Gather(): %q", n)
-		}
-	}
-
-	foundGo := false
-	for n := range names {
-		if strings.HasPrefix(n, "go_") {
-			foundGo = true
-			break
-		}
-	}
-	if !foundGo {
-		t.Error("no go_* metric found — collectors.NewGoCollector not registered")
-	}
-
-	foundProcess := false
-	for n := range names {
-		if strings.HasPrefix(n, "process_") {
-			foundProcess = true
-			break
-		}
-	}
-	if !foundProcess {
-		t.Error("no process_* metric found — collectors.NewProcessCollector not registered")
-	}
-
-	for _, want := range []string{"exact", "wildcard"} {
-		_ = r.RoutingIndexSize(want)
-		_ = r.subscriberQueueDepth.WithLabelValues(want)
-	}
-	for _, want := range []string{"ok", "unauthorized", "forbidden", "not_found", "unavailable"} {
-		_ = r.AuthRefresh(want)
-	}
-}
-
-func TestRegistry_WALStandbyACKFailures_Registered(t *testing.T) {
-	t.Parallel()
-	r := New()
-	if r.WALStandbyACKFailures() == nil {
-		t.Fatal("WALStandbyACKFailures() returned nil")
-	}
-	r.WALStandbyACKFailures().Inc()
-	families, err := r.Gatherer().Gather()
-	if err != nil {
-		t.Fatalf("Gather: %v", err)
-	}
-	found := false
-	for _, fam := range families {
-		if fam.GetName() == "walera_wal_standby_ack_failures_total" {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Errorf("series walera_wal_standby_ack_failures_total not in Gather() output")
-	}
-}
-
-// TestRegistry_CoBeyondAnchorTotal_PreTouched asserts that walera_co_tx_beyond_anchor_total
-// is present in Gather() output from a freshly constructed Registry (pre-touch confirmed —
-// no gap from t=0) and that CoBeyondAnchorTotal() returns a non-nil prometheus.Counter on
-// which Add can be called. Mirrors TestRegistry_TxFanOutWork_PreTouched.
-func TestRegistry_CoBeyondAnchorTotal_PreTouched(t *testing.T) {
-	t.Parallel()
-	r := New()
-
-	c := r.CoBeyondAnchorTotal()
-	if c == nil {
-		t.Fatal("CoBeyondAnchorTotal() returned nil")
-	}
-	// Verify the accessor returns a usable counter (should not panic).
-	c.Add(0)
-
-	mfs, err := r.Gatherer().Gather()
-	if err != nil {
-		t.Fatalf("Gather: %v", err)
-	}
-	var found *dto.MetricFamily
-	for _, mf := range mfs {
-		if mf.GetName() == "walera_co_tx_beyond_anchor_total" {
-			found = mf
-			break
-		}
-	}
-	if found == nil {
-		t.Fatal("walera_co_tx_beyond_anchor_total not in Gather() output — pre-touch or registration missing")
-	}
-
-	// The series must be present even before any caller-driven Add (pre-touch).
-	ms := found.GetMetric()
-	if len(ms) == 0 {
-		t.Fatal("walera_co_tx_beyond_anchor_total: no Metric children")
-	}
-	if ms[0].GetCounter() == nil {
-		t.Fatal("walera_co_tx_beyond_anchor_total: not a Counter")
-	}
-	if got := ms[0].GetCounter().GetValue(); got != 0 {
-		t.Errorf("walera_co_tx_beyond_anchor_total pre-touch value: got %v; want 0", got)
+	if !slices.Equal(walera, want) {
+		t.Fatalf("walera families = %v; want %v", walera, want)
 	}
 }
 

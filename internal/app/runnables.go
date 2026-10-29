@@ -5,15 +5,12 @@ import (
 	"net"
 	"net/http"
 	pprof "net/http/pprof"
-	"os"
 	"time"
 
 	"github.com/rs/zerolog"
-
-	"github.com/walera/walera/internal/wal"
 )
 
-func buildRunnables(a *App, slotName wal.SlotName) []Runnable {
+func buildRunnables(a *App) []Runnable {
 	runs := []Runnable{
 		{
 			Name: "wal-reader",
@@ -67,33 +64,6 @@ func buildRunnables(a *App, slotName wal.SlotName) []Runnable {
 		})
 	}
 
-	runs = append(runs,
-		Runnable{
-			Name: "wal-lag-sampler",
-			Run: func(ctx context.Context) error {
-				wal.SampleLagLoop(ctx, a.AdminConn, slotName, a.Metrics,
-					a.Config.WAL.LagSampleInterval, a.Logger)
-				return nil
-			},
-		},
-
-		Runnable{
-			Name: "metrics-sampler",
-			Run: func(ctx context.Context) error {
-				ticker := time.NewTicker(a.Config.Metrics.SampleInterval)
-				defer ticker.Stop()
-				for {
-					select {
-					case <-ctx.Done():
-						return nil
-					case <-ticker.C:
-						a.Metrics.RoutingIndexSize("exact").Set(float64(a.RouterIndex.ExactLen()))
-						a.Metrics.RoutingIndexSize("wildcard").Set(float64(a.RouterIndex.WildcardLen()))
-					}
-				}
-			},
-		},
-	)
 	return runs
 }
 
@@ -143,12 +113,4 @@ func newPProfHTTPServer(cfg AppConfig, logger zerolog.Logger) *http.Server {
 		Handler:           pprofMux,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
-}
-
-func deriveSlotName(cfg AppConfig) wal.SlotName {
-	hostname, err := os.Hostname()
-	if err != nil {
-		hostname = "unknown"
-	}
-	return cfg.WAL.NewSlotName(hostname, os.Getpid())
 }

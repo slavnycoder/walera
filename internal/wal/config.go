@@ -38,8 +38,6 @@ type Config struct {
 
 	Reconnect ReconnectConfig `koanf:"reconnect"`
 
-	LagSampleInterval time.Duration `koanf:"lag_sample_interval"`
-
 	Bootstrap BootstrapConfig `koanf:"bootstrap"`
 }
 
@@ -80,7 +78,6 @@ func ApplyDefaults(k *koanf.Koanf) {
 	_ = k.Set("wal.slot_headroom_min", 2)
 	_ = k.Set("wal.naive_timestamp_assume_utc", true)
 	_ = k.Set("wal.reconnect.reset_after_success_duration", "60s")
-	_ = k.Set("wal.lag_sample_interval", "5s")
 }
 
 func LoadConfig(k *koanf.Koanf) (Config, error) {
@@ -199,9 +196,6 @@ func (c Config) Validate() error {
 	}
 	if c.Reconnect.ResetAfterSuccessDuration <= 0 {
 		errs = append(errs, errors.New("wal.reconnect.reset_after_success_duration must be > 0"))
-	}
-	if c.LagSampleInterval <= 0 {
-		errs = append(errs, errors.New("wal.lag_sample_interval must be > 0"))
 	}
 	if len(errs) > 0 {
 		return fmt.Errorf("validation failed: %w", errors.Join(errs...))

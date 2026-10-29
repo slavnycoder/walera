@@ -23,7 +23,7 @@ func TestTryRefresh_Revoked403_DropsSub(t *testing.T) {
 	srv := newScriptServer(t, func(_ int64, w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusForbidden)
 	})
-	c, _ := newSubTestClient(t, srv.srv.URL)
+	c := newSubTestClient(t, srv.srv.URL)
 	s := newTestSubscriber(t, subscriberTestOpts{
 		Client:     c,
 		Channel:    "users:42",

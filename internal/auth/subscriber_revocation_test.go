@@ -20,7 +20,7 @@ func TestSubscriber_FilterWithLSN_NarrowingBoundary_NoLeak(t *testing.T) {
 	t.Parallel()
 
 	srv := newScriptServer(t, func(_ int64, w http.ResponseWriter, _ *http.Request) {})
-	c, _ := newSubTestClient(t, srv.srv.URL)
+	c := newSubTestClient(t, srv.srv.URL)
 
 	wide := makeMap(t, 100, "id", "email")
 	s := newTestSubscriber(t, subscriberTestOpts{
@@ -62,7 +62,7 @@ func TestSubscriber_ConcurrentSwapDropAndDelivery_RaceClean(t *testing.T) {
 	t.Parallel()
 
 	srv := newScriptServer(t, func(_ int64, w http.ResponseWriter, _ *http.Request) {})
-	c, _ := newSubTestClient(t, srv.srv.URL)
+	c := newSubTestClient(t, srv.srv.URL)
 
 	s := newTestSubscriber(t, subscriberTestOpts{
 		Client:     c,
@@ -116,7 +116,7 @@ func TestSubscriber_AuthOutage_DropsAfterTTL(t *testing.T) {
 	srv := newScriptServer(t, func(_ int64, w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusServiceUnavailable)
 	})
-	c, _ := newSubTestClient(t, srv.srv.URL)
+	c := newSubTestClient(t, srv.srv.URL)
 
 	initial := makeMap(t, 100, "id", "email")
 	initial.TTLSeconds = 0
@@ -168,7 +168,7 @@ func TestSubscriber_RefreshReplaysClientCredentials(t *testing.T) {
 				w.WriteHeader(http.StatusOK)
 				_, _ = w.Write(permissionsBody(t, map[string][]string{"orders": {"id"}}))
 			})
-			c, _ := newSubTestClient(t, srv.srv.URL)
+			c := newSubTestClient(t, srv.srv.URL)
 			s := newTestSubscriber(t, subscriberTestOpts{
 				Client:     c,
 				InitialMap: makeMap(t, 100, "id", "name"),
@@ -205,7 +205,7 @@ func TestSubscriber_RefreshDifferentUserRevokes(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(permissionsBody(t, map[string][]string{"orders": {"id"}})) // user_id "user-1"
 	})
-	c, _ := newSubTestClient(t, srv.srv.URL)
+	c := newSubTestClient(t, srv.srv.URL)
 	s := newTestSubscriber(t, subscriberTestOpts{
 		Client:     c,
 		InitialMap: makeMap(t, 100, "id"),

@@ -1,10 +1,12 @@
 package wal
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"net"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -14,8 +16,6 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgproto3"
 	"github.com/rs/zerolog"
-
-	"github.com/walera/walera/internal/metrics"
 )
 
 type fakeReplConn struct {
@@ -452,7 +452,7 @@ func TestReaderIsConnectedAtConstruction(t *testing.T) {
 		PublicationName: "testpub",
 		SlotNamePrefix:  "walera",
 	}
-	r, _ := New(cfg, Deps{Logger: zerolog.Nop(), Metrics: metrics.New()})
+	r, _ := New(cfg, Deps{Logger: zerolog.Nop()})
 	if r.IsConnected() {
 		t.Error("IsConnected() at construction: got true; want false")
 	}
@@ -465,7 +465,7 @@ func TestReaderCheckPG(t *testing.T) {
 		PublicationName: "testpub",
 		SlotNamePrefix:  "walera",
 	}
-	r, _ := New(cfg, Deps{Logger: zerolog.Nop(), Metrics: metrics.New()})
+	r, _ := New(cfg, Deps{Logger: zerolog.Nop()})
 
 	if err := r.CheckPG(context.Background()); !errors.Is(err, ErrNotConnected) {
 		t.Errorf("CheckPG at construction: got %v; want %v", err, ErrNotConnected)
@@ -490,7 +490,7 @@ func TestNewReader(t *testing.T) {
 		SlotNamePrefix:  "walera",
 	}
 	logger := zerolog.Nop()
-	reader, ch := New(cfg, Deps{Logger: logger, Metrics: metrics.New()})
+	reader, ch := New(cfg, Deps{Logger: logger})
 	if reader == nil {
 		t.Error("New returned nil reader")
 	}
@@ -785,7 +785,6 @@ func TestRunLoopProcessWALError(t *testing.T) {
 		log:      logger,
 		txCh:     make(chan Tx),
 		replConn: fc,
-		metrics:  metrics.New(),
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -816,36 +815,19 @@ func TestRunLoopContextCancelledOnReceive(t *testing.T) {
 	}
 }
 
-func gatherCounterNoLabel(t *testing.T, r *Reader, name string) float64 {
-	t.Helper()
-	fams, err := r.metrics.Gatherer().Gather()
-	if err != nil {
-		t.Fatalf("Gather: %v", err)
-	}
-	for _, fam := range fams {
-		if fam.GetName() != name {
-			continue
-		}
-		ms := fam.GetMetric()
-		if len(ms) == 0 {
-			return 0
-		}
-		return ms[0].GetCounter().GetValue()
-	}
-	return 0
-}
-
-const standbyACKFailures = "walera_wal_standby_ack_failures_total"
-
 type standbyRun struct {
-	r    *Reader
 	fc   *fakeReplConn
 	stop func()
 }
 
 func startStandbyLoop(t *testing.T, fc *fakeReplConn, interval time.Duration) standbyRun {
 	t.Helper()
-	r := newReaderForTest(fc, zerolog.Nop())
+	return startStandbyLoopLog(t, fc, interval, zerolog.Nop())
+}
+
+func startStandbyLoopLog(t *testing.T, fc *fakeReplConn, interval time.Duration, log zerolog.Logger) standbyRun {
+	t.Helper()
+	r := newReaderForTest(fc, log)
 	r.standbyInterval = interval
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
@@ -862,7 +844,7 @@ func startStandbyLoop(t *testing.T, fc *fakeReplConn, interval time.Duration) st
 		}
 	}
 	t.Cleanup(cancel)
-	return standbyRun{r: r, fc: fc, stop: stop}
+	return standbyRun{fc: fc, stop: stop}
 }
 
 func (s standbyRun) waitACKs(t *testing.T, n int) {
@@ -918,11 +900,11 @@ func TestStandby_StatusCarriesCurrentLSN(t *testing.T) {
 	}
 }
 
-func TestStandby_SendErrorCounting(t *testing.T) {
+func TestStandby_SendErrorLogging(t *testing.T) {
 	cases := []struct {
-		name    string
-		err     error
-		counted bool
+		name   string
+		err    error
+		logged bool
 	}{
 		{"success", nil, false},
 		{"send error", errors.New("fake send-ack error"), true},
@@ -934,16 +916,17 @@ func TestStandby_SendErrorCounting(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			fc := newFakeConn(nil)
 			fc.sendACKErr = tc.err
-			run := startStandbyLoop(t, fc, 10*time.Millisecond)
+			var buf bytes.Buffer
+			run := startStandbyLoopLog(t, fc, 10*time.Millisecond, zerolog.New(&buf))
 			run.waitACKs(t, 2)
 			run.stop()
 
-			want := 0.0
-			if tc.counted {
-				want = float64(len(fc.AckCalls()))
+			want := 0
+			if tc.logged {
+				want = len(fc.AckCalls())
 			}
-			if got := gatherCounterNoLabel(t, run.r, standbyACKFailures); got != want {
-				t.Errorf("%s = %v; want %v", standbyACKFailures, got, want)
+			if got := strings.Count(buf.String(), "standby status update failed"); got != want {
+				t.Errorf("standby failure warnings = %d; want %d", got, want)
 			}
 		})
 	}

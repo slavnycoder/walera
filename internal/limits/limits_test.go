@@ -6,77 +6,25 @@ import (
 	"strings"
 	"testing"
 
-	dto "github.com/prometheus/client_model/go"
 	"github.com/rs/zerolog"
-
-	"github.com/walera/walera/internal/metrics"
 )
-
-func gatherCounter(t *testing.T, reg *metrics.Registry, name, labelKey, labelVal string) float64 {
-	t.Helper()
-	families, err := reg.Gatherer().Gather()
-	if err != nil {
-		t.Fatalf("Gather: %v", err)
-	}
-	for _, fam := range families {
-		if fam.GetName() != name {
-			continue
-		}
-		for _, m := range fam.GetMetric() {
-			if matchLabel(m, labelKey, labelVal) {
-				return m.GetCounter().GetValue()
-			}
-		}
-	}
-	return 0
-}
-
-func gatherHasSeries(t *testing.T, reg *metrics.Registry, name, labelKey, labelVal string) bool {
-	t.Helper()
-	families, err := reg.Gatherer().Gather()
-	if err != nil {
-		t.Fatalf("Gather: %v", err)
-	}
-	for _, fam := range families {
-		if fam.GetName() != name {
-			continue
-		}
-		for _, m := range fam.GetMetric() {
-			if matchLabel(m, labelKey, labelVal) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-func matchLabel(m *dto.Metric, key, val string) bool {
-	for _, lp := range m.GetLabel() {
-		if lp.GetName() == key && lp.GetValue() == val {
-			return true
-		}
-	}
-	return false
-}
 
 func mkLimits(t *testing.T, globalCap, perUserCap int) *Limits {
 	t.Helper()
-	mc := metrics.New()
 	return New(Config{
 		GlobalConcurrent:     globalCap,
 		PerUserConcurrentMax: perUserCap,
-	}, Deps{Logger: zerolog.Nop(), Metrics: mc})
+	}, Deps{Logger: zerolog.Nop()})
 }
 
 func mkLimitsWithLogCapture(t *testing.T, globalCap, perUserCap int) (*Limits, *bytes.Buffer) {
 	t.Helper()
-	mc := metrics.New()
 	var buf bytes.Buffer
 	logger := zerolog.New(&buf)
 	return New(Config{
 		GlobalConcurrent:     globalCap,
 		PerUserConcurrentMax: perUserCap,
-	}, Deps{Logger: logger, Metrics: mc}), &buf
+	}, Deps{Logger: logger}), &buf
 }
 
 func TestLimits_AcquireGlobal_Succeeds_BelowCap(t *testing.T) {
@@ -86,9 +34,6 @@ func TestLimits_AcquireGlobal_Succeeds_BelowCap(t *testing.T) {
 		if !l.AcquireGlobal() {
 			t.Fatalf("AcquireGlobal #%d: got false; want true", i)
 		}
-	}
-	if v := gatherCounter(t, l.mc, "walera_limit_rejected_total", "kind", "global_concurrent"); v != 0 {
-		t.Errorf("limit_rejected_total{kind=global_concurrent}: got %v; want 0", v)
 	}
 }
 
@@ -102,9 +47,6 @@ func TestLimits_AcquireGlobal_FailsAtCap(t *testing.T) {
 	}
 	if l.AcquireGlobal() {
 		t.Fatal("AcquireGlobal #3: got true; want false (cap exhausted)")
-	}
-	if v := gatherCounter(t, l.mc, "walera_limit_rejected_total", "kind", "global_concurrent"); v != 1 {
-		t.Errorf("limit_rejected_total{kind=global_concurrent}: got %v; want 1", v)
 	}
 }
 
@@ -142,9 +84,6 @@ func TestLimits_AcquirePerUser_AtCap(t *testing.T) {
 	if ok || n != 2 {
 		t.Fatalf("overflow AcquirePerUser: got (%v, %d); want (false, 2)", ok, n)
 	}
-	if v := gatherCounter(t, l.mc, "walera_limit_rejected_total", "kind", "per_user_concurrent"); v != 1 {
-		t.Errorf("limit_rejected_total{kind=per_user_concurrent}: got %v; want 1", v)
-	}
 }
 
 func TestLimits_AcquirePerUser_DifferentUsersIndependent(t *testing.T) {
@@ -168,16 +107,6 @@ func TestLimits_ReleasePerUser_Decrements(t *testing.T) {
 	ok, n := l.AcquirePerUser("u1")
 	if !ok || n != 2 {
 		t.Fatalf("acquire after release: got (%v, %d); want (true, 2)", ok, n)
-	}
-}
-
-func TestLimits_PreTouchesLimitRejectedSeries(t *testing.T) {
-	t.Parallel()
-	l := mkLimits(t, 100, 100)
-	for _, k := range []string{"global_concurrent", "per_user_concurrent"} {
-		if !gatherHasSeries(t, l.mc, "walera_limit_rejected_total", "kind", k) {
-			t.Errorf("walera_limit_rejected_total{kind=%s} missing from Gather() — pre-touch regressed", k)
-		}
 	}
 }
 
@@ -205,12 +134,11 @@ func TestLimits_ReleasePerUser_DefensiveWarn(t *testing.T) {
 
 func mkLimitsWithTrustedProxies(t *testing.T, proxies []string) *Limits {
 	t.Helper()
-	mc := metrics.New()
 	return New(Config{
 		GlobalConcurrent:     100,
 		PerUserConcurrentMax: 10,
 		TrustedProxies:       proxies,
-	}, Deps{Logger: zerolog.Nop(), Metrics: mc})
+	}, Deps{Logger: zerolog.Nop()})
 }
 
 func TestLimits_IsTrustedProxy_EmptyAllowlist(t *testing.T) {
@@ -261,14 +189,13 @@ func TestLimits_IsTrustedProxy_NilIP(t *testing.T) {
 
 func TestLimits_New_SkipsMalformedCIDR(t *testing.T) {
 	t.Parallel()
-	mc := metrics.New()
 	var buf bytes.Buffer
 	logger := zerolog.New(&buf)
 	l := New(Config{
 		GlobalConcurrent:     100,
 		PerUserConcurrentMax: 10,
 		TrustedProxies:       []string{"not-a-cidr", "10.0.0.0/8"},
-	}, Deps{Logger: logger, Metrics: mc})
+	}, Deps{Logger: logger})
 	if !strings.Contains(buf.String(), "trusted_proxies entry failed to parse") {
 		t.Errorf("expected Warn log; got %q", buf.String())
 	}

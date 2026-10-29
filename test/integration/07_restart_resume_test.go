@@ -24,7 +24,7 @@ func Test07RestartResume(t *testing.T) {
 		t.Fatalf("SetTTL: %v", err)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 
 	subscribers := make([]struct {
@@ -58,11 +58,6 @@ func Test07RestartResume(t *testing.T) {
 
 	metricsURL := h.Binary.BaseURL() + "/metrics"
 
-	preReconnects, err := scrapeMetric(ctx, metricsURL, "walera_pg_reconnects_total")
-	if err != nil {
-		t.Fatalf("baseline scrape walera_pg_reconnects_total: %v", err)
-	}
-
 	stopCtx, stopCancel := context.WithTimeout(ctx, 10*time.Second)
 	if err := h.PG.Stop(stopCtx); err != nil {
 		stopCancel()
@@ -71,34 +66,16 @@ func Test07RestartResume(t *testing.T) {
 	stopCancel()
 
 	if _, err := waitForMetric(ctx, t, metricsURL,
-		"walera_pg_reconnects_total",
-		func(v float64) bool { return v > preReconnects },
-		30*time.Second, 500*time.Millisecond,
-	); err != nil {
-		t.Fatalf("walera_pg_reconnects_total never exceeded baseline %v within 30s: %v; stderr:\n%s",
-			preReconnects, err, h.Binary.Stderr())
-	}
-
-	for i, s := range subscribers {
-		select {
-		case err := <-s.errCh:
-			t.Fatalf("sub %d errCh signalled during PG outage: %v (subscribers must survive reconnect — Pitfall G2)", i, err)
-		case ev := <-s.events:
-			if ev.Type == "tx" {
-				t.Fatalf("sub %d received tx event during PG outage: %s", i, string(ev.Data))
-			}
-
-		case <-time.After(500 * time.Millisecond):
-
-		}
-	}
-
-	if _, err := waitForMetric(ctx, t, metricsURL,
 		"walera_pg_connection_status",
 		func(v float64) bool { return v == 0 },
-		10*time.Second, 500*time.Millisecond,
+		30*time.Second, 500*time.Millisecond,
 	); err != nil {
-		t.Logf("walera_pg_connection_status did not reach 0 within 10s: %v (non-fatal — readyz cadence is loose)", err)
+		t.Fatalf("walera_pg_connection_status never reached 0 within 30s: %v; stderr:\n%s", err, h.Binary.Stderr())
+	}
+	waitForStderr(t, h, "reconnect", 30*time.Second)
+
+	for _, s := range subscribers {
+		expectNoTxWithin(t, s.events, s.errCh, 2*time.Second)
 	}
 
 	subsActive, err := scrapeMetric(ctx, metricsURL, `walera_subscribers_active{type="exact"}`)
@@ -108,9 +85,17 @@ func Test07RestartResume(t *testing.T) {
 	if subsActive < 3 {
 		t.Fatalf("walera_subscribers_active{type=exact} = %v; want >= 3 (subscribers were killed during reconnect)", subsActive)
 	}
+}
 
-	if !strings.Contains(h.Binary.Stderr(), "reconnect") {
-		t.Logf("binary stderr did not contain 'reconnect' (non-fatal log-shape check); stderr:\n%s", h.Binary.Stderr())
+// waitForStderr polls the binary's stderr until it contains substr.
+func waitForStderr(t *testing.T, h *Harness, substr string, d time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(d)
+	for !strings.Contains(h.Binary.Stderr(), substr) {
+		if time.Now().After(deadline) {
+			t.Fatalf("stderr never contained %q within %v; stderr:\n%s", substr, d, h.Binary.Stderr())
+		}
+		time.Sleep(200 * time.Millisecond)
 	}
 }
 

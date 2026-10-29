@@ -154,7 +154,7 @@ func newTestHandler(t *testing.T, cors []string, lcfg *limits.Config) *testHandl
 			PerUserConcurrentMax: 10,
 		}
 	}
-	lim := limits.New(*lcfg, limits.Deps{Logger: logger, Metrics: m})
+	lim := limits.New(*lcfg, limits.Deps{Logger: logger})
 
 	cfg.Router = rcfg
 	cfg.Auth = authCfg

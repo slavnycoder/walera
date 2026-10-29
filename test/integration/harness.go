@@ -176,7 +176,6 @@ wal:
   naive_timestamp_assume_utc: true
 %s  reconnect:
     reset_after_success_duration: 2s
-  lag_sample_interval: 1s
 http:
   addr: %q
   cors_origins: []
@@ -195,8 +194,6 @@ auth:
   per_user_concurrent: %d
 health:
   readyz_probe_interval: 1s
-metrics:
-  sample_interval: 1s
 shutdown:
   deadline: 5s
 `, pgDSN, bootstrapLines, addr, mockAuthURL, forwardedLines, sc.globalConcurrent, sc.perUserConcurrent)

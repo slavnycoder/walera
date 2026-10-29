@@ -168,3 +168,25 @@ func waitForMetric(ctx context.Context, t *testing.T, metricsURL, name string, p
 	}
 	return last, fmt.Errorf("waitForMetric: %q never satisfied predicate within %v (last=%v)", name, deadline, last)
 }
+
+// expectNoTxWithin fails if a tx event, a client error or end of stream
+// arrives within d; other events (heartbeats) are ignored.
+func expectNoTxWithin(t *testing.T, events <-chan SSEEvent, errCh <-chan error, d time.Duration) {
+	t.Helper()
+	deadline := time.After(d)
+	for {
+		select {
+		case ev, ok := <-events:
+			if !ok {
+				t.Fatal("stream closed; want it to stay open")
+			}
+			if ev.Type == "tx" {
+				t.Fatalf("unexpected tx event: %s", ev.Data)
+			}
+		case err := <-errCh:
+			t.Fatalf("client error: %v", err)
+		case <-deadline:
+			return
+		}
+	}
+}

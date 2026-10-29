@@ -23,41 +23,22 @@ Pre-sweep archaeology anchor: commit `de6b665` (pre-SWEEP-02 HEAD).
    read-only to each sequential `dispatchEvent` call, eliminating the
    per-subscriber-per-change `append` allocation of the prior shape.
 
-2. **tx_dropped_total{reason="multi_root"} call sites.** Pre-touched
-   in `router.New` via `b.metrics.TxDropped("multi_root").Add(0)`. The
-   only `.Inc()` site is the multi-root guard inside
-   `(*Broadcaster).dispatchEvent`, which fires when a tx contains >1
+2. **multi_root drop site.** The only site is the multi-root guard
+   inside `(*Broadcaster).dispatchEvent`, which fires when a tx contains >1
    distinct PK for the subscriber's anchor `(schema, table)` pair
    (helper: `hasMultipleAnchorRoots`). Multi-root drop is **per-subscriber
-   tx drop, not a disconnect**: only the counter is incremented and a
-   warning is logged. `sub.Drop()` is NOT called — the connection stays
-   open and the next well-formed tx is delivered normally. Clients
-   resync from the primary API on their own. The guard applies to KindExact subscribers only.
+   tx drop, not a disconnect**: only a warning is logged. `sub.Drop()` is
+   NOT called — the connection stays open and the next well-formed tx is
+   delivered normally. Clients resync from the primary API on their own.
+   The guard applies to KindExact subscribers only.
 
 3. **slow_consumer / tx_too_large drop sites.** Both reasons drive
-   `sub.Drop(reason)` + `metrics.TxDropped(reason).Inc()` exclusively
-   from `(*Broadcaster).dispatchEvent` in `router.go` — the
-   non-blocking send shim's `false` return triggers `slow_consumer`;
-   the per-tx change cap and the encoder-overflow branch both trigger
-   `tx_too_large`. No other call sites Increment these counters in
-   the router package.
+   `sub.Drop(reason)` + a warning log exclusively from
+   `(*Broadcaster).dispatchEvent` in `router.go` — the non-blocking send
+   shim's `false` return triggers `slow_consumer`; the per-tx change cap
+   and the encoder-overflow branch both trigger `tx_too_large`.
 
-4. **routeTx stack-frame ownership.** The `lookupTimer` defer,
-   `RoutingFanOut().Observe(float64(len(eligible)))`,
-   `TxFanOutWork().Observe(float64(totalDelivered))`, and
-   `CoBeyondAnchorTotal().Add(float64(totalBeyondAnchor))` MUST all
-   stay in `routeTx`'s stack frame (not lifted into `mergeMatches` or
-   `dispatchEvent`). `RoutingFanOut` reflects the post-merge eligible
-   subscriber count; `TxFanOutWork` (D-03) is observed after the
-   dispatch loop with Σ delivered changes across all eligible
-   subscribers and is observed only when `totalDelivered > 0` (a matched tx
-   whose eligible subscribers were all dropped records no histogram sample —
-   the registry pre-touch already seeds the series at t=0); the
-   `lookupTimer` defer brackets the merge + dispatch as one atomic
-   measurement window. `CoBeyondAnchorTotal` (D-01/SAFE-02) is the
-   beyond-anchor counter accumulated across the dispatch loop from the
-   second return value of `dispatchEvent` and observed only when
-   `totalBeyondAnchor > 0` — alongside `TxFanOutWork`.
+4. _(Retired: routeTx no longer records per-tx metrics.)_
 
 5. **Sticky-reason atomic.Pointer in Subscriber.** `reasonPtr
    atomic.Pointer[string]` is written by `Drop` BEFORE `cancel` so any

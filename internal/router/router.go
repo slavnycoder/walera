@@ -5,7 +5,6 @@ import (
 	"sync/atomic"
 
 	"github.com/jackc/pglogrepl"
-	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog"
 
 	"github.com/walera/walera/internal/metrics"
@@ -45,7 +44,7 @@ func validateDeps(d Deps) {
 
 func New(cfg Config, deps Deps) *Broadcaster {
 	validateDeps(deps)
-	b := &Broadcaster{
+	return &Broadcaster{
 		cfg:      cfg,
 		log:      deps.Logger,
 		metrics:  deps.Metrics,
@@ -53,10 +52,6 @@ func New(cfg Config, deps Deps) *Broadcaster {
 		exact:    newIndex(),
 		wildcard: newWildcardIndex(),
 	}
-	b.metrics.TxDropped("slow_consumer").Add(0)
-	b.metrics.TxDropped("tx_too_large").Add(0)
-	b.metrics.TxDropped("multi_root").Add(0)
-	return b
 }
 
 func (b *Broadcaster) Register(sub *Subscriber) {
@@ -131,13 +126,9 @@ func (b *Broadcaster) Ingest(ctx context.Context, txCh <-chan wal.Tx) error {
 }
 
 func (b *Broadcaster) routeTx(tx wal.Tx) {
-	lookupTimer := prometheus.NewTimer(b.metrics.RouteLookupDuration())
-	defer lookupTimer.ObserveDuration()
-
 	eligible := make(map[*Subscriber]struct{}, 8)
 	b.mergeMatches(tx, eligible)
 
-	b.metrics.RoutingFanOut().Observe(float64(len(eligible)))
 	if len(eligible) == 0 {
 		return
 	}
@@ -149,21 +140,8 @@ func (b *Broadcaster) routeTx(tx wal.Tx) {
 		fullIndices[i] = i
 	}
 
-	var totalDelivered int64
-	var totalBeyondAnchor int64
 	for sub := range eligible {
-		delivered, beyondAnchor := b.dispatchEvent(tx, sub, fullIndices)
-		totalDelivered += int64(delivered)
-		totalBeyondAnchor += int64(beyondAnchor)
-	}
-	// Guard on >0 so a matched tx whose eligible subscribers were all dropped
-	// does not inflate the histogram/counter with empty work — registry
-	// pre-touch already seeds both series at t=0 (INVARIANT #4).
-	if totalDelivered > 0 {
-		b.metrics.TxFanOutWork().Observe(float64(totalDelivered))
-	}
-	if totalBeyondAnchor > 0 {
-		b.metrics.CoBeyondAnchorTotal().Add(float64(totalBeyondAnchor))
+		b.dispatchEvent(tx, sub, fullIndices)
 	}
 }
 
@@ -213,24 +191,21 @@ func matchesAnchor(sub *Subscriber, ch wal.Change) bool {
 
 // dispatchEvent applies the subscriber's whitelist filter to the full tx index
 // set, enforces the post-filter MaxChangesPerTx cap, encodes, and sends.
-// Returns (delivered, beyondAnchor): delivered counts post-filter changes sent
-// (0 on any drop or silent skip); beyondAnchor counts delivered changes whose
-// routing key differs from the subscriber's own anchor key.
 // All Drop call sites must stay inside this function (INVARIANT #3).
-func (b *Broadcaster) dispatchEvent(tx wal.Tx, sub *Subscriber, indices []int) (int, int) {
+func (b *Broadcaster) dispatchEvent(tx wal.Tx, sub *Subscriber, indices []int) {
 	if tx.CommitLSN <= sub.StartLSN() {
-		return 0, 0
+		return
 	}
 	// Dropped but not yet deregistered: skip, or a full queue floods slow_consumer.
 	select {
 	case <-sub.Done():
-		return 0, 0
+		return
 	default:
 	}
 
 	// No filter means no grant: never deliver unfiltered rows.
 	if sub.Filter == nil {
-		return 0, 0
+		return
 	}
 
 	capLimit := b.cfg.MaxChangesPerTx
@@ -240,13 +215,12 @@ func (b *Broadcaster) dispatchEvent(tx wal.Tx, sub *Subscriber, indices []int) (
 	// Wildcard subscribers may see every row; the guard only stops an exact
 	// subscriber from receiving another root's rows and children.
 	if sub.Kind() == KindExact && hasMultipleAnchorRoots(tx, subSchema, subTable) {
-		b.metrics.TxDropped("multi_root").Inc()
 		b.log.Warn().
 			Str("subscriber_id", sub.ID()).
 			Str("channel", subChannelKey(sub)).
 			Str("commit_lsn", tx.CommitLSN.String()).
 			Msg("subscriber tx dropped: multi_root (writer-side discipline violation)")
-		return 0, 0
+		return
 	}
 
 	filtered := make([]wal.Change, 0, len(indices))
@@ -267,13 +241,13 @@ func (b *Broadcaster) dispatchEvent(tx wal.Tx, sub *Subscriber, indices []int) (
 		filtered = append(filtered, ch)
 	}
 	if len(filtered) == 0 || !anchorSurvived {
-		return 0, 0 // silent drop — no metric, no Drop() (INVARIANT #3)
+		return // silent drop — no Drop() (INVARIANT #3)
 	}
 	// Cap is post-filter, not pre-filter: pre-filter would falsely drop
 	// narrow-whitelist subscribers on large txs.
 	if len(filtered) > capLimit {
 		b.dropTxTooLarge(sub, tx.CommitLSN, "filtered_count", len(filtered), capLimit)
-		return 0, 0
+		return
 	}
 	subTx := tx
 	subTx.Changes = filtered
@@ -285,46 +259,23 @@ func (b *Broadcaster) dispatchEvent(tx wal.Tx, sub *Subscriber, indices []int) (
 
 	frame, overflow := b.enc.Encode(ev)
 	if overflow {
-		b.metrics.TxDropped("tx_too_large").Inc()
 		sub.Drop("tx_too_large")
 		b.log.Warn().
 			Str("subscriber_id", sub.ID()).
 			Str("commit_lsn", tx.CommitLSN.String()).
 			Int("matched_changes", len(ev.MatchedIndices)).
 			Msg("subscriber dropped: tx_too_large (payload cap)")
-		return 0, 0
+		return
 	}
 
 	if !sub.Send(frame) {
-		b.metrics.TxDropped("slow_consumer").Inc()
 		sub.Drop("slow_consumer")
 		b.log.Warn().
 			Str("subscriber_id", sub.ID()).
 			Str("reason", "slow_consumer").
 			Str("commit_lsn", tx.CommitLSN.String()).
 			Msg("subscriber dropped: slow_consumer")
-		return 0, 0
 	}
-
-	// Beyond-anchor delta: count delivered changes whose routing key differs
-	// from the subscriber's anchor. KindExact compares ch.Key() against
-	// "schema.table:pk"; KindWildcard compares ch.WildcardKey() against
-	// "schema.table".
-	isExact := sub.Kind() == KindExact
-	anchorKey := subChannelKey(sub)
-	var beyondAnchor int
-	for _, idx := range ev.MatchedIndices {
-		ch := ev.Tx.Changes[idx]
-		routingKey := ch.WildcardKey()
-		if isExact {
-			routingKey = ch.Key()
-		}
-		if routingKey != anchorKey {
-			beyondAnchor++
-		}
-	}
-
-	return len(ev.MatchedIndices), beyondAnchor
 }
 
 // hasMultipleAnchorRoots reports whether tx contains >1 distinct PK on the
@@ -349,7 +300,6 @@ func hasMultipleAnchorRoots(tx wal.Tx, schema, table string) bool {
 }
 
 func (b *Broadcaster) dropTxTooLarge(sub *Subscriber, commitLSN pglogrepl.LSN, countField string, count, limit int) {
-	b.metrics.TxDropped("tx_too_large").Inc()
 	sub.Drop("tx_too_large")
 	b.log.Warn().
 		Str("subscriber_id", sub.ID()).
