@@ -24,8 +24,8 @@
 #        alongside `writer_commit_rate` — semantically identical to the ROADMAP
 #        wording. SC2 below greps for the actual series name.
 #
-#   SC3: Each of the four run-book scripts (breaker trip + recover, slow
-#        consumer disconnect, PG restart, high WAL lag) executes `curl`
+#   SC3: Each of the three run-book scripts (slow consumer disconnect, PG
+#        restart, high WAL lag) executes `curl`
 #        commands documented in `testbench/README.md` and produces the
 #        documented metric change in Grafana within 60 s. The hardware-floor
 #        disclaimer is present and prominent in the README.
@@ -171,12 +171,12 @@ else
   sc1_ok=0
 fi
 
-# SC1.c — walera-overview dashboard: UID + 8 panels + every target pins to walera-prometheus.
+# SC1.c — walera-overview dashboard: UID + 7 panels + every target pins to walera-prometheus.
 sc1_overview="$(curl -fsS "${GRAFANA_BASE_URL}/api/dashboards/uid/walera-overview" 2>/dev/null || true)"
 if echo "${sc1_overview}" \
-  | jq -e '.dashboard.uid=="walera-overview" and (.dashboard.panels | length == 8) and ([.dashboard.panels[].targets[].datasource.uid] | all(. == "walera-prometheus"))' \
+  | jq -e '.dashboard.uid=="walera-overview" and (.dashboard.panels | length == 7) and ([.dashboard.panels[].targets[].datasource.uid] | all(. == "walera-prometheus"))' \
     >/dev/null 2>&1; then
-  pass "SC1.c walera-overview loads: uid match, 8 panels, every target.datasource.uid=walera-prometheus"
+  pass "SC1.c walera-overview loads: uid match, 7 panels, every target.datasource.uid=walera-prometheus"
 else
   fail "SC1.c walera-overview dashboard load or invariant failed"
   echo "${sc1_overview}" | jq '.dashboard.uid, (.dashboard.panels | length), ([.dashboard.panels[].targets[].datasource.uid] | unique)' 2>/dev/null | sed 's/^/      /'
@@ -260,8 +260,8 @@ info "===== SC3: failure-mode scripts + README (DOC-02 + DOC-03) ====="
 
 sc3_ok=1
 
-# SC3.a — all four scripts exist, are executable, and parse with `bash -n`.
-sc3_scripts=(fail-auth-breaker fail-slow-consumer fail-pg-restart fail-wal-lag)
+# SC3.a — all three scripts exist, are executable, and parse with `bash -n`.
+sc3_scripts=(fail-slow-consumer fail-pg-restart fail-wal-lag)
 for s in "${sc3_scripts[@]}"; do
   p="${FAILURE_MODES_DIR}/${s}.sh"
   if [[ -x "${p}" ]] && bash -n "${p}" 2>/dev/null; then
@@ -294,10 +294,9 @@ for s in "${sc3_scripts[@]}"; do
   fi
 done
 
-# SC3.d — README has the four DOC-02 failure-mode sections (distinctive
+# SC3.d — README has the three DOC-02 failure-mode sections (distinctive
 # phrases from the section headers; tolerant of small wording shifts).
 sc3_sections=(
-  'Auth circuit breaker trip'
   'Slow consumer disconnect'
   'PostgreSQL restart'
   'High WAL lag'

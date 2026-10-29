@@ -21,11 +21,10 @@
 #   # ...run the demo, then `git restore testbench/prometheus/alerts.yaml` to revert.
 #
 # The `--web.enable-lifecycle` flag in the compose command-line enables /-/reload.
-# Note: many alerts use `for: 1m` (breaker open, PG disconnected).
-# The breaker + PG-restart scenarios in Plan 09-03 are paced so these alerts can
-# fire within a demo window without changing `for:` at all — `1m` is left alone in
-# the sed recipe above to preserve that property when only the longer durations
-# need trimming.
+# Note: `WaleraPGDisconnected` uses `for: 1m`. The PG-restart scenario in
+# Plan 09-03 is paced so this alert can fire within a demo window without
+# changing `for:` at all — `1m` is left alone in the sed recipe above to
+# preserve that property when only the longer durations need trimming.
 
 groups:
   - name: walera.wal
@@ -55,16 +54,18 @@ groups:
   - name: walera.auth
     interval: 30s
     rules:
-      - alert: WaleraAuthBreakerOpen
-        expr: walera_auth_circuit_breaker_state == 1
-        for: 1m
+      - alert: WaleraAuthBackendUnavailable
+        expr: |
+          sum(rate(walera_auth_requests_total{result="unavailable"}[5m]))
+            / sum(rate(walera_auth_requests_total[5m])) > 0.05
+        for: 2m
         labels:
           severity: P1
           app: walera
           component: auth
         annotations:
-          summary: "Walera auth circuit breaker open"
-          description: "New SSE opens are rejected with 503; established streams drop with auth_unavailable after TTL + retries. Investigate auth backend logs."
+          summary: "Walera cannot reach the auth backend"
+          description: "More than 5% of auth backend calls (opens and refreshes) are unavailable. New SSE opens get 503; established streams drop with auth_unavailable once refresh retries run out."
 
   - name: walera.subscribers
     interval: 30s

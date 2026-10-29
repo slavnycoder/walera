@@ -25,16 +25,15 @@
 #        `articles`, `line_items`, `line_item_options`, `option_audits`) with
 #        `REPLICA IDENTITY DEFAULT`.
 #
-#   SC3: From a sibling container on the compose network, `curl -H
-#        'Authorization: Bearer demo-alice'
-#        http://mock-auth:9000/auth/permissions?channel=orders:1` returns a
-#        full-whitelist payload matching the v1.0 wire format; `demo-bob`
-#        returns a narrow whitelist; `demo-eve` returns wildcard-only.
+#   SC3: From a sibling container on the compose network, `POST
+#        mock-auth:9000/auth/sessions` with `Authorization: Bearer demo-alice`
+#        returns a full-whitelist payload; `demo-bob` returns a narrow
+#        whitelist; `demo-eve` returns wildcard-only.
 #
 #   SC4: `POST mock-auth/_admin/fail-on` flips the backend to 503 mode;
-#        `_admin/revoke?subject=demo-alice` causes Alice's next refresh to
-#        return 401 — verified by direct `curl` against the compose-internal
-#        network.
+#        `_admin/revoke?subject=demo-alice` causes Alice's next
+#        `POST /auth/sessions` to return 401 — verified by direct `curl`
+#        against the compose-internal network.
 #
 #   SC5: Inserting a `line_items` row in a transaction bumps `orders.updated_at`
 #        in the same transaction (root-bump trigger fires) — verified by
@@ -48,12 +47,10 @@
 #     The cold-start invariant is exercised at workflow level: the CI
 #     workflow boots from a clean compose state, so reaching smoke-05 at all
 #     means demo-up worked.
-#   - SC3/SC4 hit `POST /auth/sessions` (the v2.0 HMAC-refresh wire's
-#     bearer->whitelist exchange), NOT the retired v1.0 `GET /auth/permissions`
-#     endpoint. The ROADMAP quote below predates that wire change; the
-#     returned whitelist shape (user_id/tables/roots/ttl_seconds) is identical,
-#     so the SC3/SC4 assertions are unchanged in substance. The HMAC-signed
-#     `POST /auth/permissions` refresh path is left to the Go integration suite.
+#   - SC3/SC4 hit `POST /auth/sessions`, Walera's only auth-backend endpoint
+#     (open and every TTL refresh both call it with the client's own
+#     bearer/cookies). The returned whitelist shape
+#     (user_id/tables/roots/ttl_seconds) matches the ROADMAP quote below.
 #   - SC3 uses the mock-auth container itself (busybox `wget`) to curl
 #     itself over the compose-internal network. walera's distroless image
 #     ships neither curl nor wget, so we cannot exec from there. mock-auth
@@ -174,14 +171,9 @@ psql_q() {
 
 # mock-auth session-open helper — exec inside the mock-auth container so we hit
 # the compose-internal port (no host port published per BENCH-03). POSTs the
-# Bearer token + a JSON {"channel":...} body to /auth/sessions.
-#
-# This is the v2.0 HMAC-refresh wire: the user->whitelist exchange moved from
-# the v1.0 `GET /auth/permissions?channel=...` bearer endpoint to
-# `POST /auth/sessions`. The returned body is the same full-whitelist shape
-# (user_id/tables/roots/ttl_seconds). The HMAC-signed `POST /auth/permissions`
-# refresh path is NOT exercised here — computing HMAC-SHA256 from busybox wget
-# is impractical; that path is covered by the Go integration suite.
+# Bearer token + a JSON {"channel":...} body to /auth/sessions — the same
+# call Walera makes on open and again every TTL for refresh. Returns the
+# full-whitelist shape (user_id/tables/roots/ttl_seconds).
 mock_session() {
   local channel="$1" token="${2:-}"
   if [[ -n "${token}" ]]; then

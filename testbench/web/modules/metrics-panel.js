@@ -1,7 +1,7 @@
 // testbench/web/modules/metrics-panel.js — Plan 08-04
 //
 // Polls walera /metrics every 2 s, parses the Prometheus text format inline
-// (no external dep), and displays four headline values per UI-SPEC §3.6:
+// (no external dep), and displays three headline values per UI-SPEC §3.6:
 //
 //   subscribers_active           — sum(walera_routing_index_size{index_kind})
 //                                  (no single subscribers_active gauge exists
@@ -15,8 +15,6 @@
 //                                  sliding 10 s rate (/s); the prefix-less
 //                                  wal_tx_total mentioned in the plan does
 //                                  not exist on the actual surface
-//   auth_circuit_breaker_state   — walera_auth_circuit_breaker_state
-//                                  (gauge: 0/1/2) → closed | open | half-open
 //
 // Wire details:
 //   • Each poll uses AbortController so a stalled fetch is cancelled when the
@@ -27,7 +25,7 @@
 //   • Visibility-pause: the rAF flush is paused by app.js on hidden; here we
 //     additionally skip the polling iteration when document.visibilityState ===
 //     "hidden" so a backgrounded tab doesn't accumulate /metrics traffic.
-//   • Stale / errored states surface inline on the four <dd> values (UI-SPEC
+//   • Stale / errored states surface inline on the three <dd> values (UI-SPEC
 //     §3.6: "stale if last poll older than 6 s; errored if last response was
 //     non-2xx").
 //   • Counter-rate computation: 5-sample ring buffer (one per 2 s = 10 s
@@ -54,12 +52,6 @@ const STALE_THRESHOLD_MS = 6_000;    // UI-SPEC §3.6 — "stale if last poll > 
 // `+Inf / -Inf / NaN` that Prometheus emits for histogram extremes; the
 // previous loose char-class `[0-9eE+\-.]+` accepted garbage like `++.eE-`.
 const PROM_LINE_RE = /^([a-zA-Z_:][a-zA-Z0-9_:]*)(?:\{[^}]*\})?\s+([+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?|[+-]?Inf|NaN)(?:\s+\d+)?$/;
-
-const BREAKER_LABELS = {
-  0: "closed",
-  1: "open",
-  2: "half-open",
-};
 
 /**
  * Parses Prometheus text format into a flat { metricName: aggregatedValue } map.
@@ -130,7 +122,6 @@ export function mount(rootEl, deps) {
     ["subscribers_active",       "subscribers_active"],
     ["wal_lsn_lag_bytes",        "wal_lsn_lag_bytes"],
     ["wal_tx_total (/s)",        "wal_tx_total_rate"],
-    ["auth_breaker",             "auth_breaker"],
   ];
   for (const [label, slot] of rows) {
     const dt = document.createElement("dt");
@@ -245,17 +236,6 @@ export function mount(rootEl, deps) {
       }
     } else {
       slots["wal_tx_total_rate"].textContent = "\u2014";
-    }
-
-    // auth_circuit_breaker_state — gauge: 0/1/2 → label.
-    // Actual surface uses walera_auth_circuit_breaker_state; keep the
-    // unprefixed name as a fallback in case the metric is ever renamed.
-    let breaker = parsed["walera_auth_circuit_breaker_state"];
-    if (!Number.isFinite(breaker)) breaker = parsed["auth_circuit_breaker_state"];
-    if (Number.isFinite(breaker) && BREAKER_LABELS[breaker] !== undefined) {
-      slots["auth_breaker"].textContent = BREAKER_LABELS[breaker];
-    } else {
-      slots["auth_breaker"].textContent = "\u2014";
     }
   }
 

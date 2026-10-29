@@ -16,8 +16,7 @@ USER mockauth
 EXPOSE 9000
 
 # Healthcheck — GET /_health honors FAIL_MODE; flipping FAIL_MODE flips the
-# container's docker-reported health (basis for Phase 06's breaker-trip demo).
-# Auth-protected paths use HMAC; the public liveness endpoint does not.
+# container's docker-reported health and POST /auth/sessions' response.
 HEALTHCHECK --interval=2s --timeout=2s --retries=15 \
     CMD python -c "import urllib.request, sys; sys.exit(0 if urllib.request.urlopen('http://localhost:9000/_health', timeout=1).status == 200 else 1)"
 

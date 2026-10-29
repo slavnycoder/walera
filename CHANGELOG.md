@@ -68,6 +68,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   by `shutdown.deadline`. Old configs that still set the key are ignored.
 - `POST /sse/v1/refresh` and `walera_refresh_ondemand_total`. Clients whose
   token expires reconnect with a fresh one.
+- Testbench follows the single-endpoint auth contract: mock-auth drops the
+  HMAC refresh endpoint, and the breaker failure-mode script, panels and
+  alert are removed.
 
 ## [2.2.0] - 2026-06-08
 

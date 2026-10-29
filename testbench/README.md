@@ -118,7 +118,6 @@ ephemeral; to persist a panel change, export the JSON model and commit it.
 | Subscribers active                 | `sum by (type) (walera_subscribers_active)`                                                                           | Active SSE clients by `type` label (`exact` / `wildcard`). |
 | WAL LSN lag                        | `walera_wal_lsn_lag_bytes`                                                                                            | Distance between PG's current LSN and walera's flushed LSN. |
 | WAL tx rate                        | `rate(walera_wal_tx_size_changes_count[10s])`                                                                         | Decoded commits per second.                                 |
-| Auth circuit breaker state         | `walera_auth_circuit_breaker_state`                                                                                   | 0=Closed (normal), 1=Open (failing), 2=HalfOpen (probing). |
 | Fan-out histogram                  | `sum by (le) (rate(walera_routing_fan_out_bucket[1m]))`                                                               | Distribution of subscribers matched per tx.                |
 | Route-lookup p99                   | `histogram_quantile(0.99, rate(walera_route_lookup_duration_seconds_bucket[1m]))`                                     | Tail latency of the per-tx index lookup.                   |
 | Tx dropped by reason               | `sum by (reason) (rate(walera_tx_dropped_total[10s]))`                                                                | Drops stacked by reason: `slow_consumer`, `tx_too_large`, `multi_root`. |
@@ -137,9 +136,12 @@ description for the deferral note.
 
 ## Failure-mode run-book (DOC-02)
 
-Each scenario has an **automated** one-liner that self-verifies its expected
-metric reaction in under 90s. The **manual recipe** is provided so an operator
-understands what the script does. Every metric name below comes from
+Three of the four scenarios have an **automated** one-liner that self-verifies
+its expected metric reaction in under 90s; the auth backend outage below is
+manual-recipe only (there is no single state gauge to poll for — the signal
+is the unavailable-call ratio, best read off Grafana/Prometheus). The
+**manual recipe** is provided for every scenario so an operator understands
+what each script does. Every metric name below comes from
 `internal/metrics/registry.go` verbatim (no router-namespace typos — the real
 metric families are `walera_routing_*` and `walera_route_lookup_*`).
 
@@ -148,54 +150,47 @@ metric families are `walera_routing_*` and `walera_route_lookup_*`).
 > neither `curl` nor `wget`, so going through the mock-auth python:alpine
 > derivative is the only path that works.
 
-### (a) Auth circuit breaker trip + recover (AUTH-04)
+### (a) Auth backend outage (AUTH-04)
 
-**Contract demonstrated.** Bounded fail-open / fail-closed semantics: when the
-auth backend fails >50% over the breaker's rolling window, the breaker opens;
-new subscription opens fail-closed, existing subscriptions remain authenticated
-until their TTL expires. When auth recovers, half-open trial successes close
-the breaker.
-
-**Automated.**
-```bash
-bash testbench/scripts/failure-modes/fail-auth-breaker.sh
-```
+**Contract demonstrated.** Walera calls a single endpoint, `POST
+/auth/sessions`, on open and again every TTL with the client's own
+bearer/cookies. When the auth backend is down, new SSE opens get `503`, and
+established streams drop with `auth_unavailable` once their periodic refresh
+exhausts its retries.
 
 **Manual recipe.**
 ```bash
-# 1. Trip the breaker by making mock-auth return 500 to every /auth/permissions.
+# 1. Make mock-auth return 500 to every POST /auth/sessions.
 #    Note: busybox wget (python:alpine) lacks --method=POST; the canonical
 #    busybox idiom is --post-data='' (empty body POST). Use 127.0.0.1 so the
 #    v4 bind always wins over a potentially broken `localhost` AAAA lookup.
 docker compose -f testbench/docker-compose.yml exec -T mock-auth \
   wget -q -O- --post-data='' http://127.0.0.1:9000/_admin/fail-on
 
-# 2. Drive enough new SSE opens that walera's auth client trips the breaker
-#    (a clean way: open 20 short SSE clients over ~20s — each open triggers
-#     an auth call that now fails 500):
-for i in $(seq 1 20); do
-  curl -sN --max-time 1 -H "Authorization: Bearer demo-alice" \
-    -H "Origin: http://localhost:8081" \
-    "http://127.0.0.1:8080/sse/v1/orders/${i}" >/dev/null 2>&1 || true
-done
+# 2. New SSE opens now fail closed:
+curl -sN --max-time 1 -o /dev/null -w '%{http_code}\n' \
+  -H "Authorization: Bearer demo-alice" \
+  -H "Origin: http://localhost:8081" \
+  "http://127.0.0.1:8080/sse/v1/orders/1"
 
-# 3. Observe the breaker open in Grafana → walera-overview → "Auth circuit
-#    breaker state" panel (value transitions 0 → 1 within ~30s).
-curl 'http://127.0.0.1:9090/api/v1/query?query=walera_auth_circuit_breaker_state'
+# 3. Observe the unavailable-call ratio climb in Grafana or query Prometheus:
+curl 'http://127.0.0.1:9090/api/v1/query?query=walera_auth_requests_total{result="unavailable"}'
 
-# 4. Recover and watch the breaker close:
+# 4. Recover:
 docker compose -f testbench/docker-compose.yml exec -T mock-auth \
   wget -q -O- --post-data='' http://127.0.0.1:9000/_admin/fail-off
 ```
 
-**Expected metric reaction.** `walera_auth_circuit_breaker_state` transitions
-`0 → 1` (Closed → Open) within ~30s of the failure window filling, then
-`1 → 2 → 0` (Open → HalfOpen → Closed) within ~60s after fail-off.
+**Expected metric reaction.** New opens return `503` while fail-on is active;
+`walera_auth_requests_total{result="unavailable"}` increments on every call.
+Streams already open at TTL refresh time drop with `auth_unavailable` once
+their retries are exhausted.
 
 **Optional alert firing.** After running the documented sed recipe in
 `testbench/prometheus/alerts.yaml` (header) to shorten `for:` durations and
-issuing `POST /-/reload`, `WaleraAuthBreakerOpen` fires on the Prometheus
-`/alerts` page once the shortened threshold elapses.
+issuing `POST /-/reload`, `WaleraAuthBackendUnavailable` fires on the
+Prometheus `/alerts` page once the unavailable-call ratio exceeds 5% for the
+shortened threshold.
 
 ### (b) Slow consumer disconnect
 

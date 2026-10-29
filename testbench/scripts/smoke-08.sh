@@ -353,8 +353,8 @@ verify_sc3() {
 #   SC4.c — walera /metrics returns 200 with Timing-Allow-Origin reflected
 #            (UI-11 prerequisite for h2c probe + cross-origin metrics-panel).
 #   SC4.d — walera /metrics surface contains ≥3 of the headline metric
-#            families used by the metrics-panel (subscribers, lag, tx rate,
-#            breaker). Naming is environment-dependent — accept either the
+#            families used by the metrics-panel (subscribers, lag, tx rate).
+#            Naming is environment-dependent — accept either the
 #            walera_-prefixed or bare names per the 08-04 wire-name fix.
 # =============================================================================
 verify_sc4() {
@@ -447,7 +447,7 @@ verify_sc4() {
                     | awk '{print $1}' \
                     | sed 's/{.*//' \
                     | sort -u \
-                    | grep -cE '^(wal_tx_total|walera_wal_tx_size_changes_count|subscribers_active|wal_lsn_lag_bytes|walera_wal_lsn_lag_bytes|auth_circuit_breaker_state|walera_auth_circuit_breaker_state|walera_routing_index_size)$' \
+                    | grep -cE '^(wal_tx_total|walera_wal_tx_size_changes_count|subscribers_active|wal_lsn_lag_bytes|walera_wal_lsn_lag_bytes|walera_routing_index_size)$' \
                     ; } || true )
   headline_count="${headline_count:-0}"
   if (( headline_count >= 3 )); then
