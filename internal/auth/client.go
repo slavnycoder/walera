@@ -273,6 +273,11 @@ func (c *Client) sanitizeRequestID(requestID string) string {
 func (c *Client) doAndDecode(req *http.Request, requestID string) (*Whitelist, error) {
 	resp, err := c.hc.Do(req)
 	if err != nil {
+		// The backend timeout is http.Client.Timeout, which leaves the request
+		// context alone: a done context means the caller left, not an outage.
+		if req.Context().Err() != nil {
+			return nil, &ErrUnavailable{Cause: err}
+		}
 		c.mc.AuthRequests("unavailable").Inc()
 		c.log.Warn().
 			Str("auth_request_id", requestID).

@@ -24,10 +24,10 @@
 **Auth:**
 - `auth_requests_total{result}` (counter): `ok`, `4xx`, `5xx`, `timeout`.
 - `auth_request_duration_seconds` (histogram).
-- `auth_circuit_breaker_state` (gauge 0/1).
+- `auth_circuit_breaker_state` (gauge 0/1). — *removed 2026-10-28 with the circuit breaker; see [docs/auth.md](../docs/auth.md#backend-outage).*
 - `auth_refresh_total{result}` (counter).
 - `auth_map_changes_total{type}` (counter): `field_added`, `field_removed`, `table_removed`.
-- `auth_breaker_stale_subscribers` (gauge): subscribers whose last successful auth refresh is older than `1.5 × ttl_seconds`. Non-zero is expected during a breaker-open window ([§2.6](02-authorization.md#26-circuit-breaker)); non-zero **outside** a breaker-open window indicates a refresh-logic bug.
+- `auth_breaker_stale_subscribers` (gauge): subscribers whose last successful auth refresh is older than `1.5 × ttl_seconds`. Non-zero is expected during a breaker-open window ([§2.6](02-authorization.md#26-circuit-breaker)); non-zero **outside** a breaker-open window indicates a refresh-logic bug. — *removed 2026-10-28 with the circuit breaker; see [docs/auth.md](../docs/auth.md#backend-outage).*
 
 **Routing / index:**
 - `index_size` (gauge).
@@ -69,8 +69,8 @@ Levels:
 
 - `wal_lsn_lag_bytes > 100 MiB` for 5 min → **P1** (service falling behind WAL during the live session; sustained lag means the router/writers can't keep up with `pgoutput`).
 - `pg_connection_status == 0` for 1 min → **P1**.
-- `auth_circuit_breaker_state == 1` for 1 min → **P1** (bounded fail-open active; up to ~2min stale-permissions window — see [§2.6](02-authorization.md#26-circuit-breaker)).
-- `auth_breaker_stale_subscribers > 0 AND auth_circuit_breaker_state == 0` for 1 min → **P1** (subscribers operating with stale auth maps with no breaker reason — refresh logic is broken).
+- `auth_circuit_breaker_state == 1` for 1 min → **P1** (bounded fail-open active; up to ~2min stale-permissions window — see [§2.6](02-authorization.md#26-circuit-breaker)). — *removed 2026-10-28 with the circuit breaker; see [docs/auth.md](../docs/auth.md#backend-outage).*
+- `auth_breaker_stale_subscribers > 0 AND auth_circuit_breaker_state == 0` for 1 min → **P1** (subscribers operating with stale auth maps with no breaker reason — refresh logic is broken). — *removed 2026-10-28 with the circuit breaker; see [docs/auth.md](../docs/auth.md#backend-outage).*
 - `rate(subscriber_disconnects_total{reason="slow_consumer"}[5m]) > 10/min` → **P2**.
 - `rate(tx_dropped_total{reason="multi_root"}[5m]) > 0` → **P2** (backend bug: tx touches multiple root rows visible to one subscriber; see [§1.6](01-data-source-and-wal.md#16-entity-model)).
 - `process_open_fds / soft_limit > 0.8` → **P2**.

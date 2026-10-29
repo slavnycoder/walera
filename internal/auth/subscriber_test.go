@@ -838,3 +838,37 @@ func TestSubscriber_RefreshTick_IncrementsAuthRefreshMetric(t *testing.T) {
 		}
 	}
 }
+
+// A refresh cut short by the client disconnecting is silent: no warn log, no
+// refresh metric, no drop.
+func TestSubscriber_TryRefresh_CancelledContextIsSilent(t *testing.T) {
+	t.Parallel()
+	srv := newScriptServer(t, func(_ int64, w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(permissionsBody(t, map[string][]string{"orders": {"id"}}))
+	})
+	c, mc := newSubTestClient(t, srv.srv.URL)
+	var buf threadSafeBuf
+	s := newTestSubscriber(t, subscriberTestOpts{
+		Client:     c,
+		InitialMap: makeMap(t, 100, "id"),
+		Metrics:    mc,
+		Log:        zerolog.New(&buf),
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	s.tryRefresh(ctx)
+
+	if buf.Len() != 0 {
+		t.Errorf("log = %q; want nothing for a cancelled refresh", buf.String())
+	}
+	if got := gatherAuthRefreshCount(t, mc, "unavailable"); got != 0 {
+		t.Errorf("auth_refresh_total{unavailable} = %v; want 0", got)
+	}
+	select {
+	case <-s.Sub.Done():
+		t.Errorf("subscriber dropped with %q; want untouched", s.Sub.Reason())
+	default:
+	}
+}

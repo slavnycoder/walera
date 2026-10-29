@@ -441,3 +441,25 @@ func TestClient_New_PreTouchesAllResultLabels(t *testing.T) {
 		}
 	}
 }
+
+// A caller that went away (client disconnect) is not a backend failure: it
+// must not feed walera_auth_requests_total{result="unavailable"}.
+func TestClient_OpenSession_CallerCancelledNotCounted(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(validBody))
+	}))
+	t.Cleanup(srv.Close)
+	c, mc := newTestClient(t, srv.URL, time.Second)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := c.OpenSession(ctx, "tok", ForwardedAuth{}, "users:1", "req-1")
+	var ue *ErrUnavailable
+	if !errors.As(err, &ue) {
+		t.Fatalf("err = %v; want *ErrUnavailable", err)
+	}
+	if v := gatherCounter(t, mc, "walera_auth_requests_total", "result", "unavailable"); v != 0 {
+		t.Errorf("auth_requests_total{unavailable} = %v; want 0 for a cancelled caller", v)
+	}
+}

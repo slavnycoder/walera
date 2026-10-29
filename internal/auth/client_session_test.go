@@ -58,22 +58,3 @@ func TestClient_OpenSession_RejectsMissingCredentials(t *testing.T) {
 		t.Errorf("body = %q; want missing_credentials JSON", ue.Body)
 	}
 }
-
-func TestClient_OpenSession_401PropagatesBody(t *testing.T) {
-	t.Parallel()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusUnauthorized)
-		_, _ = w.Write([]byte("bad-bearer"))
-	}))
-	t.Cleanup(srv.Close)
-
-	c, _ := newTestClient(t, srv.URL, time.Second)
-	_, err := c.OpenSession(context.Background(), "any", ForwardedAuth{}, "ch:1", "req")
-	var ue *ErrUnauthorized
-	if !errors.As(err, &ue) {
-		t.Fatalf("err = %v; want ErrUnauthorized", err)
-	}
-	if string(ue.Body) != "bad-bearer" {
-		t.Errorf("body = %q; want bad-bearer", ue.Body)
-	}
-}

@@ -50,7 +50,7 @@ field-level whitelisting on the outgoing event stream.
   latency directly contributes to SSE time-to-first-event.
 - **Operational.** Backend outages need a defined posture; that
   posture lives in [ADR 0003](./0003-slow-client-policy.md) and the
-  circuit-breaker behavior described in [Auth](../auth.md#circuit-breaker-behavior).
+  fail-closed outage behavior described in [Auth](../auth.md#backend-outage).
 - **Operational.** The auth backend is a hard production dependency
   and must be sized against the SSE-open rate it will see.
 

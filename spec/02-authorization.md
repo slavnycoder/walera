@@ -75,7 +75,7 @@ Composite view (multi-table logical entity):
 
 **Per-subscriber fail-open on refresh failure is forbidden.** If a specific subscriber's refresh exhausts its retry budget, that subscriber is disconnected — regardless of whether other subscribers are operating normally. This closes the revocation race for the individual subscriber and is the default safety posture.
 
-A separate, **bounded** fail-open exists for systemic auth-backend outages, governed by the circuit breaker ([§2.6](#26-circuit-breaker)). The two cases are deliberately asymmetric:
+A separate, **bounded** fail-open exists for systemic auth-backend outages, governed by the circuit breaker ([§2.6](#26-circuit-breaker)). The two cases are deliberately asymmetric: (Superseded — see §2.6.)
 
 | Failure shape | Policy | Rationale |
 |---|---|---|
@@ -84,6 +84,11 @@ A separate, **bounded** fail-open exists for systemic auth-backend outages, gove
 | New connection during outage | **Fail-closed**: 503 to client | New opens are naturally rate-limited; no reason to accept them without auth confirmation |
 
 ## 2.6. Circuit breaker
+
+> **Superseded (2026-10-28).** Walera has no circuit breaker and no fail-open
+> window: refresh is fail-closed and re-calls `/auth/sessions`. Current
+> behavior: [docs/auth.md — Backend outage](../docs/auth.md#backend-outage).
+> The text below is kept as design history.
 
 The breaker bounds the systemic-outage fail-open in time. Track failure rate to the auth backend in a sliding window (e.g., 30s). If failure rate exceeds 50%, open the breaker:
 

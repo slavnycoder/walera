@@ -240,6 +240,9 @@ func (s *Subscriber) applyFetched(fresh *Whitelist, err error) attemptResult {
 func (s *Subscriber) tryRefresh(ctx context.Context) {
 	for attempt := 0; ; attempt++ {
 		fresh, err := s.client.OpenSession(ctx, s.bearer, s.fwd, s.channel, newRequestID())
+		if ctx.Err() != nil {
+			return // the stream is gone; nothing to refresh or report
+		}
 		s.recordRefreshResult(err)
 		if err != nil {
 			s.logRefreshError(err, attempt)

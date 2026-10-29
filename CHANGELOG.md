@@ -65,6 +65,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **No missed events right after connecting.** A subscriber is now
   registered before the first byte of the response is flushed, so a row
   written as soon as the client sees `200` is delivered.
+- **Client disconnects no longer count as auth-backend failures.** A
+  handshake or refresh abandoned because the client went away no longer
+  increments `walera_auth_requests_total{result="unavailable"}` or logs
+  `auth permission refresh failed`, so `WaleraAuthBackendUnavailable`
+  is not triggered by ordinary reconnect churn.
 
 ### Removed
 
