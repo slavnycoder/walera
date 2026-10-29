@@ -7,9 +7,8 @@
 #                outside compose.
 #
 # This file is intended for first-time evaluation: clone the repo, run `docker
-# compose up`, hit http://localhost:8080/healthz. It does NOT include the mock
-# auth backend, Prometheus, Grafana, or the load writer — for the full demo
-# stack, use `testbench/docker-compose.yml` (see README §Quick Start).
+# compose up`, hit http://localhost:8080/healthz. It does NOT include a mock
+# auth backend — wire your own auth.backend_url (see README §Quick Start).
 #
 # To run against your own Postgres instead of the bundled one, set
 # WALERA_DATABASE_URL in your shell and remove the `postgres` service block

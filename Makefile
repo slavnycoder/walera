@@ -1,4 +1,4 @@
-.PHONY: build test test-integration test-all lint vet clean docker k8s-deploy load-test perf-gate-baseline hooks deps-check config-check wal-stress lint-comments lint-comments-test comment-density comment-density-test check-changelog-date check-changelog-date-test
+.PHONY: build test test-integration test-all lint vet clean docker hooks deps-check config-check check-changelog-date check-changelog-date-test
 
 BINARY := cdc-sse
 CMD     := ./cmd/cdc-sse
@@ -106,46 +106,6 @@ config-check:
 	echo "$$bad"; \
 	exit 1
 
-# wal-stress runs the wal package under the race detector with a count=10
-# soak budget — lower than other soak targets because the wal package's
-# integration tests run testcontainers; 100 iterations would take hours.
-# Soak escalator only — standard `go test -race` already runs the wal tests
-# once; this target is NOT wired into CI. Note: this target runs
-# ./internal/wal (the unit test package) only. The testcontainers-backed
-# lifecycle tests live in ./test/integration and are soaked via
-# `make test-integration` directly.
-wal-stress:
-	go test -race -count=10 ./internal/wal
-
-# Banned-token comment lint for *.go sources. Enforces REQUIREMENTS.md
-# HYGIENE-04 (no GSD-planning tokens — plan IDs, phase IDs, ticket IDs,
-# PITFALL, etc. — in production Go comments) locally with the same script
-# the CI gate runs (`comment-hygiene` job in .github/workflows/checks.yml,
-# satisfying HYGIENE-05). The script restricts matching to Go comment
-# lines so string-literal hits (e.g. t.Skip("...follow-up...")) are
-# excluded. Exit 0 on clean, 1 on any hit.
-lint-comments:
-	@bash scripts/lint-comment-tokens.sh
-
-# Shell-level unit test for scripts/lint-comment-tokens.sh. Asserts exit
-# codes and annotation output against five synthetic fixtures (clean,
-# single-token, multi-token, non-.go-ignored, string-literal-ignored).
-lint-comments-test:
-	@bash scripts/lint-comment-tokens_test.sh
-
-# Per-package comment-to-code ratio gate (SWEEP-05). Default ceiling 30%.
-# Sweeps the four hot packages (internal/{sse,router,app,auth}) and exits
-# 1 if any package exceeds the ceiling. Mirrors lint-comments / lint-
-# comments-test: pure bash + awk + grep, no Go toolchain needed.
-comment-density:
-	@bash scripts/comment-density.sh --all
-
-# Shell-level unit test for scripts/comment-density.sh. Asserts exit
-# codes, --max-pct override, --json shape, *_test.go exclusion, and
-# --all multi-package behavior against eight synthetic fixtures.
-comment-density-test:
-	@bash scripts/comment-density_test.sh
-
 # CHANGELOG date-placeholder guard. Closes REQUIREMENTS.md RELEASE-02:
 # release.yml fails fast at tag-cut time on a residual `YYYY-MM-DD`
 # placeholder. The CI gate `changelog-date-test` in
@@ -168,37 +128,6 @@ check-changelog-date-test:
 docker:
 	docker build -t walera:dev .
 
-# Apply the kustomize-aggregated k8s manifests. Warns (but does not block) if
-# neither KUBECONFIG nor ~/.kube/config exists — kubectl will surface the
-# missing-config error on the next line, but the message we emit here is
-# more useful for first-time operators.
-k8s-deploy:
-	@if [ -z "$$KUBECONFIG" ] && [ ! -f $$HOME/.kube/config ]; then \
-	  echo "WARN: no KUBECONFIG and no ~/.kube/config; kubectl apply will likely fail"; \
-	fi
-	kubectl apply -k deploy/k8s/
-
-# Load-testing harness is post-MVP per D4-25 / PROJECT.md "Out of Scope".
-# The stub exists so `make help` (future) lists every planned target without
-# 404-ing the operator.
-load-test:
-	@echo "Load testing harness is post-MVP; see .planning/research/FEATURES.md"
-
 clean:
 	rm -f $(BINARY) *.test coverage.out coverage.html
 	rm -rf testbin
-
-# Phase 20 GATE-03: rebuild the perf-gate thresholds.yml from a fresh bench
-# capture on deeb007. Runs the FULL 5-minute Phase 19 benches (NOT the 90s
-# gate window), computes 20% safety-margin floors, writes the rewritten
-# YAML with refreshed captured/captured_commit metadata. The operator
-# reviews the PR diff before committing the new YAML. Optional
-# --regen-strace flag also re-runs the VAL-01 strace baseline:
-#   make perf-gate-baseline ARGS=--regen-strace
-# See scripts/perf-gate-regen.sh for the full contract.
-perf-gate-baseline:
-	@command -v docker >/dev/null 2>&1 || { \
-		echo "docker not found on PATH; perf-gate-baseline requires docker compose"; \
-		exit 1; \
-	}
-	bash scripts/perf-gate-regen.sh $(ARGS)

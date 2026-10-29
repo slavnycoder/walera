@@ -21,6 +21,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `wal_sender_timeout`. A standby write that cannot complete within 10s now
   fails instead of blocking the reader and shutdown.
 
+### Removed
+
+- **Load-testing and deployment scaffolding.** `testbench/`, `cmd/writer`,
+  `cmd/loadgen`, Go benchmarks, the perf gate, Kubernetes manifests,
+  Prometheus rule files and `docker-compose.dev.yaml` are gone, along with
+  the `testbench-smoke`, `bench-regression`, `flake-detect` and `coverage`
+  workflows and the comment-hygiene scripts. A runnable demo lives in the
+  separate `walera-demo` repository.
+
 ## [3.0.1] - 2026-10-29
 
 ### Fixed

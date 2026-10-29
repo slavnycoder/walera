@@ -11,23 +11,10 @@
 #   - test-race         go test -race -timeout 5m ./... (unit tests; no integration)
 #   - deps-check        make deps-check (Phase 6 target)
 #   - config-check      make config-check (Phase 8 target)
-#   - comment-hygiene   scripts/lint-comment-tokens.sh + scripts/comment-density.sh (HYGIENE-04/05, SWEEP-05)
 #   - changelog-date-test  scripts/check-changelog-date_test.sh (RELEASE-02)
 #
-# Integration tests:
-#   The full integration suite (`make test-integration`) is gated separately
-#   by `testbench-smoke.yml` because it requires Docker + testcontainers and
-#   exceeds the 10-minute PR-feedback budget on CI hardware. Two flaky
-#   integration tests (Test_SEC01_SlowReceiverDropped, Test06SlowConsumer)
-#   are quarantined via t.Skip; the same surface is covered by
-#   TestStream_SlowClientDoesNotStallOthers in internal/sse, which DOES
-#   run under test-race here.
-#
 # Relationship to existing workflows:
-#   - coverage.yml      per-package coverage gate (>= 85%); orthogonal.
-#   - perf-gate.yml     runtime perf regression check; orthogonal.
 #   - publish-image.yml multi-arch image push on `v*` tags; orthogonal.
-#   - testbench-smoke.yml compose-up integration smoke; orthogonal.
 #
 # Govulncheck cutoff: the workflow fails on ANY confirmed-affected
 # finding (rows where govulncheck prints "Your code is affected"). Pure
@@ -172,39 +159,6 @@ jobs:
 
       - name: make config-check
         run: make config-check
-
-  comment-hygiene:
-    name: comment-hygiene
-    runs-on: ubuntu-latest
-    timeout-minutes: 2
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: scripts/lint-comment-tokens.sh
-        # Pure bash + GNU grep -P; no setup-go required. The script emits
-        # ::error file=PATH,line=N,title=... annotations so failures
-        # surface inline in the PR diff. See REQUIREMENTS.md HYGIENE-04
-        # (no banned tokens in .go comments) and HYGIENE-05 (CI gate).
-        # Scoped to the packages swept for planning-ID hygiene to date
-        # (v2.1 hot-path set + v2.4 SWEEP-01..05 + testbench cleanup).
-        # The token pattern was widened in v2.4; legacy packages not yet
-        # swept (config, health, limits, metrics, wal, walconn)
-        # carry pre-existing planning IDs and are folded in by a future
-        # density/hygiene sweep rather than gated retroactively here.
-        run: |
-          bash scripts/lint-comment-tokens.sh internal/sse/
-          bash scripts/lint-comment-tokens.sh internal/router/
-          bash scripts/lint-comment-tokens.sh internal/app/
-          bash scripts/lint-comment-tokens.sh internal/auth/
-          bash scripts/lint-comment-tokens.sh internal/writer/
-          bash scripts/lint-comment-tokens.sh cmd/writer/
-          bash scripts/lint-comment-tokens.sh cmd/loadgen/
-
-      - name: scripts/comment-density.sh --all
-        # Per-package comment-to-code ratio gate, ceiling 30% (SWEEP-05).
-        # Sibling of lint-comment-tokens; both ride in the comment-hygiene
-        # job so a single required-check name covers both gates.
-        run: bash scripts/comment-density.sh --all
 
   changelog-date-test:
     name: changelog-date-test

@@ -24,7 +24,3 @@ linters:
           - errcheck
           - gosec
           - bodyclose
-      # Load-generation tooling, not part of the shipped service.
-      - path: '^(cmd/writer|cmd/loadgen|internal/writer)/'
-        linters:
-          - gosec

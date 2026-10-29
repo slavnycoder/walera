@@ -34,17 +34,12 @@ type Harness struct {
 type SpawnBinaryOption func(*spawnConfig)
 
 type spawnConfig struct {
-	writeTimeout        time.Duration
 	withoutPlaintextEnv bool
 	globalConcurrent    int
 	perUserConcurrent   int
 	forwardedCookies    []string
 	forwardedHeaders    []string
 	bootstrapAutoTables []string
-}
-
-func WithWriteTimeout(d time.Duration) SpawnBinaryOption {
-	return func(c *spawnConfig) { c.writeTimeout = d }
 }
 
 func WithoutPlaintextAllow() SpawnBinaryOption {
@@ -154,11 +149,6 @@ func SpawnBinary(t *testing.T, pgDSN, replicationDSN, mockAuthURL string, opts .
 		sc.perUserConcurrent = 10
 	}
 
-	writeTimeoutLine := ""
-	if sc.writeTimeout > 0 {
-		writeTimeoutLine = fmt.Sprintf("  write_timeout: %s\n", sc.writeTimeout)
-	}
-
 	// Forwarded-credential allowlists are nested under the auth: block. Each is
 	// emitted only when configured so the "feature off" path (nil slice) stays
 	// the default for every other scenario.
@@ -191,10 +181,9 @@ http:
   addr: %q
   cors_origins: []
   max_payload_bytes: 1048576
-%s
 router:
   exact_buffer: 16
-  wildcard_buffer: 1    # test-fixture knob — minimum-non-zero buffer so Test06/SlowConsumer triggers within a short burst even on hosts where loopback TCP backpressure is weak (see SpawnBinary doc comment). Production retains its tuned default.
+  wildcard_buffer: 1    # test-fixture knob — minimum-non-zero buffer so slow-consumer scenarios trigger within a short burst even on hosts where loopback TCP backpressure is weak (see SpawnBinary doc comment). Production retains its tuned default.
   max_changes_per_tx: 1000  # test-fixture: keeps large-tx test split behaviour (harness value, not production default)
   heartbeat_interval: 1s
 auth:
@@ -210,7 +199,7 @@ metrics:
   sample_interval: 1s
 shutdown:
   deadline: 5s
-`, pgDSN, bootstrapLines, addr, writeTimeoutLine, mockAuthURL, forwardedLines, sc.globalConcurrent, sc.perUserConcurrent)
+`, pgDSN, bootstrapLines, addr, mockAuthURL, forwardedLines, sc.globalConcurrent, sc.perUserConcurrent)
 
 	cfgFile := filepath.Join(t.TempDir(), "walera-test.yaml")
 	if err := os.WriteFile(cfgFile, []byte(cfg), 0o600); err != nil {
