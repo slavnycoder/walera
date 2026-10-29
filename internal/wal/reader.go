@@ -41,7 +41,7 @@ func (a *pgConnAdapter) ReceiveMessage(ctx context.Context) (pgproto3.BackendMes
 
 // standbyWriteTimeout bounds a standby update write: pglogrepl ignores ctx, so
 // a stuck socket would otherwise block the reader (and shutdown) forever.
-var standbyWriteTimeout = 10 * time.Second
+var standbyWriteTimeout = 5 * time.Second // below the 10 s shutdown cap
 
 func (a *pgConnAdapter) SendACK(ctx context.Context, ssu pglogrepl.StandbyStatusUpdate) error {
 	nc := a.conn.Conn()

@@ -47,7 +47,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Standby updates keep flowing under backpressure.** While the router is
   slow to accept a transaction, the WAL reader still reports its position,
   so PostgreSQL no longer drops the replication connection after
-  `wal_sender_timeout`. A standby write that cannot complete within 10s now
+  `wal_sender_timeout`. A standby write that cannot complete within 5s now
   fails instead of blocking the reader and shutdown.
 
 ### Removed
