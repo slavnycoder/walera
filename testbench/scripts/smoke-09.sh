@@ -171,6 +171,7 @@ else
   sc1_ok=0
 fi
 
+# 7 panels: the "Auth circuit breaker state" panel went away with the breaker (2026-10-28).
 # SC1.c — walera-overview dashboard: UID + 7 panels + every target pins to walera-prometheus.
 sc1_overview="$(curl -fsS "${GRAFANA_BASE_URL}/api/dashboards/uid/walera-overview" 2>/dev/null || true)"
 if echo "${sc1_overview}" \

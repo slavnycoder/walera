@@ -91,6 +91,7 @@ func NewHarness(t *testing.T, opts ...SpawnBinaryOption) *Harness {
 	pg := NewPG(t)
 	auth := NewMockAuth(t)
 	bin := SpawnBinary(t, pg.DSN, pg.ReplicationDSN(), auth.URL(), opts...)
+	pg.WaitForActiveSlot(t, "walera_test", 15*time.Second)
 	client := NewClient(bin.BaseURL())
 
 	return &Harness{

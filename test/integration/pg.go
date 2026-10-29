@@ -164,3 +164,32 @@ func (p *PG) ReplicationDSN() string {
 	u.RawQuery = q.Encode()
 	return u.String()
 }
+
+// WaitForActiveSlot blocks until Walera's replication slot is streaming, so
+// rows a test writes afterwards are always captured. Walera starts its HTTP
+// listener concurrently with slot creation.
+func (p *PG) WaitForActiveSlot(t *testing.T, prefix string, deadline time.Duration) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), deadline)
+	defer cancel()
+	conn, err := pgx.Connect(ctx, p.DSN)
+	if err != nil {
+		t.Fatalf("WaitForActiveSlot: connect: %v", err)
+	}
+	defer conn.Close(context.Background()) //nolint:errcheck
+	for {
+		var active bool
+		err := conn.QueryRow(ctx,
+			"SELECT EXISTS(SELECT 1 FROM pg_replication_slots WHERE slot_name LIKE $1 AND active)",
+			prefix+"%",
+		).Scan(&active)
+		if err == nil && active {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("replication slot %s* not active within %v (last err: %v)", prefix, deadline, err)
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+}

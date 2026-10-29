@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -115,6 +116,56 @@ func Test04AuthLifecycle(t *testing.T) {
 			}
 		}
 		t.Fatalf("did not observe auth_revoked within budget; stderr:\n%s", h.Binary.Stderr())
+	})
+
+	// An auth-backend outage is fail-closed on both paths: a live stream is
+	// dropped with auth_unavailable once its refresh retries run out, and a
+	// new handshake gets 503.
+	t.Run("Backend_Outage_FailsClosed", func(t *testing.T) {
+		t.Parallel()
+		h := NewHarness(t)
+		h.Auth.SetMap("test-token", "test-user", []string{"users"},
+			map[string][]string{"users": {"id"}})
+		if err := h.Auth.SetTTL("test-token", 1); err != nil {
+			t.Fatalf("SetTTL: %v", err)
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+		defer cancel()
+		events, errCh, closeFn := h.Client.Connect(ctx, "users/42", "test-token")
+		defer closeFn()
+
+		h.Auth.FailMode(true)
+
+		// First refresh within ~1.5s, then retries after 1s, 3s and 9s.
+		deadline := time.After(30 * time.Second)
+	wait:
+		for {
+			select {
+			case ev, ok := <-events:
+				if !ok {
+					t.Fatalf("events closed before auth_unavailable; stderr:\n%s", h.Binary.Stderr())
+				}
+				if ev.Type == "error" {
+					if !strings.Contains(string(ev.Data), "auth_unavailable") {
+						t.Fatalf("error event = %s; want auth_unavailable", ev.Data)
+					}
+					break wait
+				}
+			case err := <-errCh:
+				t.Fatalf("client error before auth_unavailable: %v", err)
+			case <-deadline:
+				t.Fatalf("no auth_unavailable within 30s; stderr:\n%s", h.Binary.Stderr())
+			}
+		}
+
+		status, retryAfter := rawHandshake(ctx, h.Binary.BaseURL(), "users/42", "test-token")
+		if status != http.StatusServiceUnavailable {
+			t.Fatalf("handshake during outage: status = %d; want 503", status)
+		}
+		if retryAfter == "" {
+			t.Error("503 during outage without Retry-After")
+		}
 	})
 
 	t.Run("Reject_Forbidden_NotAllowed", func(t *testing.T) {
