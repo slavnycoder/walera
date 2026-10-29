@@ -180,8 +180,10 @@ Error reasons:
   After every reconnect, reload state from your API, then apply new frames.
 - **Gaps on replication reconnect.** If the replication connection drops,
   Walera reconnects with a fresh temporary slot. Transactions committed in
-  between are not delivered, and open streams are not told. Watch
-  `walera_pg_connection_status`.
+  between are not delivered, and open streams are not told. Every such
+  reconnect logs `WAL reader: transient error; reconnecting` (warn); alert
+  on that line. `walera_pg_connection_status` is sampled every 5 s and can
+  miss a short reconnect.
 
 A row subscriber receives a transaction when it touches that row. The frame
 then also carries the transaction's other changes in the `public` schema that
