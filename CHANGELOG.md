@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.0.0] - 2026-10-29
+
 ### Security
 
 - **Go 1.26.10, pgx v5.9.2, golang.org/x/text v0.41.0.** Fixes the
