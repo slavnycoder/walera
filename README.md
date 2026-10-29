@@ -66,7 +66,7 @@ command-line configuration.
 
 | Variable | Required | Default | Meaning |
 | --- | --- | --- | --- |
-| `WALERA_DATABASE_URL` | yes | | PostgreSQL URL, e.g. `postgres://walera:secret@db:5432/app`. Walera adds `replication=database` itself for the replication connection. |
+| `WALERA_DATABASE_URL` | yes | | PostgreSQL URL (`postgres://` or `postgresql://`; the key=value form is not accepted), e.g. `postgres://walera:secret@db:5432/app`. Walera adds `replication=database` itself for the replication connection. |
 | `WALERA_AUTH_URL` | yes | | Base URL of your auth backend; Walera calls `<url>/auth/sessions`. Must be `https://` unless `WALERA_AUTH_ALLOW_PLAINTEXT=1`. |
 | `WALERA_ADDR` | no | `:8080` | Listen address for SSE, health and metrics. |
 | `WALERA_PUBLICATION` | no | `walera_pub` | Name of the publication to stream. An unquoted identifier (`[A-Za-z_][A-Za-z0-9_]{0,62}`), not `walera` (the slot name prefix). |

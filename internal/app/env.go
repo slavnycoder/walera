@@ -70,7 +70,7 @@ func LoadFromEnv(environ []string) (*AppConfig, error) {
 	}
 
 	// DeriveDSNs reports a missing WALERA_DATABASE_URL itself.
-	admin, repl, err := wal.DeriveDSNs(env["WALERA_DATABASE_URL"]) // redacts the DSN in its errors
+	admin, repl, err := wal.DeriveDSNs(env["WALERA_DATABASE_URL"]) // never echoes the DSN
 	if err != nil {
 		errs = append(errs, err)
 	}

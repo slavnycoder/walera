@@ -67,8 +67,8 @@ func TestDeriveDSNs(t *testing.T) {
 		if !strings.Contains(err.Error(), "WALERA_DATABASE_URL") {
 			t.Errorf("err = %q; want substring 'WALERA_DATABASE_URL'", err.Error())
 		}
-		if !strings.Contains(err.Error(), "DSN parse failed") {
-			t.Errorf("err = %q; want substring 'DSN parse failed'", err.Error())
+		if !strings.Contains(err.Error(), "is not a valid PostgreSQL URL") {
+			t.Errorf("err = %q; want substring 'is not a valid PostgreSQL URL'", err.Error())
 		}
 		if strings.Contains(err.Error(), "topsecret") {
 			t.Errorf("err leaks password: %s", err.Error())

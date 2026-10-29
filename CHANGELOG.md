@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`FOR TABLES IN SCHEMA` publications are refused.** On PostgreSQL 15+
   such a publication streams every table in the schema, including tables
   added later; Walera now fails startup on it, like `FOR ALL TABLES`.
+- **`WALERA_DATABASE_URL` never appears in errors.** It must be a
+  `postgres://` or `postgresql://` URL; the key=value form, which could
+  carry the password into a startup log, is refused. An invalid URL is
+  reported by variable name only, without the URL or the parser's message.
 
 ### Changed
 

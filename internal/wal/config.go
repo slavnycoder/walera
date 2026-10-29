@@ -74,18 +74,21 @@ func (w Config) NewSlotName(hostname string, pid int) SlotName {
 	return SlotName(fmt.Sprintf("%s_%s_%d", w.SlotNamePrefix, b.String(), pid))
 }
 
+// DeriveDSNs splits WALERA_DATABASE_URL into the admin and replication DSNs.
+// Its errors never contain the DSN or pgx's error text: both can carry the
+// password (userinfo or a password= query parameter).
 func DeriveDSNs(base string) (walconn.AdminDSN, walconn.ReplicationDSN, error) {
 	if base == "" {
 		return "", "", errors.New("WALERA_DATABASE_URL is required")
 	}
+	if !strings.HasPrefix(base, "postgres://") && !strings.HasPrefix(base, "postgresql://") {
+		return "", "", errors.New("WALERA_DATABASE_URL must be a postgres:// URL; see README.md#configuration")
+	}
+	invalid := config.FormatError("WALERA_DATABASE_URL", "",
+		"is not a valid PostgreSQL URL (bad host/port/option)", "see README.md#configuration")
 	adminURL, err := url.Parse(base)
 	if err != nil {
-		return "", "", config.FormatError(
-			"WALERA_DATABASE_URL",
-			config.RedactDSN(base),
-			"DSN parse failed: invalid URL",
-			"see README.md#configuration",
-		)
+		return "", "", invalid
 	}
 	adminQuery := adminURL.Query()
 	for key := range adminQuery {
@@ -97,20 +100,10 @@ func DeriveDSNs(base string) (walconn.AdminDSN, walconn.ReplicationDSN, error) {
 	admin := adminURL.String()
 
 	if _, err := pgconn.ParseConfig(base); err != nil {
-		return "", "", config.FormatError(
-			"WALERA_DATABASE_URL",
-			config.RedactDSN(base),
-			"DSN parse failed: "+err.Error(),
-			"see README.md#configuration",
-		)
+		return "", "", invalid
 	}
 	if _, err := pgconn.ParseConfig(admin); err != nil {
-		return "", "", config.FormatError(
-			"WALERA_DATABASE_URL",
-			config.RedactDSN(admin),
-			"DSN parse failed: "+err.Error(),
-			"see README.md#configuration",
-		)
+		return "", "", invalid
 	}
 	u := *adminURL
 	q := u.Query()

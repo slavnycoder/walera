@@ -83,14 +83,45 @@ func TestLoadFromEnv_RejectsUnknownVars(t *testing.T) {
 }
 
 func TestLoadFromEnv_InvalidDSNRedactsPassword(t *testing.T) {
-	env := baseEnv()
-	env[0] = "WALERA_DATABASE_URL=postgres://walera:s3cret@db:notaport/app"
-	_, err := LoadFromEnv(env)
-	if err == nil {
-		t.Fatal("err = nil; want invalid DSN error")
+	for _, dsn := range []string{
+		"postgres://walera:s3cret@db:notaport/app",
+		"postgres://walera@db:99999999/app?password=s3cret",
+		"postgresql://walera@db/app?password=s3cret&sslmode=bogus",
+		"host=db user=walera password=s3cret dbname=app",
+		"mysql://walera:s3cret@db/app",
+	} {
+		t.Run(dsn, func(t *testing.T) {
+			env := baseEnv()
+			env[0] = "WALERA_DATABASE_URL=" + dsn
+			_, err := LoadFromEnv(env)
+			if err == nil {
+				t.Fatal("err = nil; want invalid DSN error")
+			}
+			if strings.Contains(err.Error(), "s3cret") {
+				t.Fatalf("err = %q; leaked password", err)
+			}
+			if !strings.Contains(err.Error(), "WALERA_DATABASE_URL") {
+				t.Fatalf("err = %q; want the variable named", err)
+			}
+		})
 	}
-	if strings.Contains(err.Error(), "s3cret") {
-		t.Fatalf("err = %q; leaked password", err)
+}
+
+func TestLoadFromEnv_DSNRequiresPostgresScheme(t *testing.T) {
+	for _, dsn := range []string{"host=db user=walera dbname=app", "mysql://db/app", "db:5432/app"} {
+		env := baseEnv()
+		env[0] = "WALERA_DATABASE_URL=" + dsn
+		_, err := LoadFromEnv(env)
+		if err == nil || !strings.Contains(err.Error(), "WALERA_DATABASE_URL must be a postgres:// URL") {
+			t.Fatalf("%q: err = %v; want scheme error", dsn, err)
+		}
+	}
+	for _, dsn := range []string{"postgres://db/app", "postgresql://db/app"} {
+		env := baseEnv()
+		env[0] = "WALERA_DATABASE_URL=" + dsn
+		if _, err := LoadFromEnv(env); err != nil {
+			t.Fatalf("%q: %v", dsn, err)
+		}
 	}
 }
 
