@@ -197,22 +197,17 @@ generated indirection layer, wire-tax types like `MainHTTPServer` and
 inside `NewBreaker`, and a reserved-for-future `ctx` parameter on
 `InitializeApp` — outweighed the gate it provided.
 
-At the time wire was removed, the DI-03 cycle appeared as three
-explicit, sequential lines at the call site — visible to anyone
-reading `initialize.go`, rather than hidden inside a constructor's
-post-init hook:
+When wire was removed the DI-03 cycle (`auth.New` → `NewBreaker` →
+`SetBreaker`) sat as three explicit lines at the call site. The circuit
+breaker itself was removed on 2026-10-28 (refresh is now fail-closed and
+simply re-calls `/auth/sessions` with the client's own credentials — see
+[ADR 0002](./adr/0002-auth-model.md#amendment-2026-10-28)), so `wireAuth`
+no longer has a cycle to break. The entire auth-client wiring step in
+`initialize.go` is now:
 
 ```go
-authClient := auth.New(cfg.Auth, auth.Deps{Breaker: nil, ...})
-breaker := auth.NewBreaker(cfg.Auth.Breaker, auth.BreakerDeps{Prober: authClient, ...})
-authClient.SetBreaker(breaker) // init-only; guarded by sync.Once
+authClient := auth.New(cfg.Auth, auth.Deps{Logger: logger, Metrics: registry})
 ```
-
-The circuit breaker itself was removed on 2026-10-28 (refresh is now
-fail-closed and simply re-calls `/auth/sessions` with the client's own
-credentials — see [ADR 0002](./adr/0002-auth-model.md#amendment-2026-10-28)),
-so `wireAuth` no longer has a cycle to break: `authClient := auth.New(cfg.Auth, auth.Deps{Logger: logger, Metrics: registry})`
-is now the entire auth-client wiring step.
 
 Two contract changes that previously lived as `WR-03` / `WR-05`
 comment markers in the wire era are now encoded directly in the

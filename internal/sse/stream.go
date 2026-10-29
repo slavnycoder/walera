@@ -194,7 +194,7 @@ func (h *Handler) stream(w http.ResponseWriter, r *http.Request, sub *router.Sub
 			}
 			frames := [][]byte{frame}
 		batch:
-			for {
+			for len(frames) < queueCap {
 				select {
 				case f := <-queue:
 					frames = append(frames, f)

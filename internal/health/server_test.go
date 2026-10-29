@@ -19,9 +19,11 @@ import (
 
 type stubReader struct {
 	connected atomic.Bool
+	calls     atomic.Int64
 }
 
 func (s *stubReader) CheckPG(_ context.Context) error {
+	s.calls.Add(1)
 	if s.connected.Load() {
 		return nil
 	}
@@ -293,6 +295,15 @@ func TestStartReadinessProbe_UpdatesCacheOverTime(t *testing.T) {
 	st := s.readyCache.Load()
 	if st == nil || !st.healthy {
 		t.Fatalf("cache state = %+v; want healthy", st)
+	}
+
+	// The probe goroutine must stop after cancel; allow one in-flight probe.
+	cancel()
+	time.Sleep(30 * time.Millisecond)
+	after := r.calls.Load()
+	time.Sleep(100 * time.Millisecond)
+	if got := r.calls.Load(); got > after+1 {
+		t.Errorf("CheckPG calls grew %d -> %d after cancel; want probe stopped", after, got)
 	}
 }
 

@@ -62,8 +62,8 @@ Two config keys control this, both **name allowlists** (not values):
 
 | Key                       | Type       | Meaning                                                  |
 | ------------------------- | ---------- | -------------------------------------------------------- |
-| `auth.forwarded_cookies`  | `[]string` | Cookie names copied from the handshake to the open call. |
-| `auth.forwarded_headers`  | `[]string` | Header names copied from the handshake to the open call. |
+| `auth.forwarded_cookies`  | `[]string` | Cookie names copied from the handshake to the open and every refresh call. |
+| `auth.forwarded_headers`  | `[]string` | Header names copied from the handshake to the open and every refresh call. |
 
 Behavior:
 
@@ -210,7 +210,7 @@ a per-session correlation identifier.
 | `403`             | Token valid but not allowed for this channel.                                                   |
 | `404`             | Treated as revoked / not found.                                                                 |
 | `429`             | Backend rate limiting; treated as a transient denial. Surfaced to the client.                   |
-| `5xx` or timeout  | Treated as a transport failure. On open, returns `503`. On refresh, behavior depends on state.  |
+| `5xx` or timeout  | Treated as a transport failure. On open, returns `503`. On refresh, retried with backoff, then the stream drops with `auth_unavailable`. |
 
 On a background refresh, a `401`, `403`, `404`, or a `200` that drops
 the previously-allowed table disconnects the established stream with
