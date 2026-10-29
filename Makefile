@@ -1,4 +1,4 @@
-.PHONY: build test test-integration test-all lint vet clean docker hooks deps-check config-check check-changelog-date check-changelog-date-test
+.PHONY: build test test-integration test-all lint vet clean docker hooks deps-check check-changelog-date check-changelog-date-test
 
 BINARY := cdc-sse
 CMD     := ./cmd/cdc-sse
@@ -73,38 +73,6 @@ deps-check:
 		echo "deps-check: FAIL - internal/health imports auth, router, sse, or wal"; exit 1; \
 	fi; \
 	echo "deps-check: OK"
-
-# config-check greps the source tree for any literal naming a WALERA_-prefixed
-# dev-only env var (EXPERIMENTAL_, DEBUG_FORCE_, PLAN_) inside a Go file that
-# does NOT carry the `dev` build tag. The runtime guard in
-# internal/config/dev_guard.go refuses such env vars at load time; this
-# static check catches the case where source mentions the literal so the
-# intent is either build-tagged or removed before the binary is built.
-config-check: SHELL := /bin/bash
-config-check:
-	@set -euo pipefail; \
-	violations=$$(grep -rEn '"WALERA_(EXPERIMENTAL|DEBUG_FORCE|PLAN)_[A-Z0-9_]+"' \
-	    --include='*.go' \
-	    --exclude-dir=vendor \
-	    cmd/ internal/ test/ 2>/dev/null || true); \
-	if [ -z "$$violations" ]; then \
-	    echo "config-check: OK"; \
-	    exit 0; \
-	fi; \
-	bad=""; \
-	while IFS= read -r line; do \
-	    file=$$(echo "$$line" | cut -d: -f1); \
-	    if ! head -5 "$$file" | grep -q '^//go:build .*\bdev\b'; then \
-	        bad="$$bad$$line"$$'\n'; \
-	    fi; \
-	done <<< "$$violations"; \
-	if [ -z "$$bad" ]; then \
-	    echo "config-check: OK (all matches are in //go:build dev files)"; \
-	    exit 0; \
-	fi; \
-	echo "config-check: FAIL - dev-only env var literals in non-dev-build files:"; \
-	echo "$$bad"; \
-	exit 1
 
 # CHANGELOG date-placeholder guard. Closes REQUIREMENTS.md RELEASE-02:
 # release.yml fails fast at tag-cut time on a residual `YYYY-MM-DD`

@@ -73,7 +73,8 @@ func Test13SecHandshakeAdmission(t *testing.T) {
 	// stream frees the slot so a new one is admitted (no permanent lockout).
 	t.Run("PerUser_429_AndRelease", func(t *testing.T) {
 		t.Parallel()
-		h := NewHarness(t, WithPerUserConcurrent(3))
+		const perUser = 10 // limits.Defaults().PerUserConcurrentMax
+		h := NewHarness(t)
 		h.Auth.SetMap("test-token", "test-user", []string{"users"},
 			map[string][]string{"users": {"id"}})
 		if err := h.Auth.SetTTL("test-token", 60); err != nil {
@@ -82,8 +83,8 @@ func Test13SecHandshakeAdmission(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
-		closes := make([]func(), 0, 3)
-		for i := 1; i <= 3; i++ {
+		closes := make([]func(), 0, perUser)
+		for i := 1; i <= perUser; i++ {
 			_, ec, cf := h.Client.Connect(ctx, fmt.Sprintf("users/%d", i), "test-token")
 			select {
 			case err := <-ec:
@@ -98,23 +99,23 @@ func Test13SecHandshakeAdmission(t *testing.T) {
 			}
 		}()
 
-		// 4th concurrent stream for the same user → 429.
-		_, ec4, cf4 := h.Client.Connect(ctx, "users/4", "test-token")
-		defer cf4()
+		// One more concurrent stream for the same user → 429.
+		_, ecOver, cfOver := h.Client.Connect(ctx, fmt.Sprintf("users/%d", perUser+1), "test-token")
+		defer cfOver()
 		select {
-		case err := <-ec4:
+		case err := <-ecOver:
 			var he *HTTPError
 			if !errors.As(err, &he) || he.Status != http.StatusTooManyRequests {
-				t.Fatalf("4th stream: want 429 HTTPError, got %v", err)
+				t.Fatalf("stream %d: want 429 HTTPError, got %v", perUser+1, err)
 			}
 		case <-time.After(5 * time.Second):
-			t.Fatalf("4th stream neither streamed nor 429'd; stderr:\n%s", h.Binary.Stderr())
+			t.Fatalf("stream %d neither streamed nor 429'd; stderr:\n%s", perUser+1, h.Binary.Stderr())
 		}
 
 		// Release one slot → a new stream is admitted again.
 		closes[0]()
 		closes[0] = func() {}
-		waitForHandshakeOK(ctx, t, h, "users/5", "test-token", 5*time.Second)
+		waitForHandshakeOK(ctx, t, h, fmt.Sprintf("users/%d", perUser+2), "test-token", 5*time.Second)
 	})
 
 	// Holding the global semaphore at capacity returns 503 + Retry-After;

@@ -2,8 +2,7 @@
 #
 # Keep the build context minimal: only cmd/, internal/, go.mod, go.sum
 # need to enter the build stage. Everything else (planning docs, spec,
-# tests, deploy manifests, the local config.yaml with operator secrets,
-# Makefile, READMEs, build artefacts) is intentionally excluded.
+# tests, deploy manifests, Makefile, READMEs, build artefacts) is intentionally excluded.
 
 .git/
 .gitignore
@@ -25,11 +24,6 @@ Makefile
 # Deploy artefacts — k8s YAML / compose / prometheus rules are operator-side.
 deploy/
 docker-compose*.yaml
-
-# Operator-supplied runtime config — must be mounted into /etc/walera at
-# deploy time (k8s ConfigMap / docker-compose volume), NEVER baked into the
-# image. The Dockerfile's CMD points at /etc/walera/config.yaml.
-config.yaml
 
 # Build artefacts and coverage reports.
 cdc-sse

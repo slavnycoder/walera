@@ -17,7 +17,6 @@ import (
 )
 
 func main() {
-	configPath := flag.String("config", "./config.yaml", "path to config YAML file")
 	devLog := flag.Bool("dev-log", false, "enable human-readable console log output (stderr)")
 	healthcheckFlag := flag.Bool("healthcheck", false, "perform a single GET to /healthz on the local server and exit 0 if 200, 1 otherwise (for distroless container HEALTHCHECK)")
 	flag.Parse()
@@ -42,13 +41,11 @@ func main() {
 	}
 	defer undo()
 
-	cfg, err := app.LoadAppConfig(*configPath)
+	cfg, err := app.LoadFromEnv(os.Environ())
 	if err != nil {
 		logger.Fatal().Err(err).Msg("failed to load configuration")
 	}
-	if level, lvlErr := zerolog.ParseLevel(cfg.Log.Level); lvlErr != nil {
-		logger.Warn().Str("level", cfg.Log.Level).Msg("invalid log level; defaulting to info")
-	} else {
+	if level, lvlErr := zerolog.ParseLevel(cfg.Log.Level); lvlErr == nil { // LoadFromEnv validated it
 		logger = logger.Level(level)
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

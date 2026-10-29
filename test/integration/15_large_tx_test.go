@@ -55,8 +55,8 @@ func confirmedSlotDrained(t *testing.T, p *PG, prefix string, tolerance int64, d
 }
 
 // TestLargeTransactionBackpressure (WAL-05): one Postgres transaction with
-// 10 000 row changes must not wedge the pipeline. The harness caps
-// router.max_changes_per_tx at 1000, so the wildcard subscriber is dropped
+// 10 050 row changes must not wedge the pipeline. It exceeds the fixed
+// 10 000-change per-tx limit, so the wildcard subscriber is dropped
 // with an explicit tx_too_large error frame (never a silent truncation), the
 // replication slot still drains, and the service keeps serving new
 // subscribers.
@@ -77,7 +77,7 @@ func TestLargeTransactionBackpressure(t *testing.T) {
 	if err := h.PG.Exec(ctx, `
         INSERT INTO users (id, email, name)
         SELECT g + 10000, 'u' || g || '@x', repeat('n', 50)
-        FROM generate_series(1, 10000) g
+        FROM generate_series(1, 10050) g
     `); err != nil {
 		t.Fatalf("large insert: %v", err)
 	}
@@ -108,7 +108,7 @@ wait:
 		}
 	}
 
-	if lag, drained := confirmedSlotDrained(t, h.PG, "walera_test_", 4*1024, 15*time.Second); !drained {
+	if lag, drained := confirmedSlotDrained(t, h.PG, "walera_", 4*1024, 15*time.Second); !drained {
 		t.Errorf("slot never drained to <= 4 KiB lag (last=%d bytes after 15s)", lag)
 	}
 

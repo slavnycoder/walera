@@ -10,7 +10,7 @@ import (
 
 func runHealthcheckProbe() {
 	port := "8080"
-	if addr := os.Getenv("WALERA_HTTP_ADDR"); addr != "" {
+	if addr := os.Getenv("WALERA_ADDR"); addr != "" {
 		if i := strings.LastIndex(addr, ":"); i >= 0 && i+1 < len(addr) {
 			port = addr[i+1:]
 		}

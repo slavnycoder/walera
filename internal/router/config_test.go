@@ -5,22 +5,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/knadh/koanf/v2"
-
 	"github.com/walera/walera/internal/router"
 )
 
-func newK(t *testing.T) *koanf.Koanf {
-	t.Helper()
-	k := koanf.New(".")
-	router.ApplyDefaults(k)
-	return k
-}
-
-func TestLoadConfig_Defaults(t *testing.T) {
-	cfg, err := router.LoadConfig(newK(t))
-	if err != nil {
-		t.Fatalf("LoadConfig: %v", err)
+func TestDefaults(t *testing.T) {
+	cfg := router.Defaults()
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Defaults().Validate: %v", err)
 	}
 	if cfg.ExactBuffer != 64 {
 		t.Errorf("ExactBuffer = %d; want 64", cfg.ExactBuffer)
@@ -36,29 +27,20 @@ func TestLoadConfig_Defaults(t *testing.T) {
 	}
 }
 
-func TestLoadConfig_RejectsNonPositiveMaxChangesPerTx(t *testing.T) {
-	k := newK(t)
-	_ = k.Set("router.max_changes_per_tx", 0)
-	_, err := router.LoadConfig(k)
-	if err == nil || !strings.Contains(err.Error(), "router.max_changes_per_tx must be > 0") {
-		t.Fatalf("LoadConfig: err = %v; want max_changes_per_tx > 0", err)
+func TestValidate_RejectsNonPositive(t *testing.T) {
+	cases := map[string]func(*router.Config){
+		"router.exact_buffer must be > 0":       func(c *router.Config) { c.ExactBuffer = 0 },
+		"router.wildcard_buffer must be > 0":    func(c *router.Config) { c.WildcardBuffer = 0 },
+		"router.max_changes_per_tx must be > 0": func(c *router.Config) { c.MaxChangesPerTx = 0 },
+		"router.heartbeat_interval must be > 0": func(c *router.Config) { c.HeartbeatInterval = 0 },
 	}
-}
-
-func TestLoadConfig_RejectsNonPositiveExactBuffer(t *testing.T) {
-	k := newK(t)
-	_ = k.Set("router.exact_buffer", 0)
-	_, err := router.LoadConfig(k)
-	if err == nil || !strings.Contains(err.Error(), "router.exact_buffer must be > 0") {
-		t.Fatalf("LoadConfig: err = %v; want exact_buffer > 0", err)
-	}
-}
-
-func TestLoadConfig_RejectsNonPositiveHeartbeat(t *testing.T) {
-	k := newK(t)
-	_ = k.Set("router.heartbeat_interval", "0s")
-	_, err := router.LoadConfig(k)
-	if err == nil || !strings.Contains(err.Error(), "router.heartbeat_interval must be > 0") {
-		t.Fatalf("LoadConfig: err = %v; want heartbeat_interval > 0", err)
+	for want, mutate := range cases {
+		t.Run(want, func(t *testing.T) {
+			cfg := router.Defaults()
+			mutate(&cfg)
+			if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), want) {
+				t.Fatalf("Validate: err = %v; want %q", err, want)
+			}
+		})
 	}
 }

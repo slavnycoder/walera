@@ -44,4 +44,3 @@ COPY --from=build /out/cdc-sse /cdc-sse
 USER nonroot:nonroot
 EXPOSE 8080
 ENTRYPOINT ["/cdc-sse"]
-CMD ["--config", "/etc/walera/config.yaml"]

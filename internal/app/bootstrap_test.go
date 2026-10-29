@@ -170,80 +170,63 @@ func TestVerifyReplicationRoleUnit(t *testing.T) {
 	}
 }
 
-func TestBootstrapPublicationModes(t *testing.T) {
-	ctx := context.Background()
-	if err := bootstrapPublication(ctx, &fakeBootstrapDB{}, bootstrapConfig{Mode: "off", PublicationName: "pub"}, zerolog.Nop()); err != nil {
-		t.Fatalf("off: %v", err)
-	}
-
-	verifyOK := &fakeBootstrapDB{rowResults: []fakeRow{{values: []any{false}}, {values: []any{150004}}, {values: []any{false}}, {values: []any{2}}}}
-	if err := bootstrapPublication(ctx, verifyOK, bootstrapConfig{Mode: "verify", PublicationName: "pub"}, zerolog.Nop()); err != nil {
-		t.Fatalf("verify ok: %v", err)
-	}
-
-	verifyEmpty := &fakeBootstrapDB{rowResults: []fakeRow{{values: []any{false}}, {values: []any{150004}}, {values: []any{false}}, {values: []any{0}}}}
-	if err := bootstrapPublication(ctx, verifyEmpty, bootstrapConfig{Mode: "verify", PublicationName: "pub"}, zerolog.Nop()); err == nil {
-		t.Fatal("verify empty returned nil")
-	}
-
-	verifyMissing := &fakeBootstrapDB{rowResults: []fakeRow{{err: pgx.ErrNoRows}}}
-	err := bootstrapPublication(ctx, verifyMissing, bootstrapConfig{Mode: "verify", PublicationName: "pub"}, zerolog.Nop())
-	if err == nil || !strings.Contains(err.Error(), "does not exist") {
-		t.Fatalf("verify missing: err = %v; want 'does not exist'", err)
-	}
-
-	autoTables := &fakeBootstrapDB{rowResults: []fakeRow{{err: pgx.ErrNoRows}}}
-	if err := bootstrapPublication(ctx, autoTables, bootstrapConfig{Mode: "auto", PublicationName: "pub", Tables: []string{"public.a", "public.b"}}, zerolog.Nop()); err != nil {
-		t.Fatalf("auto tables: %v", err)
-	}
-	if len(autoTables.execSQL) != 1 || !strings.Contains(autoTables.execSQL[0], "FOR TABLE public.a, public.b") {
-		t.Fatalf("auto tables exec = %#v", autoTables.execSQL)
-	}
-
-	existing := &fakeBootstrapDB{
-		rowResults: []fakeRow{{values: []any{false}}, {values: []any{150004}}, {values: []any{false}}, {values: []any{1}}},
+func TestBootstrapPublication_ExistingIsVerified(t *testing.T) {
+	db := &fakeBootstrapDB{
+		rowResults: []fakeRow{{values: []any{false}}, {values: []any{150004}}, {values: []any{false}}, {values: []any{2}}},
 		queryRows:  []pgx.Rows{&fakeRows{values: [][]any{{"public.a"}}}},
 	}
-	if err := bootstrapPublication(ctx, existing, bootstrapConfig{Mode: "auto", PublicationName: "pub", Tables: []string{"public.a"}}, zerolog.Nop()); err != nil {
+	if err := bootstrapPublication(context.Background(), db, bootstrapConfig{PublicationName: "pub", Tables: []string{"public.a"}}, zerolog.Nop()); err != nil {
 		t.Fatalf("existing: %v", err)
 	}
-}
-
-// A pre-existing FOR ALL TABLES publication streams every table in the
-// database; both checking modes must refuse it, and auto must not touch it.
-func TestBootstrapPublication_RejectsAllTables(t *testing.T) {
-	ctx := context.Background()
-	for _, mode := range []string{"verify", "auto"} {
-		t.Run(mode, func(t *testing.T) {
-			db := &fakeBootstrapDB{rowResults: []fakeRow{{values: []any{true}}, {values: []any{42}}}}
-			err := bootstrapPublication(ctx, db, bootstrapConfig{Mode: mode, PublicationName: "pub", Tables: []string{"public.a"}}, zerolog.Nop())
-			if err == nil || !strings.Contains(err.Error(), "FOR ALL TABLES") {
-				t.Fatalf("err = %v; want FOR ALL TABLES rejection", err)
-			}
-			if len(db.execSQL) != 0 {
-				t.Fatalf("exec = %#v; want no DDL", db.execSQL)
-			}
-		})
+	if len(db.execSQL) != 0 {
+		t.Fatalf("exec = %#v; want no DDL for an existing publication", db.execSQL)
 	}
 }
 
-// A FOR TABLES IN SCHEMA publication (PG 15+) streams every table in the
-// schema, including future ones; both checking modes must refuse it.
-func TestBootstrapPublication_RejectsSchemaPublication(t *testing.T) {
-	ctx := context.Background()
-	for _, mode := range []string{"verify", "auto"} {
-		t.Run(mode, func(t *testing.T) {
-			db := &fakeBootstrapDB{rowResults: []fakeRow{
-				{values: []any{false}},  // puballtables
-				{values: []any{150004}}, // server_version_num
-				{values: []any{true}},   // has schema entries
-			}}
-			err := bootstrapPublication(ctx, db, bootstrapConfig{Mode: mode, PublicationName: "pub", Tables: []string{"public.a"}}, zerolog.Nop())
-			if err == nil || !strings.Contains(err.Error(), "FOR TABLES IN SCHEMA") {
-				t.Fatalf("err = %v; want FOR TABLES IN SCHEMA rejection", err)
-			}
-			if len(db.execSQL) != 0 {
-				t.Fatalf("exec = %#v; want no DDL", db.execSQL)
+func TestBootstrapPublication_ExistingWithoutTablesListIsVerified(t *testing.T) {
+	db := &fakeBootstrapDB{rowResults: []fakeRow{{values: []any{false}}, {values: []any{150004}}, {values: []any{false}}, {values: []any{2}}}}
+	if err := bootstrapPublication(context.Background(), db, bootstrapConfig{PublicationName: "pub"}, zerolog.Nop()); err != nil {
+		t.Fatalf("existing, no WALERA_TABLES: %v", err)
+	}
+}
+
+func TestBootstrapPublication_ExistingEmptyFails(t *testing.T) {
+	db := &fakeBootstrapDB{rowResults: []fakeRow{{values: []any{false}}, {values: []any{150004}}, {values: []any{false}}, {values: []any{0}}}}
+	err := bootstrapPublication(context.Background(), db, bootstrapConfig{PublicationName: "pub", Tables: []string{"public.a"}}, zerolog.Nop())
+	if err == nil || !strings.Contains(err.Error(), "has no tables") || len(db.execSQL) != 0 {
+		t.Fatalf("err = %v, exec = %#v; want no-tables error and no DDL", err, db.execSQL)
+	}
+}
+
+func TestBootstrapPublication_MissingIsCreatedFromTables(t *testing.T) {
+	db := &fakeBootstrapDB{rowResults: []fakeRow{{err: pgx.ErrNoRows}}}
+	if err := bootstrapPublication(context.Background(), db, bootstrapConfig{PublicationName: "pub", Tables: []string{"public.a", "public.b"}}, zerolog.Nop()); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if len(db.execSQL) != 1 || !strings.Contains(db.execSQL[0], "CREATE PUBLICATION pub FOR TABLE public.a, public.b") {
+		t.Fatalf("exec = %#v", db.execSQL)
+	}
+}
+
+func TestBootstrapPublication_MissingWithoutTables(t *testing.T) {
+	db := &fakeBootstrapDB{rowResults: []fakeRow{{err: pgx.ErrNoRows}}}
+	err := bootstrapPublication(context.Background(), db, bootstrapConfig{PublicationName: "pub"}, zerolog.Nop())
+	if err == nil || !strings.Contains(err.Error(), "WALERA_TABLES") || !strings.Contains(err.Error(), "does not exist") {
+		t.Fatalf("err = %v; want missing-publication error naming WALERA_TABLES", err)
+	}
+}
+
+func TestBootstrapPublication_RejectsWideningPublications(t *testing.T) {
+	cases := map[string][]fakeRow{
+		"FOR ALL TABLES":       {{values: []any{true}}},
+		"FOR TABLES IN SCHEMA": {{values: []any{false}}, {values: []any{150004}}, {values: []any{true}}},
+	}
+	for want, rows := range cases {
+		t.Run(want, func(t *testing.T) {
+			db := &fakeBootstrapDB{rowResults: rows}
+			err := bootstrapPublication(context.Background(), db, bootstrapConfig{PublicationName: "pub", Tables: []string{"public.a"}}, zerolog.Nop())
+			if err == nil || !strings.Contains(err.Error(), want) || len(db.execSQL) != 0 {
+				t.Fatalf("err = %v, exec = %#v; want %s rejection and no DDL", err, db.execSQL, want)
 			}
 		})
 	}
@@ -258,35 +241,6 @@ func TestPublicationHasSchemas_PG14Skips(t *testing.T) {
 	}
 	if len(db.rowResults) != 0 {
 		t.Fatalf("unused rows %d; want exactly one query (version)", len(db.rowResults))
-	}
-}
-
-func TestBootstrapEnsureRoleUnit(t *testing.T) {
-	ctx := context.Background()
-	db := &fakeBootstrapDB{rowResults: []fakeRow{{values: []any{false}}}}
-	bootstrapEnsureRole(ctx, db, "postgres://repl:pa%27ss@host/db", true, zerolog.Nop())
-	if len(db.execSQL) != 1 || !strings.Contains(db.execSQL[0], "CREATE ROLE repl WITH LOGIN REPLICATION PASSWORD 'pa''ss'") {
-		t.Fatalf("replication role exec = %#v", db.execSQL)
-	}
-
-	admin := &fakeBootstrapDB{rowResults: []fakeRow{{values: []any{false}}}}
-	bootstrapEnsureRole(ctx, admin, "postgres://admin:pw@host/db", false, zerolog.Nop())
-	if len(admin.execSQL) != 2 || !strings.Contains(admin.execSQL[0], "CREATE ROLE admin WITH LOGIN PASSWORD 'pw'") || !strings.Contains(admin.execSQL[1], "GRANT pg_monitor TO admin") {
-		t.Fatalf("admin role exec = %#v", admin.execSQL)
-	}
-
-	existing := &fakeBootstrapDB{rowResults: []fakeRow{{values: []any{true}}}}
-	bootstrapEnsureRole(ctx, existing, "postgres://admin:pw@host/db", false, zerolog.Nop())
-	if len(existing.execSQL) != 0 {
-		t.Fatalf("existing role exec = %#v", existing.execSQL)
-	}
-
-	for _, dsn := range []string{"%", "postgres://bad-name:pw@host/db", "postgres://nopw@host/db", "postgres://admin:bad%5Cpw@host/db"} {
-		db := &fakeBootstrapDB{rowResults: []fakeRow{{values: []any{false}}}}
-		bootstrapEnsureRole(ctx, db, dsn, false, zerolog.Nop())
-		if len(db.execSQL) != 0 {
-			t.Fatalf("dsn %q exec = %#v", dsn, db.execSQL)
-		}
 	}
 }
 
@@ -310,7 +264,6 @@ func TestBootstrapVerifyTablesUnit(t *testing.T) {
 func TestPrepareDatabaseUnit(t *testing.T) {
 	ctx := context.Background()
 	cfg := newSingletonTestConfig(t)
-	cfg.WAL.Bootstrap.Mode = "verify"
 	cfg.WAL.PublicationName = "pub"
 	cfg.WAL.SlotHeadroomMin = 2
 

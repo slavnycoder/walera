@@ -10,7 +10,6 @@
 #   - vulncheck         govulncheck ./... (gate on confirmed-affected only)
 #   - test-race         go test -race -timeout 5m ./... (unit tests; no integration)
 #   - deps-check        make deps-check (Phase 6 target)
-#   - config-check      make config-check (Phase 8 target)
 #   - changelog-date-test  scripts/check-changelog-date_test.sh (RELEASE-02)
 #
 # Relationship to existing workflows:
@@ -149,16 +148,6 @@ jobs:
 
       - name: make deps-check
         run: make deps-check
-
-  config-check:
-    name: config-check
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: make config-check
-        run: make config-check
 
   changelog-date-test:
     name: changelog-date-test

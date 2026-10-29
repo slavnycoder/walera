@@ -23,13 +23,8 @@ func prepareDatabase(ctx context.Context, cfg *AppConfig, logger zerolog.Logger,
 		return err
 	}
 	if err := bootstrapPublication(ctx, conn, bootstrapConfig{
-		Mode:            cfg.WAL.Bootstrap.Mode,
 		PublicationName: string(cfg.WAL.PublicationName),
-		Tables:          cfg.WAL.Bootstrap.Tables,
-		CreateRoles:     cfg.WAL.Bootstrap.CreateRoles,
-
-		ReplicationDSN: string(cfg.WAL.ReplicationDSN),
-		PostgresDSN:    string(cfg.WAL.PostgresDSN),
+		Tables:          cfg.WAL.Tables,
 	}, logger); err != nil {
 		return err
 	}

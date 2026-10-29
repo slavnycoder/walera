@@ -16,6 +16,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **Subscriber index is a plain map under one RWMutex.** The xxhash-sharded index and the github.com/cespare/xxhash/v2 dependency are gone.
+- **Configuration is environment-only.** The config file, `--config`,
+  koanf and every tuning key are gone; Walera reads 12 `WALERA_*`
+  variables (`WALERA_DATABASE_URL` and `WALERA_AUTH_URL` are required) and
+  fails startup on any other `WALERA_*` variable. Renamed:
+  `WALERA_AUTH_BACKEND_URL` → `WALERA_AUTH_URL`,
+  `WALERA_WAL_PUBLICATION_NAME` → `WALERA_PUBLICATION`,
+  `WALERA_WAL_BOOTSTRAP_TABLES` → `WALERA_TABLES`,
+  `WALERA_HTTP_CORS_ORIGINS` → `WALERA_CORS_ORIGINS`,
+  `WALERA_HTTP_ADDR` → `WALERA_ADDR`.
+- **Publication bootstrap has no modes.** An existing publication is
+  verified; a missing one is created `FOR TABLE` from `WALERA_TABLES`, or
+  startup fails with instructions. `wal.bootstrap.mode` and role creation
+  are removed.
 
 ### Fixed
 

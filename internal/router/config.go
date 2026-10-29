@@ -4,36 +4,26 @@ import (
 	"errors"
 	"fmt"
 	"time"
-
-	"github.com/knadh/koanf/v2"
 )
 
 type Config struct {
-	ExactBuffer int `koanf:"exact_buffer"`
+	ExactBuffer int
 
-	WildcardBuffer int `koanf:"wildcard_buffer"`
+	WildcardBuffer int
 
-	MaxChangesPerTx int `koanf:"max_changes_per_tx"`
+	MaxChangesPerTx int
 
-	HeartbeatInterval time.Duration `koanf:"heartbeat_interval"`
+	HeartbeatInterval time.Duration
 }
 
-func ApplyDefaults(k *koanf.Koanf) {
-	_ = k.Set("router.exact_buffer", 64)
-	_ = k.Set("router.wildcard_buffer", 512)
-	_ = k.Set("router.max_changes_per_tx", 10000)
-	_ = k.Set("router.heartbeat_interval", "15s")
-}
-
-func LoadConfig(k *koanf.Koanf) (Config, error) {
-	var cfg Config
-	if err := k.UnmarshalWithConf("router", &cfg, koanf.UnmarshalConf{Tag: "koanf"}); err != nil {
-		return Config{}, fmt.Errorf("router config: unmarshal: %w", err)
+// Defaults are Walera's fixed routing parameters; they are not configurable.
+func Defaults() Config {
+	return Config{
+		ExactBuffer:       64,
+		WildcardBuffer:    512,
+		MaxChangesPerTx:   10000,
+		HeartbeatInterval: 15 * time.Second,
 	}
-	if err := cfg.Validate(); err != nil {
-		return Config{}, fmt.Errorf("router config: %w", err)
-	}
-	return cfg, nil
 }
 
 func (c Config) Validate() error {

@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/url"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -15,15 +13,9 @@ import (
 	"github.com/rs/zerolog"
 )
 
-var pgRoleNameRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,62}$`)
-
 type bootstrapConfig struct {
-	Mode            string
 	PublicationName string
 	Tables          []string
-	CreateRoles     bool
-	ReplicationDSN  string
-	PostgresDSN     string
 }
 
 type bootstrapDB interface {
@@ -161,101 +153,52 @@ func errSchemaPublication(name string) error {
 	)
 }
 
+// bootstrapPublication verifies an existing publication or, when it is
+// missing and WALERA_TABLES lists tables, creates it FOR TABLE. Publications
+// that stream more than a table list are refused.
 func bootstrapPublication(ctx context.Context, conn bootstrapDB, cfg bootstrapConfig, logger zerolog.Logger) error {
-	switch cfg.Mode {
-	case "off":
-		logger.Info().
-			Str("publication", cfg.PublicationName).
-			Msg("publication check skipped (bootstrap.mode=off)")
-	case "verify":
-		exists, allTables, err := lookupPublication(ctx, conn, cfg.PublicationName)
-		if err != nil {
-			return err
-		}
-		if !exists {
-			return fmt.Errorf("publication %q does not exist — create it with an explicit FOR TABLE list", cfg.PublicationName)
-		}
-		if allTables {
-			return errAllTablesPublication(cfg.PublicationName)
-		}
-		if hasSchemas, err := publicationHasSchemas(ctx, conn, cfg.PublicationName); err != nil {
-			return err
-		} else if hasSchemas {
-			return errSchemaPublication(cfg.PublicationName)
-		}
-		var tableCount int
-		if err := conn.QueryRow(ctx,
-			"SELECT count(*) FROM pg_publication_tables WHERE pubname = $1",
-			cfg.PublicationName,
-		).Scan(&tableCount); err != nil {
-			return fmt.Errorf("publication existence check failed (%s): %w", cfg.PublicationName, err)
-		}
-		if tableCount == 0 {
-			return fmt.Errorf("publication %q exists but has no tables — create publication and add tables", cfg.PublicationName)
-		}
-		logger.Info().
-			Str("publication", cfg.PublicationName).
-			Int("table_count", tableCount).
-			Msg("publication check passed")
-	case "auto":
-
-		if cfg.CreateRoles {
-			bootstrapEnsureRole(ctx, conn, cfg.ReplicationDSN, true, logger)
-			bootstrapEnsureRole(ctx, conn, cfg.PostgresDSN, false, logger)
-		}
-
-		exists, allTables, err := lookupPublication(ctx, conn, cfg.PublicationName)
-		if err != nil {
-			return err
-		}
-		if exists {
-			if allTables {
-				return errAllTablesPublication(cfg.PublicationName)
-			}
-			if hasSchemas, err := publicationHasSchemas(ctx, conn, cfg.PublicationName); err != nil {
-				return err
-			} else if hasSchemas {
-				return errSchemaPublication(cfg.PublicationName)
-			}
-
-			var tableCount int
-			if err := conn.QueryRow(ctx,
-				"SELECT count(*) FROM pg_publication_tables WHERE pubname = $1",
-				cfg.PublicationName,
-			).Scan(&tableCount); err != nil {
-				return fmt.Errorf("publication existence check failed (%s): %w", cfg.PublicationName, err)
-			}
-			if tableCount == 0 {
-				logger.Warn().
-					Str("publication", cfg.PublicationName).
-					Msg("publication exists with zero tables; nothing to stream yet — clients will see no events until tables are added")
-			} else {
-				logger.Info().
-					Str("publication", cfg.PublicationName).
-					Int("table_count", tableCount).
-					Msg("publication check passed")
-			}
-			// wal.Config validation guarantees a non-empty table list in auto mode.
-			bootstrapVerifyTables(ctx, conn, cfg.PublicationName, cfg.Tables, logger)
-		} else {
-
-			ddl := fmt.Sprintf(
-				"CREATE PUBLICATION %s FOR TABLE %s WITH (publish = 'insert, update, delete')",
-				cfg.PublicationName,
-				strings.Join(cfg.Tables, ", "),
+	exists, allTables, err := lookupPublication(ctx, conn, cfg.PublicationName)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		if len(cfg.Tables) == 0 {
+			return fmt.Errorf(
+				"publication %q does not exist — create it (CREATE PUBLICATION %s FOR TABLE <list>) or set WALERA_TABLES so Walera creates it",
+				cfg.PublicationName, cfg.PublicationName,
 			)
-			if _, err := conn.Exec(ctx, ddl); err != nil {
-				return fmt.Errorf("failed to create publication %q for bootstrap: %w", cfg.PublicationName, err)
-			}
-			logger.Info().
-				Str("publication", cfg.PublicationName).
-				Str("mode", "FOR TABLE").
-				Int("table_count", len(cfg.Tables)).
-				Msg("publication created (bootstrap.mode=auto)")
 		}
-	default:
-
-		panic(fmt.Sprintf("unreachable: invalid bootstrap.mode %q passed validation", cfg.Mode))
+		ddl := fmt.Sprintf(
+			"CREATE PUBLICATION %s FOR TABLE %s WITH (publish = 'insert, update, delete')",
+			cfg.PublicationName, strings.Join(cfg.Tables, ", "),
+		)
+		if _, err := conn.Exec(ctx, ddl); err != nil {
+			return fmt.Errorf("failed to create publication %q: %w", cfg.PublicationName, err)
+		}
+		logger.Info().Str("publication", cfg.PublicationName).Int("table_count", len(cfg.Tables)).Msg("publication created")
+		return nil
+	}
+	if allTables {
+		return errAllTablesPublication(cfg.PublicationName)
+	}
+	if hasSchemas, err := publicationHasSchemas(ctx, conn, cfg.PublicationName); err != nil {
+		return err
+	} else if hasSchemas {
+		return errSchemaPublication(cfg.PublicationName)
+	}
+	var tableCount int
+	if err := conn.QueryRow(ctx,
+		"SELECT count(*) FROM pg_publication_tables WHERE pubname = $1",
+		cfg.PublicationName,
+	).Scan(&tableCount); err != nil {
+		return fmt.Errorf("publication table count failed (%s): %w", cfg.PublicationName, err)
+	}
+	if tableCount == 0 {
+		return fmt.Errorf("publication %q has no tables — add tables with ALTER PUBLICATION %s ADD TABLE <list>", cfg.PublicationName, cfg.PublicationName)
+	}
+	logger.Info().Str("publication", cfg.PublicationName).Int("table_count", tableCount).Msg("publication check passed")
+	if len(cfg.Tables) > 0 {
+		bootstrapVerifyTables(ctx, conn, cfg.PublicationName, cfg.Tables, logger)
 	}
 	return nil
 }
@@ -289,78 +232,6 @@ func checkSlotHeadroom(ctx context.Context, conn bootstrapDB, headroomMin int, s
 		Int("free_slots", freeSlots).
 		Int("slot_headroom_min", headroomMin).
 		Msg("slot headroom check passed")
-}
-
-func bootstrapEnsureRole(ctx context.Context, conn bootstrapDB, dsn string, isReplication bool, logger zerolog.Logger) {
-	u, err := url.Parse(dsn)
-	if err != nil || u.User == nil {
-		logger.Warn().Err(err).
-			Bool("replication", isReplication).
-			Msg("bootstrap.create_roles: could not parse DSN for role provisioning; skipping")
-		return
-	}
-	username := u.User.Username()
-	password, hasPassword := u.User.Password()
-	if username == "" || !hasPassword {
-
-		logger.Warn().
-			Bool("replication", isReplication).
-			Msg("bootstrap.create_roles: DSN lacks username or password; cannot provision role")
-		return
-	}
-
-	if !pgRoleNameRe.MatchString(username) {
-		logger.Warn().
-			Str("role", username).
-			Bool("replication", isReplication).
-			Msg("bootstrap.create_roles: DSN username is not a valid PostgreSQL identifier; skipping")
-		return
-	}
-	var exists bool
-	if err := conn.QueryRow(ctx,
-		"SELECT EXISTS(SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = $1)",
-		username,
-	).Scan(&exists); err != nil {
-		logger.Warn().Err(err).
-			Str("role", username).
-			Msg("bootstrap.create_roles: pg_roles probe failed; skipping role creation")
-		return
-	}
-	if exists {
-		logger.Info().Str("role", username).Msg("bootstrap.create_roles: role already exists; skipping")
-		return
-	}
-	attrs := "LOGIN"
-	if isReplication {
-		attrs = "LOGIN REPLICATION"
-	}
-
-	if strings.ContainsAny(password, "\\\x00") {
-		logger.Warn().
-			Bool("replication", isReplication).
-			Str("role", username).
-			Msg("bootstrap.create_roles: password contains backslash or NUL; skipping (provision the role manually with a dollar-quoted PASSWORD literal)")
-		return
-	}
-	escaped := strings.ReplaceAll(password, "'", "''")
-	ddl := fmt.Sprintf("CREATE ROLE %s WITH %s PASSWORD '%s'", username, attrs, escaped)
-	if _, err := conn.Exec(ctx, ddl); err != nil {
-		logger.Warn().Err(err).
-			Str("role", username).
-			Msg("bootstrap.create_roles: CREATE ROLE failed; proceeding (operator may have pre-provisioned role under a different name)")
-		return
-	}
-	logger.Info().Str("role", username).
-		Bool("replication", isReplication).
-		Msg("bootstrap.create_roles: role created")
-
-	if !isReplication {
-		if _, err := conn.Exec(ctx, fmt.Sprintf("GRANT pg_monitor TO %s", username)); err != nil {
-			logger.Warn().Err(err).
-				Str("role", username).
-				Msg("bootstrap.create_roles: GRANT pg_monitor failed; metrics queries may degrade")
-		}
-	}
 }
 
 func bootstrapVerifyTables(ctx context.Context, conn bootstrapDB, publication string, want []string, logger zerolog.Logger) {
@@ -406,7 +277,7 @@ func bootstrapVerifyTables(ctx context.Context, conn bootstrapDB, publication st
 	if len(missing) == 0 && len(extra) == 0 {
 		logger.Info().Str("publication", publication).
 			Int("table_count", len(want)).
-			Msg("bootstrap: publication table list matches wal.bootstrap.tables")
+			Msg("bootstrap: publication table list matches WALERA_TABLES")
 		return
 	}
 	ev := logger.Warn().Str("publication", publication)
@@ -416,5 +287,5 @@ func bootstrapVerifyTables(ctx context.Context, conn bootstrapDB, publication st
 	if len(extra) > 0 {
 		ev = ev.Strs("extra_in_publication", extra)
 	}
-	ev.Msg("bootstrap: publication membership differs from wal.bootstrap.tables; reconcile manually via ALTER PUBLICATION")
+	ev.Msg("bootstrap: publication membership differs from WALERA_TABLES; reconcile manually via ALTER PUBLICATION")
 }

@@ -3,24 +3,15 @@ package wal_test
 import (
 	"strings"
 	"testing"
-
-	"github.com/knadh/koanf/v2"
+	"time"
 
 	"github.com/walera/walera/internal/wal"
 )
 
-func newK(t *testing.T) *koanf.Koanf {
-	t.Helper()
-	k := koanf.New(".")
-	wal.ApplyDefaults(k)
-	_ = k.Set("wal.bootstrap.tables", []string{"public.orders"})
-	return k
-}
-
-func TestLoadConfig_Defaults(t *testing.T) {
-	cfg, err := wal.LoadConfig(newK(t))
-	if err != nil {
-		t.Fatalf("LoadConfig: %v", err)
+func TestDefaults(t *testing.T) {
+	cfg := wal.Defaults()
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Defaults().Validate: %v", err)
 	}
 	if cfg.PublicationName != "walera_pub" {
 		t.Errorf("PublicationName = %q; want walera_pub", cfg.PublicationName)
@@ -34,16 +25,19 @@ func TestLoadConfig_Defaults(t *testing.T) {
 	if !cfg.NaiveTimestampAssumeUTC {
 		t.Error("NaiveTimestampAssumeUTC should default to true")
 	}
-	if cfg.Bootstrap.Mode != "auto" {
-		t.Errorf("Bootstrap.Mode = %q; want auto", cfg.Bootstrap.Mode)
+	if cfg.Reconnect.ResetAfterSuccessDuration != 60*time.Second {
+		t.Errorf("ResetAfterSuccessDuration = %s; want 60s", cfg.Reconnect.ResetAfterSuccessDuration)
+	}
+	if len(cfg.Tables) != 0 {
+		t.Errorf("Tables = %v; want empty", cfg.Tables)
 	}
 }
 
 func TestDeriveDSNs(t *testing.T) {
 	t.Run("empty rejected", func(t *testing.T) {
 		_, _, err := wal.DeriveDSNs("")
-		if err == nil || !strings.Contains(err.Error(), "database.url is required") {
-			t.Fatalf("DeriveDSNs(\"\"): err = %v; want 'database.url is required'", err)
+		if err == nil || !strings.Contains(err.Error(), "WALERA_DATABASE_URL is required") {
+			t.Fatalf("DeriveDSNs(\"\"): err = %v; want 'WALERA_DATABASE_URL is required'", err)
 		}
 	})
 
@@ -70,8 +64,8 @@ func TestDeriveDSNs(t *testing.T) {
 		if err == nil {
 			t.Fatal("DeriveDSNs: err = nil; want parse error")
 		}
-		if !strings.Contains(err.Error(), "database.url") {
-			t.Errorf("err = %q; want substring 'database.url'", err.Error())
+		if !strings.Contains(err.Error(), "WALERA_DATABASE_URL") {
+			t.Errorf("err = %q; want substring 'WALERA_DATABASE_URL'", err.Error())
 		}
 		if !strings.Contains(err.Error(), "DSN parse failed") {
 			t.Errorf("err = %q; want substring 'DSN parse failed'", err.Error())
@@ -101,108 +95,39 @@ func TestDeriveDSNs(t *testing.T) {
 	})
 }
 
-func TestLoadConfig_InvalidBootstrapMode(t *testing.T) {
-	k := newK(t)
-	_ = k.Set("wal.bootstrap.mode", "bogus")
-	_, err := wal.LoadConfig(k)
-	if err == nil || !strings.Contains(err.Error(), "wal.bootstrap.mode") {
-		t.Fatalf("LoadConfig: err = %v; want bootstrap.mode error", err)
-	}
-}
-
-func TestLoadConfig_AutoModeRequiresTables(t *testing.T) {
-	k := newK(t)
-	_ = k.Set("wal.bootstrap.mode", "auto")
-	_ = k.Set("wal.bootstrap.tables", []string{})
-	_, err := wal.LoadConfig(k)
-	if err == nil || !strings.Contains(err.Error(), "wal.bootstrap.tables") {
-		t.Fatalf("LoadConfig: err = %v; want wal.bootstrap.tables required", err)
-	}
-}
-
-func TestLoadConfig_InvalidPublicationName(t *testing.T) {
-	k := newK(t)
-	_ = k.Set("wal.publication_name", "bad-name")
-	_, err := wal.LoadConfig(k)
-	if err == nil || !strings.Contains(err.Error(), "wal.publication_name") {
-		t.Fatalf("LoadConfig: err = %v; want publication_name error", err)
-	}
-}
-
-func TestLoadConfig_TablesMustBeSchemaQualified(t *testing.T) {
-	k := newK(t)
-	_ = k.Set("wal.bootstrap.tables", []string{"orders"})
-	_, err := wal.LoadConfig(k)
-	if err == nil || !strings.Contains(err.Error(), "wal.bootstrap.tables[0]") {
-		t.Fatalf("LoadConfig: err = %v; want schema-qualified error", err)
-	}
-}
-
-func TestLoadConfig_SchemaValidation(t *testing.T) {
+func TestValidate_Rejects(t *testing.T) {
 	cases := []struct {
-		name        string
-		setup       func(*koanf.Koanf)
-		wantSubstrs []string
-
-		noPassLeak string
+		name   string
+		mutate func(*wal.Config)
+		want   string
 	}{
-		{
-			name: "publication_name invalid identifier",
-			setup: func(k *koanf.Koanf) {
-				_ = k.Set("wal.publication_name", "bad-name")
-			},
-			wantSubstrs: []string{"wal.publication_name", "PG identifier"},
-		},
-		{
-			name: "slot_name_prefix too long (>63)",
-			setup: func(k *koanf.Koanf) {
-				_ = k.Set("wal.slot_name_prefix", strings.Repeat("a", 64))
-			},
-			wantSubstrs: []string{"wal.slot_name_prefix", "PG identifier"},
-		},
+		{"publication not an identifier", func(c *wal.Config) { c.PublicationName = "bad-name" }, "WALERA_PUBLICATION"},
+		{"publication too long", func(c *wal.Config) { c.PublicationName = wal.PublicationName(strings.Repeat("a", 64)) }, "PG identifier"},
+		{"publication injection", func(c *wal.Config) { c.PublicationName = "pub'); DROP" }, "WALERA_PUBLICATION"},
+		{"publication equals slot prefix", func(c *wal.Config) { c.PublicationName = "walera" }, "must differ from the replication slot prefix"},
+		{"table not schema-qualified", func(c *wal.Config) { c.Tables = []string{"public.ok", "orders"} }, "WALERA_TABLES entry 2"},
+		{"slot prefix invalid", func(c *wal.Config) { c.SlotNamePrefix = "bad-prefix" }, "slot name prefix"},
+		{"reconnect reset zero", func(c *wal.Config) { c.Reconnect.ResetAfterSuccessDuration = 0 }, "reconnect reset duration must be > 0"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			k := newK(t)
-			tc.setup(k)
-			_, err := wal.LoadConfig(k)
-			if err == nil {
-				t.Fatalf("LoadConfig: err = nil; want error")
-			}
-			for _, s := range tc.wantSubstrs {
-				if !strings.Contains(err.Error(), s) {
-					t.Errorf("err = %q; want substring %q", err.Error(), s)
-				}
-			}
-			if tc.noPassLeak != "" && strings.Contains(err.Error(), tc.noPassLeak) {
-				t.Errorf("err leaks %q: %s", tc.noPassLeak, err.Error())
+			cfg := wal.Defaults()
+			tc.mutate(&cfg)
+			err := cfg.Validate()
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("Validate: err = %v; want substring %q", err, tc.want)
 			}
 		})
 	}
 }
 
-func TestLoadConfig_PublicationNameValid(t *testing.T) {
-	cases := []string{"walera_pub", "_x", "A1"}
-	for _, name := range cases {
-		t.Run(name, func(t *testing.T) {
-			k := newK(t)
-			_ = k.Set("wal.publication_name", name)
-			if _, err := wal.LoadConfig(k); err != nil {
-				t.Fatalf("LoadConfig(%q): %v", name, err)
-			}
-		})
-	}
-}
-
-func TestLoadConfig_SlotPrefixCannotEqualPublication(t *testing.T) {
-	k := newK(t)
-	_ = k.Set("wal.publication_name", "shared_name")
-	_ = k.Set("wal.slot_name_prefix", "shared_name")
-	_, err := wal.LoadConfig(k)
-	if err == nil {
-		t.Fatal("LoadConfig: err = nil; want collision error")
-	}
-	if !strings.Contains(err.Error(), "wal.slot_name_prefix vs wal.publication_name") {
-		t.Errorf("err = %q; want the pair-collision error", err.Error())
+func TestValidate_Accepts(t *testing.T) {
+	for _, name := range []string{"walera_pub", "_x", "A1"} {
+		cfg := wal.Defaults()
+		cfg.PublicationName = wal.PublicationName(name)
+		cfg.Tables = []string{"public.orders", "app.users"}
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("Validate(%q): %v", name, err)
+		}
 	}
 }

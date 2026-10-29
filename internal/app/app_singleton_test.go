@@ -62,7 +62,6 @@ func newSingletonTestConfig(t *testing.T) *AppConfig {
 			SlotNamePrefix:          "walera",
 			SlotHeadroomMin:         1,
 			NaiveTimestampAssumeUTC: true,
-			Bootstrap:               wal.BootstrapConfig{Mode: "off"},
 		},
 		Router: router.Config{
 			HeartbeatInterval: 30 * time.Second,

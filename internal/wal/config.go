@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/knadh/koanf/v2"
 
 	"github.com/walera/walera/internal/config"
 	"github.com/walera/walera/internal/walconn"
@@ -24,33 +23,39 @@ type PublicationName string
 var pgQualifiedTableRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,62}\.[A-Za-z_][A-Za-z0-9_]{0,62}$`)
 
 type Config struct {
-	PostgresDSN walconn.AdminDSN `koanf:"-"`
+	PostgresDSN walconn.AdminDSN
 
-	ReplicationDSN walconn.ReplicationDSN `koanf:"-"`
+	ReplicationDSN walconn.ReplicationDSN
 
-	PublicationName PublicationName `koanf:"publication_name"`
+	PublicationName PublicationName
 
-	SlotNamePrefix string `koanf:"slot_name_prefix"`
+	// Tables (WALERA_TABLES) is the FOR TABLE list used to create a missing
+	// publication and to cross-check an existing one.
+	Tables []string
 
-	SlotHeadroomMin int `koanf:"slot_headroom_min"`
+	SlotNamePrefix string
 
-	NaiveTimestampAssumeUTC bool `koanf:"naive_timestamp_assume_utc"`
+	SlotHeadroomMin int
 
-	Reconnect ReconnectConfig `koanf:"reconnect"`
+	NaiveTimestampAssumeUTC bool
 
-	Bootstrap BootstrapConfig `koanf:"bootstrap"`
+	Reconnect ReconnectConfig
 }
 
 type ReconnectConfig struct {
-	ResetAfterSuccessDuration time.Duration `koanf:"reset_after_success_duration"`
+	ResetAfterSuccessDuration time.Duration
 }
 
-type BootstrapConfig struct {
-	Mode string `koanf:"mode"`
-
-	Tables []string `koanf:"tables"`
-
-	CreateRoles bool `koanf:"create_roles"`
+// Defaults are Walera's WAL settings. Only PublicationName and Tables are
+// configurable; the DSNs come from WALERA_DATABASE_URL.
+func Defaults() Config {
+	return Config{
+		PublicationName:         "walera_pub",
+		SlotNamePrefix:          "walera",
+		SlotHeadroomMin:         2,
+		NaiveTimestampAssumeUTC: true,
+		Reconnect:               ReconnectConfig{ResetAfterSuccessDuration: 60 * time.Second},
+	}
 }
 
 func (w Config) NewSlotName(hostname string, pid int) SlotName {
@@ -69,36 +74,14 @@ func (w Config) NewSlotName(hostname string, pid int) SlotName {
 	return SlotName(fmt.Sprintf("%s_%s_%d", w.SlotNamePrefix, b.String(), pid))
 }
 
-func ApplyDefaults(k *koanf.Koanf) {
-	_ = k.Set("wal.publication_name", "walera_pub")
-	_ = k.Set("wal.bootstrap.mode", "auto")
-	_ = k.Set("wal.bootstrap.tables", []string{})
-	_ = k.Set("wal.bootstrap.create_roles", false)
-	_ = k.Set("wal.slot_name_prefix", "walera")
-	_ = k.Set("wal.slot_headroom_min", 2)
-	_ = k.Set("wal.naive_timestamp_assume_utc", true)
-	_ = k.Set("wal.reconnect.reset_after_success_duration", "60s")
-}
-
-func LoadConfig(k *koanf.Koanf) (Config, error) {
-	var cfg Config
-	if err := k.UnmarshalWithConf("wal", &cfg, koanf.UnmarshalConf{Tag: "koanf"}); err != nil {
-		return Config{}, fmt.Errorf("wal config: unmarshal: %w", err)
-	}
-	if err := cfg.Validate(); err != nil {
-		return Config{}, fmt.Errorf("wal config: %w", err)
-	}
-	return cfg, nil
-}
-
 func DeriveDSNs(base string) (walconn.AdminDSN, walconn.ReplicationDSN, error) {
 	if base == "" {
-		return "", "", errors.New("database.url is required")
+		return "", "", errors.New("WALERA_DATABASE_URL is required")
 	}
 	adminURL, err := url.Parse(base)
 	if err != nil {
 		return "", "", config.FormatError(
-			"database.url",
+			"WALERA_DATABASE_URL",
 			config.RedactDSN(base),
 			"DSN parse failed: invalid URL",
 			"see docs/operations.md#configuration",
@@ -115,7 +98,7 @@ func DeriveDSNs(base string) (walconn.AdminDSN, walconn.ReplicationDSN, error) {
 
 	if _, err := pgconn.ParseConfig(base); err != nil {
 		return "", "", config.FormatError(
-			"database.url",
+			"WALERA_DATABASE_URL",
 			config.RedactDSN(base),
 			"DSN parse failed: "+err.Error(),
 			"see docs/operations.md#configuration",
@@ -123,7 +106,7 @@ func DeriveDSNs(base string) (walconn.AdminDSN, walconn.ReplicationDSN, error) {
 	}
 	if _, err := pgconn.ParseConfig(admin); err != nil {
 		return "", "", config.FormatError(
-			"database.url",
+			"WALERA_DATABASE_URL",
 			config.RedactDSN(admin),
 			"DSN parse failed: "+err.Error(),
 			"see docs/operations.md#configuration",
@@ -140,62 +123,35 @@ func (c Config) Validate() error {
 	var errs []error
 	if c.PublicationName != "" && !pgIdentRe.MatchString(string(c.PublicationName)) {
 		errs = append(errs, config.FormatError(
-			"wal.publication_name",
-			string(c.PublicationName),
+			"WALERA_PUBLICATION",
+			"",
 			"must match PG identifier regex [A-Za-z_][A-Za-z0-9_]{0,62}",
 			"choose an unquoted PostgreSQL identifier",
 		))
 	}
 	if c.SlotNamePrefix != "" && !pgIdentRe.MatchString(c.SlotNamePrefix) {
-		errs = append(errs, config.FormatError(
-			"wal.slot_name_prefix",
-			c.SlotNamePrefix,
-			"must match PG identifier regex [A-Za-z_][A-Za-z0-9_]{0,62}",
-			"choose an unquoted PostgreSQL identifier",
-		))
+		errs = append(errs, fmt.Errorf("wal: slot name prefix %q is not a PG identifier", c.SlotNamePrefix))
 	}
-	switch c.Bootstrap.Mode {
-	case "auto", "verify", "off":
-
-	case "":
-		errs = append(errs, errors.New("wal.bootstrap.mode is required (one of: auto, verify, off)"))
-	default:
-		errs = append(errs, config.FormatError(
-			"wal.bootstrap.mode",
-			c.Bootstrap.Mode,
-			"must be one of: auto, verify, off",
-			"see docs/operations.md#configuration",
-		))
-	}
-	for i, t := range c.Bootstrap.Tables {
+	for i, t := range c.Tables {
 		if !pgQualifiedTableRe.MatchString(t) {
 			errs = append(errs, config.FormatError(
-				fmt.Sprintf("wal.bootstrap.tables[%d]", i),
-				t,
+				fmt.Sprintf("WALERA_TABLES entry %d", i+1),
+				"",
 				"must be schema-qualified `schema.table` with each segment matching "+pgIdentRe.String(),
 				"qualify each table as `<schema>.<table>`",
 			))
 		}
 	}
-	if c.Bootstrap.Mode == "auto" && len(c.Bootstrap.Tables) == 0 {
-		errs = append(errs, config.FormatError(
-			"wal.bootstrap.tables",
-			"[]",
-			"required when wal.bootstrap.mode=auto: Walera never publishes FOR ALL TABLES",
-			"list the tables clients may subscribe to, e.g. public.orders,public.devices, or use bootstrap.mode=verify with a DBA-managed publication",
-		))
-	}
-
 	if c.SlotNamePrefix != "" && c.SlotNamePrefix == string(c.PublicationName) {
 		errs = append(errs, config.FormatError(
-			"wal.slot_name_prefix vs wal.publication_name",
-			c.SlotNamePrefix,
-			"slot_name_prefix must differ from publication_name",
-			"choose a distinct prefix (default: walera)",
+			"WALERA_PUBLICATION",
+			"",
+			fmt.Sprintf("must differ from the replication slot prefix %q", c.SlotNamePrefix),
+			"choose another publication name",
 		))
 	}
 	if c.Reconnect.ResetAfterSuccessDuration <= 0 {
-		errs = append(errs, errors.New("wal.reconnect.reset_after_success_duration must be > 0"))
+		errs = append(errs, errors.New("wal: reconnect reset duration must be > 0"))
 	}
 	if len(errs) > 0 {
 		return fmt.Errorf("validation failed: %w", errors.Join(errs...))

@@ -4,201 +4,140 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/knadh/koanf/v2"
-
 	"github.com/walera/walera/internal/auth"
 )
 
-func newK(t *testing.T) *koanf.Koanf {
-	t.Helper()
-	k := koanf.New(".")
-	auth.ApplyDefaults(k)
-	_ = k.Set("auth.backend_url", "https://auth.example/test")
-	return k
+func validCfg() auth.Config {
+	cfg := auth.Defaults()
+	cfg.BackendURL = "https://auth.example/test"
+	return cfg
 }
 
-func TestLoadConfig_Defaults(t *testing.T) {
-	cfg, err := auth.LoadConfig(newK(t))
-	if err != nil {
-		t.Fatalf("LoadConfig: %v", err)
+func TestDefaults(t *testing.T) {
+	cfg := validCfg()
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
 	}
 	if cfg.DefaultTTLSeconds != 60 {
 		t.Errorf("DefaultTTLSeconds = %d; want 60 (refresh is always on)", cfg.DefaultTTLSeconds)
 	}
-}
-
-func TestLoadConfig_RejectsZeroTTL(t *testing.T) {
-	k := newK(t)
-	_ = k.Set("auth.default_ttl_seconds", 0)
-	_, err := auth.LoadConfig(k)
-	if err == nil || !strings.Contains(err.Error(), "auth.default_ttl_seconds") {
-		t.Fatalf("LoadConfig: err = %v; want auth.default_ttl_seconds rejected", err)
+	if cfg.RequestTimeout.Seconds() != 2 {
+		t.Errorf("RequestTimeout = %s; want 2s", cfg.RequestTimeout)
+	}
+	if cfg.AllowPlaintext || cfg.ForwardedCookies != nil || cfg.ForwardedHeaders != nil {
+		t.Errorf("defaults = %+v; want plaintext off and no forwarding", cfg)
 	}
 }
 
-func TestLoadConfig_RequiresBackendURL(t *testing.T) {
-	k := newK(t)
-	_ = k.Set("auth.backend_url", "")
-	_, err := auth.LoadConfig(k)
-	if err == nil || !strings.Contains(err.Error(), "auth.backend_url is required") {
-		t.Fatalf("LoadConfig: err = %v; want backend_url required", err)
+func TestValidate_RejectsZeroTTL(t *testing.T) {
+	cfg := validCfg()
+	cfg.DefaultTTLSeconds = 0
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "WALERA_AUTH_TTL") {
+		t.Fatalf("Validate: err = %v; want WALERA_AUTH_TTL rejected", err)
 	}
 }
 
-func TestLoadConfig_RequiresHTTPS(t *testing.T) {
-	k := newK(t)
-	_ = k.Set("auth.backend_url", "http://insecure.example")
-	_, err := auth.LoadConfig(k)
-	if err == nil || !strings.Contains(err.Error(), "must use https://") {
-		t.Fatalf("LoadConfig: err = %v; want https required", err)
+func TestValidate_RequiresBackendURL(t *testing.T) {
+	cfg := validCfg()
+	cfg.BackendURL = ""
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "WALERA_AUTH_URL is required") {
+		t.Fatalf("Validate: err = %v; want WALERA_AUTH_URL required", err)
 	}
 }
 
-func TestLoadConfig_HTTPSOverrideAccepted(t *testing.T) {
-	t.Setenv("WALERA_AUTH_ALLOW_PLAINTEXT", "1")
-	k := newK(t)
-	_ = k.Set("auth.backend_url", "http://insecure.example")
-	if _, err := auth.LoadConfig(k); err != nil {
-		t.Fatalf("LoadConfig with override: %v", err)
+func TestValidate_RequiresHTTPS(t *testing.T) {
+	cfg := validCfg()
+	cfg.BackendURL = "http://insecure.example"
+	err := cfg.Validate()
+	if err == nil || !strings.Contains(err.Error(), "must use https://") || !strings.Contains(err.Error(), "WALERA_AUTH_ALLOW_PLAINTEXT=1") {
+		t.Fatalf("Validate: err = %v; want https required with the override named", err)
 	}
 }
 
-func TestLoadConfig_ForwardedAllowlists_Valid(t *testing.T) {
-	k := newK(t)
-	_ = k.Set("auth.forwarded_cookies", []string{"session", "csrf_token"})
-	_ = k.Set("auth.forwarded_headers", []string{"X-Tenant-Id", "X-Trace"})
-	cfg, err := auth.LoadConfig(k)
-	if err != nil {
-		t.Fatalf("LoadConfig: %v", err)
-	}
-	if len(cfg.ForwardedCookies) != 2 {
-		t.Errorf("ForwardedCookies = %v; want 2 entries", cfg.ForwardedCookies)
-	}
-	if len(cfg.ForwardedHeaders) != 2 {
-		t.Errorf("ForwardedHeaders = %v; want 2 entries", cfg.ForwardedHeaders)
+func TestValidate_AllowPlaintextAcceptsHTTP(t *testing.T) {
+	cfg := validCfg()
+	cfg.BackendURL = "http://insecure.example"
+	cfg.AllowPlaintext = true
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate with AllowPlaintext: %v", err)
 	}
 }
 
-func TestLoadConfig_ForwardedAllowlists_EmptyValidates(t *testing.T) {
-	// Feature off (nil allowlists) must validate cleanly.
-	cfg, err := auth.LoadConfig(newK(t))
-	if err != nil {
-		t.Fatalf("LoadConfig: %v", err)
-	}
-	if cfg.ForwardedCookies != nil {
-		t.Errorf("ForwardedCookies = %v; want nil (feature off)", cfg.ForwardedCookies)
-	}
-	if cfg.ForwardedHeaders != nil {
-		t.Errorf("ForwardedHeaders = %v; want nil (feature off)", cfg.ForwardedHeaders)
+func TestValidate_ForwardedAllowlists_Valid(t *testing.T) {
+	cfg := validCfg()
+	cfg.ForwardedCookies = []string{"session", "csrf_token"}
+	cfg.ForwardedHeaders = []string{"X-Tenant-Id", "X-Trace"}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
 	}
 }
 
-func TestLoadConfig_ForwardedCookies_RejectsInvalidName(t *testing.T) {
+func TestValidate_ForwardedCookies_RejectsInvalidName(t *testing.T) {
+	for _, val := range []string{"bad name", "bad:name", "", "a;b"} {
+		t.Run(val, func(t *testing.T) {
+			cfg := validCfg()
+			cfg.ForwardedCookies = []string{val}
+			err := cfg.Validate()
+			if err == nil {
+				t.Fatalf("Validate: err = nil; want invalid cookie-name error")
+			}
+			if !strings.Contains(err.Error(), "WALERA_AUTH_FORWARD_COOKIES entry 1") || !strings.Contains(err.Error(), "RFC 6265") {
+				t.Errorf("err = %q; want variable entry and RFC 6265 token message", err.Error())
+			}
+		})
+	}
+}
+
+func TestValidate_ForwardedHeaders_RejectsInvalidName(t *testing.T) {
+	cfg := validCfg()
+	cfg.ForwardedHeaders = []string{"bad header"}
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("Validate: err = nil; want invalid header-name error")
+	}
+	if !strings.Contains(err.Error(), "WALERA_AUTH_FORWARD_HEADERS entry 1") || !strings.Contains(err.Error(), "field-name token") {
+		t.Errorf("err = %q; want variable entry and field-name token message", err.Error())
+	}
+}
+
+func TestValidate_ForwardedHeaders_RejectsReserved(t *testing.T) {
+	// Reserved-name rejection is case-insensitive (canonicalized).
+	for _, name := range []string{
+		"Authorization", "authorization", "Cookie", "content-type",
+		"X-Request-Id", "x-request-id", "Host", "Origin", "origin",
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg := validCfg()
+			cfg.ForwardedHeaders = []string{name}
+			err := cfg.Validate()
+			if err == nil || !strings.Contains(err.Error(), "reserved header managed by Walera") {
+				t.Fatalf("Validate: err = %v; want reserved-header rejection for %q", err, name)
+			}
+		})
+	}
+}
+
+// The backend URL may carry credentials, so errors name the variable only.
+func TestValidate_BackendURLRules(t *testing.T) {
 	cases := []struct {
 		name string
-		val  string
+		url  string
+		want string
 	}{
-		{"space", "bad name"},
-		{"colon", "bad:name"},
-		{"empty", ""},
-		{"semicolon", "a;b"},
+		{"bad scheme", "ftp://user:hunter2@example.com", "scheme must be"},
+		{"empty host", "https://", "host is empty"},
+		{"unparseable URL", "https://user:hunter2@example.com/\x7f", "is not a valid URL"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			k := newK(t)
-			_ = k.Set("auth.forwarded_cookies", []string{tc.val})
-			_, err := auth.LoadConfig(k)
-			if err == nil {
-				t.Fatalf("LoadConfig: err = nil; want invalid cookie-name error")
+			cfg := validCfg()
+			cfg.BackendURL = tc.url
+			err := cfg.Validate()
+			if err == nil || !strings.Contains(err.Error(), "WALERA_AUTH_URL") || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("Validate: err = %v; want WALERA_AUTH_URL %q", err, tc.want)
 			}
-			if !strings.Contains(err.Error(), "auth.forwarded_cookies") {
-				t.Errorf("err = %q; want auth.forwarded_cookies field", err.Error())
-			}
-			if !strings.Contains(err.Error(), "RFC 6265") {
-				t.Errorf("err = %q; want RFC 6265 token message", err.Error())
-			}
-		})
-	}
-}
-
-func TestLoadConfig_ForwardedHeaders_RejectsInvalidName(t *testing.T) {
-	k := newK(t)
-	_ = k.Set("auth.forwarded_headers", []string{"bad header"})
-	_, err := auth.LoadConfig(k)
-	if err == nil {
-		t.Fatal("LoadConfig: err = nil; want invalid header-name error")
-	}
-	if !strings.Contains(err.Error(), "auth.forwarded_headers") {
-		t.Errorf("err = %q; want auth.forwarded_headers field", err.Error())
-	}
-	if !strings.Contains(err.Error(), "field-name token") {
-		t.Errorf("err = %q; want field-name token message", err.Error())
-	}
-}
-
-func TestLoadConfig_ForwardedHeaders_RejectsReserved(t *testing.T) {
-	// Reserved-name rejection is case-insensitive (canonicalized). Cover a few
-	// reserved names in assorted casings.
-	cases := []string{
-		"Authorization",
-		"authorization",
-		"Cookie",
-		"content-type",
-		"X-Request-Id",
-		"x-request-id",
-		"Host",
-		"Origin",
-		"origin",
-	}
-	for _, name := range cases {
-		t.Run(name, func(t *testing.T) {
-			k := newK(t)
-			_ = k.Set("auth.forwarded_headers", []string{name})
-			_, err := auth.LoadConfig(k)
-			if err == nil {
-				t.Fatalf("LoadConfig: err = nil; want reserved-header rejection for %q", name)
-			}
-			if !strings.Contains(err.Error(), "reserved header managed by Walera") {
-				t.Errorf("err = %q; want reserved-header message for %q", err.Error(), name)
-			}
-		})
-	}
-}
-
-func TestLoadConfig_BackendURLSchemaRules(t *testing.T) {
-	cases := []struct {
-		name        string
-		url         string
-		wantSubstrs []string
-	}{
-		{
-			name:        "bad scheme",
-			url:         "ftp://example.com",
-			wantSubstrs: []string{"auth.backend_url", "scheme must be"},
-		},
-		{
-			name:        "empty host",
-			url:         "https://",
-			wantSubstrs: []string{"auth.backend_url"},
-		},
-		{
-			name:        "unparseable URL",
-			url:         "https://example.com/\x7f",
-			wantSubstrs: []string{"auth.backend_url"},
-		},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			k := newK(t)
-			_ = k.Set("auth.backend_url", tc.url)
-			_, err := auth.LoadConfig(k)
-			if err == nil {
-				t.Fatalf("LoadConfig: err = nil; want error")
-			}
-			for _, s := range tc.wantSubstrs {
-				if !strings.Contains(err.Error(), s) {
-					t.Errorf("err = %q; want substring %q", err.Error(), s)
-				}
+			if strings.Contains(err.Error(), "hunter2") {
+				t.Fatalf("err = %q; leaked URL credentials", err)
 			}
 		})
 	}

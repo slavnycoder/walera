@@ -121,11 +121,10 @@ func Test14SlotLifecycle(t *testing.T) {
 			t.Fatalf("drop publication: %v", err)
 		}
 
-		// The harness config defaults to bootstrap.mode=verify (publication is
-		// normally DBA-managed); override to auto with an explicit table list
-		// to exercise the auto-recreate path this subtest is named for.
+		// With the publication dropped, WALERA_TABLES makes Walera recreate it
+		// FOR TABLE — the auto-recreate path this subtest is named for.
 		bin := SpawnBinary(t, pg.DSN, pg.ReplicationDSN(), auth.URL(), WithBootstrapAuto("public.users"))
-		pg.WaitForActiveSlot(t, "walera_test", 15*time.Second)
+		pg.WaitForActiveSlot(t, "walera", 15*time.Second)
 		client := NewClient(bin.BaseURL())
 
 		events, errCh, closeFn := client.Connect(ctx, "users/200", "test-token")
@@ -158,9 +157,9 @@ func Test14SlotLifecycle(t *testing.T) {
 			[]string{"users"},
 			map[string][]string{"users": {"id", "email"}},
 		)
-		slotName, temporary, active, ok := waitForSlotPrefix(t, h.PG, "walera_test_", 10*time.Second)
+		slotName, temporary, active, ok := waitForSlotPrefix(t, h.PG, "walera_", 10*time.Second)
 		if !ok {
-			t.Fatalf("walera_test_* slot never appeared; stderr:\n%s", h.Binary.Stderr())
+			t.Fatalf("walera_* slot never appeared; stderr:\n%s", h.Binary.Stderr())
 		}
 		if !temporary {
 			t.Errorf("slot %q temporary=false; expected true (WAL-06 / ADR-04 temporary slot policy)", slotName)
@@ -183,17 +182,17 @@ func Test14SlotLifecycle(t *testing.T) {
 		if hostname == "" {
 			hostname = "unknown"
 		}
-		preCreated := derivedSlotName("walera_test", hostname, 99999)
+		preCreated := derivedSlotName("walera", hostname, 99999)
 		pg.CreateLogicalSlot(t, preCreated, false)
 
 		bin := SpawnBinary(t, pg.DSN, pg.ReplicationDSN(), auth.URL())
 
-		binSlot, temp, _, ok := findSlotByPrefix(t, pg, "walera_test_", preCreated)
+		binSlot, temp, _, ok := findSlotByPrefix(t, pg, "walera_", preCreated)
 		if !ok {
 
 			deadline := time.Now().Add(10 * time.Second)
 			for time.Now().Before(deadline) {
-				binSlot, temp, _, ok = findSlotByPrefix(t, pg, "walera_test_", preCreated)
+				binSlot, temp, _, ok = findSlotByPrefix(t, pg, "walera_", preCreated)
 				if ok {
 					break
 				}
@@ -222,7 +221,7 @@ func Test14SlotLifecycle(t *testing.T) {
 		)
 		bin := SpawnBinary(t, pg.DSN, pg.ReplicationDSN(), auth.URL())
 
-		slotName, temporary, _, ok := waitForSlotPrefix(t, pg, "walera_test_", 10*time.Second)
+		slotName, temporary, _, ok := waitForSlotPrefix(t, pg, "walera_", 10*time.Second)
 		if !ok {
 			t.Fatalf("slot never appeared; stderr:\n%s", bin.Stderr())
 		}

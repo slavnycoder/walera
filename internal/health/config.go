@@ -4,27 +4,15 @@ import (
 	"errors"
 	"fmt"
 	"time"
-
-	"github.com/knadh/koanf/v2"
 )
 
 type Config struct {
-	ReadyzProbeInterval time.Duration `koanf:"readyz_probe_interval"`
+	ReadyzProbeInterval time.Duration
 }
 
-func ApplyDefaults(k *koanf.Koanf) {
-	_ = k.Set("health.readyz_probe_interval", "5s")
-}
-
-func LoadConfig(k *koanf.Koanf) (Config, error) {
-	var cfg Config
-	if err := k.UnmarshalWithConf("health", &cfg, koanf.UnmarshalConf{Tag: "koanf"}); err != nil {
-		return Config{}, fmt.Errorf("health config: unmarshal: %w", err)
-	}
-	if err := cfg.Validate(); err != nil {
-		return Config{}, fmt.Errorf("health config: %w", err)
-	}
-	return cfg, nil
+// Defaults are Walera's fixed health-probe parameters; they are not configurable.
+func Defaults() Config {
+	return Config{ReadyzProbeInterval: 5 * time.Second}
 }
 
 func (c Config) Validate() error {

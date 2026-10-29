@@ -31,6 +31,13 @@ func TestFormatError(t *testing.T) {
 			problem: "must match PG identifier",
 			want:    "config: wal.publication_name (bad-name) must match PG identifier",
 		},
+		{
+			name:        "empty value is omitted",
+			key:         "WALERA_PUBLICATION",
+			problem:     "must match PG identifier",
+			remediation: "use [A-Za-z_][A-Za-z0-9_]*",
+			want:        "config: WALERA_PUBLICATION must match PG identifier; use [A-Za-z_][A-Za-z0-9_]*",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

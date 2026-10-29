@@ -8,19 +8,19 @@ import (
 )
 
 type Config struct {
-	Addr string `koanf:"addr"`
+	Addr string
 
-	CORSOrigins []string `koanf:"cors_origins"`
+	CORSOrigins []string
 
-	HeartbeatInterval time.Duration `koanf:"heartbeat_interval"`
+	HeartbeatInterval time.Duration
 
-	MaxPayloadBytes int `koanf:"max_payload_bytes"`
+	MaxPayloadBytes int
 
-	WriteTimeout time.Duration `koanf:"write_timeout"`
+	WriteTimeout time.Duration
 
 	Router router.Config
 
 	Auth auth.Config
 
-	MaxHeaderBytes int `koanf:"max_header_bytes"`
+	MaxHeaderBytes int
 }

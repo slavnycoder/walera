@@ -36,7 +36,6 @@ type SpawnBinaryOption func(*spawnConfig)
 type spawnConfig struct {
 	withoutPlaintextEnv bool
 	globalConcurrent    int
-	perUserConcurrent   int
 	forwardedCookies    []string
 	forwardedHeaders    []string
 	bootstrapAutoTables []string
@@ -46,33 +45,27 @@ func WithoutPlaintextAllow() SpawnBinaryOption {
 	return func(c *spawnConfig) { c.withoutPlaintextEnv = true }
 }
 
-// WithGlobalConcurrent overrides limits.global_concurrent so the 503 admission
+// WithGlobalConcurrent sets WALERA_MAX_CONNECTIONS so the 503 admission
 // path is reachable with a handful of held connections.
 func WithGlobalConcurrent(n int) SpawnBinaryOption {
 	return func(c *spawnConfig) { c.globalConcurrent = n }
 }
 
-// WithPerUserConcurrent overrides limits.per_user_concurrent so the 429 path is
-// reachable deterministically for a single token.
-func WithPerUserConcurrent(n int) SpawnBinaryOption {
-	return func(c *spawnConfig) { c.perUserConcurrent = n }
-}
-
-// WithForwardedCookies populates auth.forwarded_cookies so the named client
+// WithForwardedCookies sets WALERA_AUTH_FORWARD_COOKIES so the named client
 // cookies are threaded from the SSE handshake into the OpenSession backend call.
 func WithForwardedCookies(names ...string) SpawnBinaryOption {
 	return func(c *spawnConfig) { c.forwardedCookies = append(c.forwardedCookies, names...) }
 }
 
-// WithForwardedHeaders populates auth.forwarded_headers so the named client
+// WithForwardedHeaders sets WALERA_AUTH_FORWARD_HEADERS so the named client
 // headers are threaded from the SSE handshake into the OpenSession backend call.
 func WithForwardedHeaders(names ...string) SpawnBinaryOption {
 	return func(c *spawnConfig) { c.forwardedHeaders = append(c.forwardedHeaders, names...) }
 }
 
-// WithBootstrapAuto switches the harness config from the default
-// bootstrap.mode=verify to auto with the given explicit table list, for tests
-// that exercise Walera's own publication-creation path.
+// WithBootstrapAuto sets WALERA_TABLES to the given explicit table list, for
+// tests that exercise Walera's own publication-creation path (the publication
+// they use must not exist yet).
 func WithBootstrapAuto(tables ...string) SpawnBinaryOption {
 	return func(c *spawnConfig) { c.bootstrapAutoTables = tables }
 }
@@ -86,7 +79,7 @@ func NewHarness(t *testing.T, opts ...SpawnBinaryOption) *Harness {
 	pg := NewPG(t)
 	auth := NewMockAuth(t)
 	bin := SpawnBinary(t, pg.DSN, pg.ReplicationDSN(), auth.URL(), opts...)
-	pg.WaitForActiveSlot(t, "walera_test", 15*time.Second)
+	pg.WaitForActiveSlot(t, "walera", 15*time.Second)
 	client := NewClient(bin.BaseURL())
 
 	return &Harness{
@@ -145,73 +138,43 @@ func SpawnBinary(t *testing.T, pgDSN, replicationDSN, mockAuthURL string, opts .
 	if sc.globalConcurrent == 0 {
 		sc.globalConcurrent = 100
 	}
-	if sc.perUserConcurrent == 0 {
-		sc.perUserConcurrent = 10
-	}
-
-	// Forwarded-credential allowlists are nested under the auth: block. Each is
-	// emitted only when configured so the "feature off" path (nil slice) stays
-	// the default for every other scenario.
-	forwardedLines := yamlStringList("  forwarded_cookies", sc.forwardedCookies) +
-		yamlStringList("  forwarded_headers", sc.forwardedHeaders)
 
 	// The fixture publication is created by testdata/001_publication.sql, so
-	// bootstrap.mode defaults to verify. WithBootstrapAuto switches to auto
-	// with an explicit table list for tests exercising Walera's own
-	// publication-creation path (Walera never publishes FOR ALL TABLES).
-	bootstrapLines := "  bootstrap:\n    mode: verify\n"
-	if len(sc.bootstrapAutoTables) > 0 {
-		bootstrapLines = "  bootstrap:\n    mode: auto\n" + yamlStringList("    tables", sc.bootstrapAutoTables)
+	// Walera only verifies it unless WithBootstrapAuto lists tables.
+	env := []string{
+		"WALERA_DATABASE_URL=" + pgDSN,
+		"WALERA_AUTH_URL=" + mockAuthURL,
+		"WALERA_ADDR=" + addr,
+		"WALERA_PUBLICATION=cdc_sse_streamer",
+		"WALERA_AUTH_TTL=1s",
+		"WALERA_MAX_CONNECTIONS=" + strconv.Itoa(sc.globalConcurrent),
+		"WALERA_LOG_LEVEL=debug",
 	}
-
-	cfg := fmt.Sprintf(`log:
-  level: debug
-  dev_mode: false
-database:
-  url: %q
-wal:
-  publication_name: cdc_sse_streamer
-  slot_name_prefix: walera_test
-  slot_headroom_min: 1
-  naive_timestamp_assume_utc: true
-%s  reconnect:
-    reset_after_success_duration: 2s
-http:
-  addr: %q
-  cors_origins: []
-  max_payload_bytes: 1048576
-router:
-  exact_buffer: 16
-  wildcard_buffer: 1    # test-fixture knob — minimum-non-zero buffer so slow-consumer scenarios trigger within a short burst even on hosts where loopback TCP backpressure is weak (see SpawnBinary doc comment). Production retains its tuned default.
-  max_changes_per_tx: 1000  # test-fixture: keeps large-tx test split behaviour (harness value, not production default)
-  heartbeat_interval: 1s
-auth:
-  backend_url: %q
-  default_ttl_seconds: 1
-  request_timeout: 2s
-%slimits:
-  global_concurrent: %d
-  per_user_concurrent: %d
-health:
-  readyz_probe_interval: 1s
-shutdown:
-  deadline: 5s
-`, pgDSN, bootstrapLines, addr, mockAuthURL, forwardedLines, sc.globalConcurrent, sc.perUserConcurrent)
-
-	cfgFile := filepath.Join(t.TempDir(), "walera-test.yaml")
-	if err := os.WriteFile(cfgFile, []byte(cfg), 0o600); err != nil {
-		t.Fatalf("write config: %v", err)
+	if !sc.withoutPlaintextEnv {
+		env = append(env, "WALERA_AUTH_ALLOW_PLAINTEXT=1")
+	}
+	if len(sc.bootstrapAutoTables) > 0 {
+		env = append(env, "WALERA_TABLES="+strings.Join(sc.bootstrapAutoTables, ","))
+	}
+	if len(sc.forwardedCookies) > 0 {
+		env = append(env, "WALERA_AUTH_FORWARD_COOKIES="+strings.Join(sc.forwardedCookies, ","))
+	}
+	if len(sc.forwardedHeaders) > 0 {
+		env = append(env, "WALERA_AUTH_FORWARD_HEADERS="+strings.Join(sc.forwardedHeaders, ","))
 	}
 
 	stderrBuf := &syncBuffer{}
-	cmd := exec.Command(binaryPath(), "--config", cfgFile) //nolint:gosec // G204: fixed repo-relative test binary path and a t.TempDir() config file, no external input
+	cmd := exec.Command(binaryPath()) //nolint:gosec // G204: fixed repo-relative test binary path, no external input
 	cmd.Stderr = stderrBuf
 	cmd.Stdout = nil
-
-	cmd.Env = os.Environ()
-	if !sc.withoutPlaintextEnv {
-		cmd.Env = append(cmd.Env, "WALERA_AUTH_ALLOW_PLAINTEXT=1")
+	// Host WALERA_* variables would either override the fixture or, being
+	// unknown, fail startup.
+	for _, kv := range os.Environ() {
+		if !strings.HasPrefix(kv, "WALERA_") {
+			cmd.Env = append(cmd.Env, kv)
+		}
 	}
+	cmd.Env = append(cmd.Env, env...)
 
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := cmd.Start(); err != nil {
@@ -250,23 +213,6 @@ shutdown:
 
 	t.Fatalf("binary did not start listening at %s within 10s\nstderr:\n%s", addr, stderrBuf.String())
 	return nil
-}
-
-// yamlStringList renders a YAML block-sequence under key for the given values,
-// returning "" when values is empty so the key is omitted entirely (preserving
-// the nil-slice "feature off" default). key already carries its indentation;
-// list items are indented two spaces deeper than that.
-func yamlStringList(key string, values []string) string {
-	if len(values) == 0 {
-		return ""
-	}
-	indent := key[:len(key)-len(strings.TrimLeft(key, " "))]
-	var b bytes.Buffer
-	fmt.Fprintf(&b, "%s:\n", key)
-	for _, v := range values {
-		fmt.Fprintf(&b, "%s  - %q\n", indent, v)
-	}
-	return b.String()
 }
 
 func freePort(t *testing.T) string {
