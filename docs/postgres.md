@@ -88,7 +88,10 @@ price: changes committed while Walera is down or reconnecting are never
 delivered. Clients reload state on reconnect anyway (see the README).
 
 Walera confirms its position to PostgreSQL every 5 s, also while it waits
-for slow subscribers, so `wal_sender_timeout` does not cut it off.
+for slow subscribers, so `wal_sender_timeout` does not cut it off. The
+confirmed position follows the server's WAL end even when no published table
+changes (PostgreSQL 15+ sends only keepalives for writes to other tables), so
+busy unpublished tables do not make the slot hold back WAL.
 
 ## Managed PostgreSQL
 

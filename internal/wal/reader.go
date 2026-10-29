@@ -61,6 +61,11 @@ type Reader struct {
 
 	connected atomic.Bool
 
+	// ackLSN is the position reported in standby updates. Unlike CurrentLSN it
+	// also follows idle keepalives, so WAL from unpublished tables is released.
+	// Owned by the runLoop goroutine.
+	ackLSN pglogrepl.LSN
+
 	rng *mathrand.Rand
 
 	runOnceFn func(context.Context) error
@@ -206,6 +211,7 @@ func (r *Reader) standbyEvery() time.Duration {
 func (r *Reader) runLoop(ctx context.Context) error {
 
 	txBld := newTxBuilderWithConfig(r.cfg)
+	r.ackLSN = 0 // per connection: a new temporary slot starts past any old position
 	relCache := newRelationCache()
 	nextStandby := time.Now().Add(r.standbyEvery())
 
@@ -244,6 +250,11 @@ func (r *Reader) runLoop(ctx context.Context) error {
 				r.log.Warn().Err(err).Msg("parse PrimaryKeepaliveMessage failed")
 				continue
 			}
+			// ServerWALEnd is what the walsender has sent; with no tx open
+			// everything up to it has been fully seen.
+			if !txBld.InTx() {
+				r.advanceAck(pkm.ServerWALEnd)
+			}
 			if handleKeepaliveMsg(pkm, r.sendStandby) {
 				nextStandby = time.Now().Add(r.standbyEvery())
 			}
@@ -268,11 +279,17 @@ func receiveTimedOut(ctx context.Context, err error) bool {
 	return ctx.Err() == nil && (pgconn.Timeout(err) || errors.Is(err, context.DeadlineExceeded))
 }
 
+func (r *Reader) advanceAck(lsn pglogrepl.LSN) {
+	if lsn > r.ackLSN {
+		r.ackLSN = lsn
+	}
+}
+
 func (r *Reader) sendStandby(ctx context.Context) {
 	err := r.replConn.SendACK(ctx, pglogrepl.StandbyStatusUpdate{
-		WALWritePosition: CurrentLSN(),
-		WALFlushPosition: CurrentLSN(),
-		WALApplyPosition: CurrentLSN(),
+		WALWritePosition: r.ackLSN,
+		WALFlushPosition: r.ackLSN,
+		WALApplyPosition: r.ackLSN,
 		ClientTime:       time.Now(),
 	})
 	if err == nil {
@@ -354,6 +371,7 @@ func (r *Reader) processWALMessage(ctx context.Context, walData []byte, txBld *t
 		tx := txBld.HandleCommit(m)
 		if tx != nil {
 			setLSN(m.CommitLSN)
+			r.advanceAck(m.CommitLSN)
 			if err := r.deliver(ctx, *tx); err != nil {
 				return err
 			}

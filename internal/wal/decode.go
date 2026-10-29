@@ -29,6 +29,11 @@ func (b *txBuilder) Reset() {
 	b.inFlight = nil
 }
 
+// InTx reports whether a BEGIN has been seen without its COMMIT.
+func (b *txBuilder) InTx() bool {
+	return b.inFlight != nil
+}
+
 func (b *txBuilder) HandleBegin(msg *pglogrepl.BeginMessage) {
 	b.inFlight = &inFlightTx{
 		xid:      msg.Xid,

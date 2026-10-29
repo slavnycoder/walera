@@ -3,6 +3,7 @@ package wal
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"net"
 	"os"
@@ -123,6 +124,12 @@ func buildKeepaliveMsg(replyRequested bool) *pgproto3.CopyData {
 		data[17] = 1
 	}
 	return &pgproto3.CopyData{Data: data}
+}
+
+func buildKeepaliveAt(walEnd uint64, replyRequested bool) *pgproto3.CopyData {
+	m := buildKeepaliveMsg(replyRequested)
+	binary.BigEndian.PutUint64(m.Data[1:9], walEnd)
+	return m
 }
 
 func buildXLogData(walData []byte) *pgproto3.CopyData {
@@ -884,10 +891,8 @@ func TestStandby_BusyStreamStillACKsEveryInterval(t *testing.T) {
 	}
 }
 
-func TestStandby_StatusCarriesCurrentLSN(t *testing.T) {
-	setLSN(0xABCD)
-	t.Cleanup(func() { setLSN(0) })
-	run := startStandbyLoop(t, newFakeConn(nil), 10*time.Millisecond)
+func TestStandby_StatusCarriesAckLSN(t *testing.T) {
+	run := startStandbyLoop(t, newFakeConn([]pgproto3.BackendMessage{buildKeepaliveAt(0xABCD, true)}), time.Hour)
 	run.waitACKs(t, 1)
 	run.stop()
 
@@ -897,6 +902,62 @@ func TestStandby_StatusCarriesCurrentLSN(t *testing.T) {
 	}
 	if ssu.ClientTime.IsZero() {
 		t.Error("standby ClientTime is zero")
+	}
+}
+
+// PG 15+ skips empty transactions, so writes to unpublished tables arrive only
+// as keepalives; their ServerWALEnd must be acknowledged or the slot pins WAL.
+func TestStandby_KeepaliveAdvancesAckWhenIdle(t *testing.T) {
+	fc := newFakeConn([]pgproto3.BackendMessage{
+		buildKeepaliveAt(0x100, false),
+		buildKeepaliveAt(0x200, false),
+		buildKeepaliveAt(0x300, true),
+	})
+	run := startStandbyLoop(t, fc, time.Hour)
+	run.waitACKs(t, 1)
+	run.stop()
+
+	if got := fc.AckCalls()[0].WALFlushPosition; got != 0x300 {
+		t.Errorf("ACK flush = %v; want latest ServerWALEnd 0/300", got)
+	}
+}
+
+func TestStandby_KeepaliveDoesNotAdvancePastOpenTx(t *testing.T) {
+	setLSN(0)
+	t.Cleanup(func() { setLSN(0) })
+	fc := newFakeConn([]pgproto3.BackendMessage{
+		buildKeepaliveAt(0x100, false),
+		buildXLogData(encodeBeginMsg(7, 0x500)),
+		buildKeepaliveAt(0x900, true),
+	})
+	run := startStandbyLoop(t, fc, time.Hour)
+	run.waitACKs(t, 1)
+	run.stop()
+
+	if got := fc.AckCalls()[0].WALFlushPosition; got != 0x100 {
+		t.Errorf("ACK flush with open tx = %v; want 0/100 (not past the tx)", got)
+	}
+}
+
+func TestStandby_CommitAdvancesAck(t *testing.T) {
+	setLSN(0)
+	t.Cleanup(func() { setLSN(0) })
+	fc := newFakeConn([]pgproto3.BackendMessage{
+		buildKeepaliveAt(0x100, false),
+		buildXLogData(encodeBeginMsg(7, 0x500)),
+		buildKeepaliveAt(0x900, false),
+		buildXLogData(encodeCommitMsg(0x500)),
+		buildKeepaliveAt(0x400, true), // stale keepalive never moves ack back
+	})
+	run := startStandbyLoop(t, fc, time.Hour)
+	run.waitACKs(t, 1)
+	run.stop()
+
+	if got := fc.AckCalls()[0].WALFlushPosition; got != 0x500 {
+		t.Errorf("ACK flush after commit = %v; want 0/500", got)
+	}
+	if CurrentLSN() != 0x500 {
+		t.Errorf("CurrentLSN = %v; want 0/500", CurrentLSN())
 	}
 }
 

@@ -39,6 +39,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The replication slot no longer holds back WAL while published tables
+  are quiet.** On PostgreSQL 15+ writes to unpublished tables reach Walera
+  only as keepalives; Walera now confirms their WAL position, so
+  `confirmed_flush_lsn` keeps advancing and `pg_wal` no longer grows until
+  a published table changes.
 - **Standby updates keep flowing under backpressure.** While the router is
   slow to accept a transaction, the WAL reader still reports its position,
   so PostgreSQL no longer drops the replication connection after
