@@ -12,10 +12,9 @@
 #   - release.yml is text-extract focused (awk on CHANGELOG.md + gh).
 #   Keeping them apart keeps each workflow file's responsibility clear.
 #
-# publish-image.yml already produces
-# immutable semver tags (`v<semver>`, `<major>.<minor>.<patch>`,
-# `<major>.<minor>`, `<major>`) plus a `latest` gated on
-# `is_default_branch`. No change required to that workflow.
+# The image tags come from publish-image.yml: `<major>.<minor>.<patch>`,
+# `<major>.<minor>`, `<major>`, plus `latest` for `v*` tags without a `-`
+# (pre-releases never move `latest`).
 #
 # Placeholder-date guard: the extract step rejects a CHANGELOG section
 # that still contains `YYYY-MM-DD`. Operators must update the date in

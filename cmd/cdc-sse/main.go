@@ -16,6 +16,9 @@ import (
 	"github.com/walera/walera/internal/walconn"
 )
 
+// version is set at build time with -ldflags "-X main.version=<tag>".
+var version = "dev"
+
 func main() {
 	devLog := flag.Bool("dev-log", false, "enable human-readable console log output (stderr)")
 	healthcheckFlag := flag.Bool("healthcheck", false, "perform a single GET to /healthz on the local server and exit 0 if 200, 1 otherwise (for distroless container HEALTHCHECK)")
@@ -40,6 +43,7 @@ func main() {
 		logger.Warn().Err(err).Msg("automaxprocs.Set failed")
 	}
 	defer undo()
+	logger.Info().Str("version", version).Msg("starting walera")
 
 	cfg, err := app.LoadFromEnv(os.Environ())
 	if err != nil {

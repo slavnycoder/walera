@@ -20,7 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **Documentation rewritten.** README plus docs/auth.md, docs/postgres.md, docs/operations.md and docs/architecture.md replace the spec, ADRs, invariants files and llm.txt.
-- **Subscriber index is a plain map under one RWMutex.** The xxhash-sharded index and the github.com/cespare/xxhash/v2 dependency are gone.
+- **Subscriber index is a plain map under one RWMutex.** The xxhash-sharded index and the direct github.com/cespare/xxhash/v2 dependency are gone.
 - **Configuration is environment-only.** The config file, `--config`,
   koanf and every tuning key are gone; Walera reads 12 `WALERA_*`
   variables (`WALERA_DATABASE_URL` and `WALERA_AUTH_URL` are required) and
@@ -44,6 +44,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The binary reports its version.** `-X main.version` now sets a real
+  variable, and Walera logs `starting walera` with the version at startup.
+- **Pre-release tags no longer move `:latest`.** A `v*` tag containing `-`
+  (e.g. `v4.0.0-rc.1`) publishes only its own image tag.
 - **`--healthcheck` works when `WALERA_ADDR` names a specific host.** The
   probe dials that host instead of always 127.0.0.1.
 - **Mixed-case `WALERA_PUBLICATION` / `WALERA_TABLES` work after a restart.**
@@ -74,7 +78,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `walera_auth_requests_total{result}`, `walera_pg_connection_status`.
   All other `walera_*` series, the WAL lag sampler and the routing-index
   sampler are removed; drops and reconnects are visible in the logs.
-  Config keys `wal.lag_sample_interval` and `metrics.*` are rejected.
+  The config keys `wal.lag_sample_interval` and `metrics.*` are removed.
 - **pprof listener and trusted-proxy parsing.** `http.pprof_addr`,
   `WALERA_PPROF_ALLOW_PUBLIC` and `limits.trusted_proxies` are gone; the
   `client_ip` log field is now the TCP peer address.
