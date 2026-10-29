@@ -41,6 +41,8 @@ const maxResponseBytes = 64 * 1024
 // OpenSession request. They can never be injected or overridden via the
 // header allowlist — config.Validate rejects them, and ForwardedFromRequest /
 // OpenSession skip them defensively even if validation were bypassed.
+// Origin is reserved because forwarded headers are scrubbed from the inbound
+// request after the handshake, and CORS still needs it.
 var reservedHeaders = map[string]struct{}{
 	textproto.CanonicalMIMEHeaderKey("Authorization"):     {},
 	textproto.CanonicalMIMEHeaderKey("Host"):              {},
@@ -51,6 +53,7 @@ var reservedHeaders = map[string]struct{}{
 	textproto.CanonicalMIMEHeaderKey("Transfer-Encoding"): {},
 	textproto.CanonicalMIMEHeaderKey("Cookie"):            {},
 	textproto.CanonicalMIMEHeaderKey("X-Request-Id"):      {},
+	textproto.CanonicalMIMEHeaderKey("Origin"):            {},
 }
 
 // ForwardedAuth carries the client-supplied cookies and headers selected by

@@ -144,6 +144,15 @@ func (h *Handler) authenticate(w http.ResponseWriter, r *http.Request, channelSt
 		token = t
 	}
 	fwd := h.authClient.ForwardedFromRequest(r)
+	// The subscriber holds the copies it replays; the request should not keep
+	// a second copy, whichever way the handshake ends.
+	defer func() {
+		r.Header.Del("Authorization")
+		r.Header.Del("Cookie")
+		for name := range fwd.Headers {
+			r.Header.Del(name)
+		}
+	}()
 	if token == "" && fwd.Empty() {
 
 		h.writeStatusOnlyError(w, r, http.StatusUnauthorized, 0)
@@ -159,12 +168,6 @@ func (h *Handler) authenticate(w http.ResponseWriter, r *http.Request, channelSt
 	}
 
 	authMap, err := h.authClient.OpenSession(r.Context(), token, fwd, channelStr, requestID)
-	// The subscriber holds the copies it replays; the request should not keep a second copy.
-	r.Header.Del("Authorization")
-	r.Header.Del("Cookie")
-	for name := range fwd.Headers {
-		r.Header.Del(name)
-	}
 	if err != nil {
 		h.writeAuthError(w, r, err)
 		return false

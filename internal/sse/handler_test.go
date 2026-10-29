@@ -1714,3 +1714,33 @@ func TestAuthenticate_ScrubsCredentialsFromRequest(t *testing.T) {
 		}
 	}
 }
+
+// Early rejections (bad X-Request-ID) must scrub credentials too.
+func TestAuthenticate_ScrubsCredentialsOnEarlyReject(t *testing.T) {
+	t.Parallel()
+	kit := newTestHandler(t, nil, nil)
+	kit.h.authClient = auth.New(auth.Config{
+		BackendURL:       kit.backend.srv.URL,
+		RequestTimeout:   2 * time.Second,
+		ForwardedCookies: []string{"session"},
+		ForwardedHeaders: []string{"X-Api-Key"},
+	}, auth.Deps{Logger: zerolog.Nop(), Metrics: metrics.New()})
+
+	r := httptest.NewRequest(http.MethodGet, "/sse/v1/users/42", nil)
+	r.Header.Set("Authorization", "Bearer valid")
+	r.AddCookie(&http.Cookie{Name: "session", Value: "sess-abc"})
+	r.Header.Set("X-Api-Key", "key-123")
+	r.Header.Set("X-Request-ID", "bad id with spaces")
+	var res handshakeResult
+	if kit.h.authenticate(httptest.NewRecorder(), r, "users:42", &res) {
+		t.Fatal("authenticate = true; want rejection for invalid X-Request-ID")
+	}
+	for _, name := range []string{"Authorization", "Cookie", "X-Api-Key"} {
+		if v := r.Header.Get(name); v != "" {
+			t.Errorf("request %s = %q after early reject; want scrubbed", name, v)
+		}
+	}
+	if kit.backend.hits.Load() != 0 {
+		t.Errorf("backend hits = %d; want 0 (rejected before OpenSession)", kit.backend.hits.Load())
+	}
+}

@@ -93,7 +93,10 @@ Behavior:
   they appear in `auth.forwarded_headers` (any casing):
 
   `Authorization`, `Host`, `Content-Length`, `Content-Type`, `Accept`,
-  `Connection`, `Transfer-Encoding`, `Cookie`, `X-Request-Id`.
+  `Connection`, `Transfer-Encoding`, `Cookie`, `X-Request-Id`, `Origin`.
+
+  `Origin` is reserved because forwarded headers are scrubbed from the
+  inbound request after the handshake, and CORS still needs it.
 
   Forwarded headers are applied first; Walera's own headers always win.
 - **Values are never logged.** Forwarded cookie and header *values* are

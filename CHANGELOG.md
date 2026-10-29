@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **`Origin` cannot be forwarded to the auth backend.** It is now a
+  reserved header: listing it in `auth.forwarded_headers` fails startup.
+  Forwarded headers are scrubbed from the request after the handshake,
+  so forwarding `Origin` silently broke CORS for browser streams. The
+  scrub now also runs when the handshake is rejected early.
 - **Auth backend redirects are no longer followed.** A `3xx` from
   `/auth/sessions` now fails closed as `auth_unavailable` / `503`.
   Previously the client followed it, sending allowlisted forwarded headers

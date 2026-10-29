@@ -147,6 +147,8 @@ func TestLoadConfig_ForwardedHeaders_RejectsReserved(t *testing.T) {
 		"X-Request-Id",
 		"x-request-id",
 		"Host",
+		"Origin",
+		"origin",
 	}
 	for _, name := range cases {
 		t.Run(name, func(t *testing.T) {
