@@ -6,7 +6,6 @@ import (
 	"fmt"
 	mathrand "math/rand/v2"
 	"os"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -54,7 +53,7 @@ type Reader struct {
 
 	replConn replConn
 
-	connWriteMu sync.Mutex
+	standbyInterval time.Duration
 
 	connected atomic.Bool
 
@@ -205,54 +204,35 @@ func (r *Reader) runOnce(ctx context.Context) error {
 	return r.runLoop(ctx)
 }
 
-func (r *Reader) tickStandby(ctx context.Context) {
-	r.connWriteMu.Lock()
-	defer r.connWriteMu.Unlock()
-	if err := r.replConn.SendACK(ctx, pglogrepl.StandbyStatusUpdate{
-		WALWritePosition: CurrentLSN(),
-		WALFlushPosition: CurrentLSN(),
-		WALApplyPosition: CurrentLSN(),
-		ClientTime:       time.Now(),
-	}); err != nil {
+const defaultStandbyInterval = 5 * time.Second
 
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			r.log.Debug().Err(err).Msg("standby ticker: SendACK cancelled (shutdown/reconnect)")
-			return
-		}
-		r.metrics.WALStandbyACKFailures().Inc()
-		r.log.Warn().Err(err).Msg("standby ticker: SendACK failed")
+func (r *Reader) standbyEvery() time.Duration {
+	if r.standbyInterval > 0 {
+		return r.standbyInterval
 	}
+	return defaultStandbyInterval
 }
 
+// runLoop is the only goroutine that touches replConn: PgConn is not safe for
+// concurrent use, and a receive deadline firing breaks any in-flight write.
 func (r *Reader) runLoop(ctx context.Context) error {
 
 	txBld := newTxBuilderWithConfig(r.cfg)
 	relCache := newRelationCache()
-
-	tickerCtx, tickerCancel := context.WithCancel(ctx)
-	defer tickerCancel()
-
-	go func() {
-		ticker := time.NewTicker(5 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-tickerCtx.Done():
-				return
-			case <-ticker.C:
-				r.tickStandby(tickerCtx)
-			}
-		}
-	}()
+	nextStandby := time.Now().Add(r.standbyEvery())
 
 	for {
-		receiveCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		if !time.Now().Before(nextStandby) {
+			r.sendStandby(ctx)
+			nextStandby = time.Now().Add(r.standbyEvery())
+		}
+
+		receiveCtx, cancel := context.WithDeadline(ctx, nextStandby)
 		rawMsg, err := r.replConn.ReceiveMessage(receiveCtx)
 		cancel()
 
 		if err != nil {
-
-			if pgconn.Timeout(err) {
+			if receiveTimedOut(ctx, err) {
 				continue
 			}
 
@@ -276,7 +256,9 @@ func (r *Reader) runLoop(ctx context.Context) error {
 				r.log.Warn().Err(err).Msg("parse PrimaryKeepaliveMessage failed")
 				continue
 			}
-			handleKeepaliveMsg(pkm, r.sendACK)
+			if handleKeepaliveMsg(pkm, r.sendStandby) {
+				nextStandby = time.Now().Add(r.standbyEvery())
+			}
 
 		case pglogrepl.XLogDataByteID:
 			xld, err := pglogrepl.ParseXLogData(cd.Data[1:])
@@ -292,21 +274,33 @@ func (r *Reader) runLoop(ctx context.Context) error {
 	}
 }
 
-func (r *Reader) sendACK(ctx context.Context) error {
-	r.connWriteMu.Lock()
-	defer r.connWriteMu.Unlock()
-	return r.replConn.SendACK(ctx, pglogrepl.StandbyStatusUpdate{
+// receiveTimedOut is true when our own standby deadline fired; the connection
+// is still usable then, unlike shutdown or a broken socket.
+func receiveTimedOut(ctx context.Context, err error) bool {
+	return ctx.Err() == nil && (pgconn.Timeout(err) || errors.Is(err, context.DeadlineExceeded))
+}
+
+func (r *Reader) sendStandby(ctx context.Context) {
+	err := r.replConn.SendACK(ctx, pglogrepl.StandbyStatusUpdate{
 		WALWritePosition: CurrentLSN(),
 		WALFlushPosition: CurrentLSN(),
 		WALApplyPosition: CurrentLSN(),
 		ClientTime:       time.Now(),
 	})
+	if err == nil {
+		return
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		r.log.Debug().Err(err).Msg("standby status update cancelled (shutdown/reconnect)")
+		return
+	}
+	r.metrics.WALStandbyACKFailures().Inc()
+	r.log.Warn().Err(err).Msg("standby status update failed")
 }
 
-func handleKeepaliveMsg(pkm pglogrepl.PrimaryKeepaliveMessage, sendACK func(context.Context) error) bool {
+func handleKeepaliveMsg(pkm pglogrepl.PrimaryKeepaliveMessage, sendStandby func(context.Context)) bool {
 	if pkm.ReplyRequested {
-
-		_ = sendACK(context.Background())
+		sendStandby(context.Background())
 		return true
 	}
 	return false

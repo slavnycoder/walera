@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **WAL standby status updates no longer fail with `i/o timeout`.** They
+  were sent from a second goroutine on the replication connection, and
+  about half failed when the concurrent receive timed out (warn every
+  ~10s, `walera_wal_standby_ack_failures_total` climbing). The reader
+  now owns the connection from one loop and sends standby updates
+  between receives, at least every 5s even on a busy stream.
+
 ## [3.0.0] - 2026-10-29
 
 ### Security

@@ -26,6 +26,12 @@ type fakeReplConn struct {
 	errOnErr    error
 
 	sendACKErr error
+
+	repeat pgproto3.BackendMessage
+
+	recvInFlight atomic.Int32
+	ackInFlight  atomic.Int32
+	violations   atomic.Int32
 }
 
 func newFakeConn(msgs []pgproto3.BackendMessage) *fakeReplConn {
@@ -43,8 +49,19 @@ func newFakeConnWithError(msgs []pgproto3.BackendMessage, afterIdx int, err erro
 }
 
 func (f *fakeReplConn) ReceiveMessage(ctx context.Context) (pgproto3.BackendMessage, error) {
+	f.recvInFlight.Add(1)
+	defer f.recvInFlight.Add(-1)
+	if f.ackInFlight.Load() > 0 {
+		f.violations.Add(1)
+	}
+
 	f.mu.Lock()
 	defer f.mu.Unlock()
+
+	if f.repeat != nil {
+		time.Sleep(100 * time.Microsecond)
+		return f.repeat, ctx.Err()
+	}
 
 	if f.errAfterIdx >= 0 && f.msgIdx >= f.errAfterIdx {
 		return nil, f.errOnErr
@@ -64,6 +81,11 @@ func (f *fakeReplConn) ReceiveMessage(ctx context.Context) (pgproto3.BackendMess
 }
 
 func (f *fakeReplConn) SendACK(_ context.Context, ssu pglogrepl.StandbyStatusUpdate) error {
+	f.ackInFlight.Add(1)
+	defer f.ackInFlight.Add(-1)
+	if f.recvInFlight.Load() > 0 {
+		f.violations.Add(1)
+	}
 	f.ackMu.Lock()
 	defer f.ackMu.Unlock()
 	f.ackCalls = append(f.ackCalls, ssu)
@@ -216,9 +238,8 @@ func TestReplyRequestedACK(t *testing.T) {
 	var called atomic.Bool
 	var elapsed time.Duration
 
-	sendACK := func(ctx context.Context) error {
+	sendACK := func(context.Context) {
 		called.Store(true)
-		return nil
 	}
 
 	startedAt := time.Now()
@@ -240,9 +261,8 @@ func TestReplyRequestedACK(t *testing.T) {
 
 func TestReplyNotRequestedNoACK(t *testing.T) {
 	var called atomic.Bool
-	sendACK := func(ctx context.Context) error {
+	sendACK := func(context.Context) {
 		called.Store(true)
-		return nil
 	}
 	pkm := pglogrepl.PrimaryKeepaliveMessage{ReplyRequested: false}
 	result := handleKeepaliveMsg(pkm, sendACK)
@@ -812,79 +832,116 @@ func gatherCounterNoLabel(t *testing.T, r *Reader, name string) float64 {
 	return 0
 }
 
-func TestStandbyTicker_SendACKError_IncrementsCounter(t *testing.T) {
-	fc := newFakeConn(nil)
-	fc.sendACKErr = errors.New("fake send-ack error")
-	logger := zerolog.Nop()
-	r := newReaderForTest(fc, logger)
+const standbyACKFailures = "walera_wal_standby_ack_failures_total"
 
-	if got := gatherCounterNoLabel(t, r, "walera_wal_standby_ack_failures_total"); got != 0 {
-		t.Fatalf("counter pre-tick = %v; want 0", got)
-	}
-	r.tickStandby(context.Background())
-	if got := gatherCounterNoLabel(t, r, "walera_wal_standby_ack_failures_total"); got != 1 {
-		t.Errorf("counter after one failing tick = %v; want 1", got)
-	}
-
-	r.tickStandby(context.Background())
-	if got := gatherCounterNoLabel(t, r, "walera_wal_standby_ack_failures_total"); got != 2 {
-		t.Errorf("counter after two failing ticks = %v; want 2", got)
-	}
+type standbyRun struct {
+	r    *Reader
+	fc   *fakeReplConn
+	stop func()
 }
 
-func TestStandbyTicker_SendACKSuccess_NoCounter(t *testing.T) {
-	fc := newFakeConn(nil)
-	logger := zerolog.Nop()
-	r := newReaderForTest(fc, logger)
-
-	r.tickStandby(context.Background())
-	if got := gatherCounterNoLabel(t, r, "walera_wal_standby_ack_failures_total"); got != 0 {
-		t.Errorf("counter after successful tick = %v; want 0", got)
-	}
-
-	if len(fc.AckCalls()) != 1 {
-		t.Errorf("ack call count = %d; want 1", len(fc.AckCalls()))
-	}
-}
-
-func TestStandbyTicker_ContextCanceled_DoesNotIncrementCounter(t *testing.T) {
-	fc := newFakeConn(nil)
-	fc.sendACKErr = context.Canceled
-	logger := zerolog.Nop()
-	r := newReaderForTest(fc, logger)
-
-	if got := gatherCounterNoLabel(t, r, "walera_wal_standby_ack_failures_total"); got != 0 {
-		t.Fatalf("counter pre-tick = %v; want 0", got)
-	}
-
+func startStandbyLoop(t *testing.T, fc *fakeReplConn, interval time.Duration) standbyRun {
+	t.Helper()
+	r := newReaderForTest(fc, zerolog.Nop())
+	r.standbyInterval = interval
 	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	r.tickStandby(ctx)
-	if got := gatherCounterNoLabel(t, r, "walera_wal_standby_ack_failures_total"); got != 0 {
-		t.Errorf("counter after ctx-cancelled tick = %v; want 0 (WR-01: ctx errors are not ACK failures)", got)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		r.runLoop(ctx) //nolint:errcheck
+	}()
+	stop := func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			t.Fatal("runLoop did not return after cancel")
+		}
+	}
+	t.Cleanup(cancel)
+	return standbyRun{r: r, fc: fc, stop: stop}
+}
+
+func (s standbyRun) waitACKs(t *testing.T, n int) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for len(s.fc.AckCalls()) < n {
+		if time.Now().After(deadline) {
+			t.Fatalf("saw %d standby ACKs within 2s; want >= %d", len(s.fc.AckCalls()), n)
+		}
+		time.Sleep(time.Millisecond)
 	}
 }
 
-func TestStandbyTicker_ContextDeadlineExceeded_DoesNotIncrementCounter(t *testing.T) {
-	fc := newFakeConn(nil)
-	fc.sendACKErr = context.DeadlineExceeded
-	logger := zerolog.Nop()
-	r := newReaderForTest(fc, logger)
+func TestStandby_IdleLoopNeverOverlapsReceiveAndSend(t *testing.T) {
+	run := startStandbyLoop(t, newFakeConn(nil), 20*time.Millisecond)
+	run.waitACKs(t, 3)
+	run.stop()
 
-	r.tickStandby(context.Background())
-	if got := gatherCounterNoLabel(t, r, "walera_wal_standby_ack_failures_total"); got != 0 {
-		t.Errorf("counter after deadline-exceeded tick = %v; want 0 (WR-01)", got)
+	if v := run.fc.violations.Load(); v != 0 {
+		t.Errorf("SendACK overlapped ReceiveMessage %d times; PgConn must have one owner", v)
 	}
 }
 
-func TestStandbyTicker_WrappedContextError_DoesNotIncrementCounter(t *testing.T) {
+func TestStandby_BusyStreamStillACKsEveryInterval(t *testing.T) {
 	fc := newFakeConn(nil)
-	fc.sendACKErr = errors.Join(errors.New("wrapper"), context.Canceled)
-	logger := zerolog.Nop()
-	r := newReaderForTest(fc, logger)
+	fc.repeat = buildKeepaliveMsg(false)
+	run := startStandbyLoop(t, fc, 20*time.Millisecond)
 
-	r.tickStandby(context.Background())
-	if got := gatherCounterNoLabel(t, r, "walera_wal_standby_ack_failures_total"); got != 0 {
-		t.Errorf("counter after wrapped-ctx-cancel tick = %v; want 0 (WR-01: errors.Is unwraps)", got)
+	time.Sleep(200 * time.Millisecond)
+	run.stop()
+
+	if got := len(fc.AckCalls()); got < 4 || got > 12 {
+		t.Errorf("busy stream sent %d standby ACKs in 200ms at 20ms interval; want 4..12", got)
+	}
+	if v := fc.violations.Load(); v != 0 {
+		t.Errorf("SendACK overlapped ReceiveMessage %d times", v)
+	}
+}
+
+func TestStandby_StatusCarriesCurrentLSN(t *testing.T) {
+	setLSN(0xABCD)
+	t.Cleanup(func() { setLSN(0) })
+	run := startStandbyLoop(t, newFakeConn(nil), 10*time.Millisecond)
+	run.waitACKs(t, 1)
+	run.stop()
+
+	ssu := run.fc.AckCalls()[0]
+	if ssu.WALWritePosition != 0xABCD || ssu.WALFlushPosition != 0xABCD || ssu.WALApplyPosition != 0xABCD {
+		t.Errorf("standby positions = %v/%v/%v; want 0xABCD", ssu.WALWritePosition, ssu.WALFlushPosition, ssu.WALApplyPosition)
+	}
+	if ssu.ClientTime.IsZero() {
+		t.Error("standby ClientTime is zero")
+	}
+}
+
+func TestStandby_SendErrorCounting(t *testing.T) {
+	cases := []struct {
+		name    string
+		err     error
+		counted bool
+	}{
+		{"success", nil, false},
+		{"send error", errors.New("fake send-ack error"), true},
+		{"canceled", context.Canceled, false},
+		{"deadline exceeded", context.DeadlineExceeded, false},
+		{"wrapped canceled", errors.Join(errors.New("wrapper"), context.Canceled), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fc := newFakeConn(nil)
+			fc.sendACKErr = tc.err
+			run := startStandbyLoop(t, fc, 10*time.Millisecond)
+			run.waitACKs(t, 2)
+			run.stop()
+
+			want := 0.0
+			if tc.counted {
+				want = float64(len(fc.AckCalls()))
+			}
+			if got := gatherCounterNoLabel(t, run.r, standbyACKFailures); got != want {
+				t.Errorf("%s = %v; want %v", standbyACKFailures, got, want)
+			}
+		})
 	}
 }
