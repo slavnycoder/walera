@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **Auth backend redirects are no longer followed.** A `3xx` from
+  `/auth/sessions` now fails closed as `auth_unavailable` / `503`.
+  Previously the client followed it, sending allowlisted forwarded headers
+  to the redirect target and trusting its response as the whitelist.
 - **No more `FOR ALL TABLES`.** `wal.bootstrap.mode=auto` now requires
   `wal.bootstrap.tables`; startup fails without it. Tables clients never
   subscribe to (users, credentials) no longer leave Postgres.

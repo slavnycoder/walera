@@ -186,6 +186,9 @@ func newHTTPClient(cfg Config) *http.Client {
 	return &http.Client{
 		Timeout:   cfg.RequestTimeout,
 		Transport: t,
+		// Never follow redirects: Go keeps custom forwarded headers on cross-host
+		// hops, and a 3xx must fail closed as ErrUnavailable.
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}
 }
 

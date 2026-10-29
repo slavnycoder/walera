@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -314,5 +315,38 @@ func TestClient_ForwardedFromRequest_FeatureOffYieldsEmpty(t *testing.T) {
 	fwd := c.ForwardedFromRequest(r)
 	if !fwd.Empty() {
 		t.Errorf("fwd = %+v; want Empty() when feature off", fwd)
+	}
+}
+
+// TestClient_OpenSession_DoesNotFollowRedirects: a 3xx from the backend must
+// not be followed (custom forwarded headers survive cross-host redirects) and
+// must fail closed as ErrUnavailable.
+func TestClient_OpenSession_DoesNotFollowRedirects(t *testing.T) {
+	t.Parallel()
+	var targetHits atomic.Int64
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		targetHits.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(validBody))
+	}))
+	t.Cleanup(target.Close)
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL+"/auth/sessions", http.StatusFound)
+	}))
+	t.Cleanup(backend.Close)
+
+	c, _ := newForwardingTestClient(t, backend.URL, []string{"session"}, []string{"X-Api-Key"})
+	r, _ := http.NewRequest(http.MethodGet, "http://example/sse", nil)
+	r.AddCookie(&http.Cookie{Name: "session", Value: "sess-abc"})
+	r.Header.Set("X-Api-Key", "key-123")
+	fwd := c.ForwardedFromRequest(r)
+
+	_, err := c.OpenSession(context.Background(), "the-token", fwd, "users:42", "req-redir")
+	var ue *ErrUnavailable
+	if !errors.As(err, &ue) {
+		t.Fatalf("err = %v (%T); want *ErrUnavailable", err, err)
+	}
+	if n := targetHits.Load(); n != 0 {
+		t.Fatalf("redirect target received %d requests; want 0", n)
 	}
 }
