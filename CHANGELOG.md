@@ -34,8 +34,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `auth.default_ttl_seconds` → `WALERA_AUTH_TTL` (now a duration, e.g. `60s`),
   `auth.forwarded_cookies` / `auth.forwarded_headers` →
   `WALERA_AUTH_FORWARD_COOKIES` / `WALERA_AUTH_FORWARD_HEADERS`.
-  Kubernetes service-link variables (`WALERA_SERVICE_*`, `WALERA_PORT*`)
-  are ignored. `WALERA_LOG_LEVEL` is case-insensitive.
+  Kubernetes service-link variables for Services named `walera` or
+  `walera-…` (`WALERA_SERVICE_HOST`, `WALERA_POSTGRESQL_PORT_5432_TCP_ADDR`,
+  …) are ignored. `WALERA_LOG_LEVEL` is case-insensitive.
 - **Publication bootstrap has no modes.** An existing publication is
   verified; a missing one is created `FOR TABLE` from `WALERA_TABLES`, or
   startup fails with instructions. `wal.bootstrap.mode` and role creation

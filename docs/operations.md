@@ -12,10 +12,12 @@ docker run --rm -p 8080:8080 \
 ```
 
 All configuration is in environment variables (see the
-[README](../README.md#configuration)). Walera also ignores the variables
-Kubernetes injects for a Service named `walera` (`WALERA_SERVICE_HOST`,
-`WALERA_SERVICE_PORT…`, `WALERA_PORT…`); every other unknown `WALERA_*`
-variable stops startup.
+[README](../README.md#configuration)). Walera also ignores the service-link
+variables Kubernetes injects for a Service named `walera` or `walera-…`
+(for example `walera-postgresql`): names ending in `_SERVICE_HOST`,
+`_SERVICE_PORT[_<name>]`, `_PORT` or `_PORT_<n>_<TCP|UDP|SCTP>[_PROTO|_PORT|_ADDR]`,
+such as `WALERA_POSTGRESQL_SERVICE_HOST` or `WALERA_PORT_8080_TCP_ADDR`.
+Every other unknown `WALERA_*` variable stops startup.
 
 Instances are independent: each holds its own replication slot (and WAL
 sender) and serves only its own subscribers.

@@ -206,6 +206,18 @@ func TestLoadFromEnv_IgnoresKubernetesServiceLinks(t *testing.T) {
 		"WALERA_PORT_8080_TCP_ADDR=10.0.0.1",
 		"WALERA_PORT_53_UDP_ADDR=10.0.0.1",
 		"WALERA_PORT_9_SCTP=sctp://10.0.0.1:9",
+		// Services named walera-<something>, e.g. `helm install walera bitnami/postgresql`.
+		"WALERA_POSTGRESQL_SERVICE_HOST=10.0.0.2",
+		"WALERA_POSTGRESQL_SERVICE_PORT=5432",
+		"WALERA_POSTGRESQL_SERVICE_PORT_TCP_POSTGRESQL=5432",
+		"WALERA_POSTGRESQL_PORT=tcp://10.0.0.2:5432",
+		"WALERA_POSTGRESQL_PORT_5432_TCP=tcp://10.0.0.2:5432",
+		"WALERA_POSTGRESQL_PORT_5432_TCP_PROTO=tcp",
+		"WALERA_POSTGRESQL_PORT_5432_TCP_PORT=5432",
+		"WALERA_POSTGRESQL_PORT_5432_TCP_ADDR=10.0.0.2",
+		"WALERA_AUTH_SERVICE_PORT=8000",
+		"WALERA_HEADLESS_PORT_8080_TCP=tcp://10.0.0.3:8080",
+		"WALERA_POSTGRESQL_HL_PORT_5432_UDP_ADDR=10.0.0.4",
 	)
 	if _, err := LoadFromEnv(env); err != nil {
 		t.Fatalf("LoadFromEnv with service links: %v", err)
@@ -217,6 +229,8 @@ func TestLoadFromEnv_RejectsServiceLinkNearMisses(t *testing.T) {
 		"WALERA_PORTS", "WALERA_SERVICE", "WALERA_SERVICE_HOSTNAME",
 		"WALERA_PORT_HTTP", "WALERA_PORT_8080_HTTP", "WALERA_PORT_8080_TCP_HOST",
 		"WALERA_SERVICE_PORT_", "WALERA_PORT_8080_TCP_PORT_X",
+		"WALERA_POSTGRESQL_PORTS", "WALERA_POSTGRESQL_SERVICE", "WALERA_X_PORT_5432_HTTP",
+		"WALERA__SERVICE_HOST", "WALERA_PUBLICATIONS", "WALERA_DATABASE_URL_PORT_X",
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := LoadFromEnv(append(baseEnv(), name+"=x"))
@@ -224,6 +238,14 @@ func TestLoadFromEnv_RejectsServiceLinkNearMisses(t *testing.T) {
 				t.Fatalf("err = %v; want %s rejected as unknown", err, name)
 			}
 		})
+	}
+}
+
+func TestServiceLinkRe_NeverMatchesRealNames(t *testing.T) {
+	for _, name := range envVars {
+		if k8sServiceLinkRe.MatchString(name) {
+			t.Errorf("%s matches the service-link exemption", name)
+		}
 	}
 }
 

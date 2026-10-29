@@ -27,10 +27,12 @@ var envVars = []string{
 }
 
 // k8sServiceLinkRe matches the docker-link-style variables Kubernetes injects
-// into every pod for a Service named "walera" (enableServiceLinks defaults to
-// true); rejecting them would crash-loop Walera in its own namespace.
+// into every pod for each Service (enableServiceLinks defaults to true): a
+// Service named "walera" or "walera-<anything>" (e.g. walera-postgresql)
+// yields WALERA_*_SERVICE_HOST, WALERA_*_PORT_5432_TCP_ADDR and so on.
+// Rejecting them would crash-loop Walera in its own namespace.
 var k8sServiceLinkRe = regexp.MustCompile(
-	`^WALERA_(SERVICE_HOST|SERVICE_PORT(_[A-Z0-9][A-Z0-9_]*)?|PORT(_[0-9]+_(TCP|UDP|SCTP)(_(PROTO|PORT|ADDR))?)?)$`,
+	`^WALERA_([A-Z0-9][A-Z0-9_]*_)?(SERVICE_HOST|SERVICE_PORT(_[A-Z0-9][A-Z0-9_]*)?|PORT(_[0-9]+_(TCP|UDP|SCTP)(_(PROTO|PORT|ADDR))?)?)$`,
 )
 
 // LoadFromEnv builds the configuration from environ (os.Environ() format).
